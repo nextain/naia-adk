@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
-import { configuredHumans, createAdapter, verifyCardReply } from "./messenger.mjs";
+import { configuredHumans, createAdapter, verifyCardCancellation, verifyCardReply } from "./messenger.mjs";
 export function safeName(value) {
   if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value))
     throw new Error("Invalid role or item id");
@@ -194,6 +194,11 @@ export function hasHumanMsgId(msgId) {
   if (/^(?:none|null|self)(?:[-:]|$)/i.test(trimmed)) return false;
   return true;
 }
+function humanInstructionSource(item) {
+  if (isWorkerItem(item)) return;
+  if (hasHumanMsgId(item.from.msg_id)) return item.from;
+  return item.intake_messages?.find(source => hasHumanMsgId(source.msg_id));
+}
 function sameHumanMsgId(a, b) {
   return hasHumanMsgId(a) && hasHumanMsgId(b) && normalizeMsgId(a) === normalizeMsgId(b);
 }
@@ -324,6 +329,10 @@ export function validateLedger(ledger, role) {
       !["open", "waiting_human", "escalated_human", "done", "dropped"].includes(item.status) ||
       (item.drop_count !== undefined &&
         (!Number.isInteger(item.drop_count) || item.drop_count < 0)) ||
+      (item.drop_confirmation !== undefined && !(isObject(item.drop_confirmation) &&
+        oneLine(item.drop_confirmation.author) && oneLine(item.drop_confirmation.channel) &&
+        /^\d+$/.test(item.drop_confirmation.channel) && oneLine(item.drop_confirmation.msg_id) &&
+        /^\d+$/.test(item.drop_confirmation.msg_id) && validDate(item.drop_confirmation.at))) ||
       (item.defer_count !== undefined &&
         (!Number.isInteger(item.defer_count) || item.defer_count < 0)) ||
       (item.human_msg_id !== undefined && !oneLine(item.human_msg_id)) ||
@@ -472,7 +481,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     item.drive.closed = { ...record, at };
     item.checked_at = at;
   };
-  let ownerRecord;
+  let ownerRecord, cancellation;
   const humanAck = normalizeMsgId(o["human-msg-id"]);
   let humanResult;
   if (command === "confirm") {
@@ -480,20 +489,29 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     const target = find(await readLedger(root, role));
     if (!driven(target)) throw new Error("confirm requires an item with an instruction file");
     // The messenger is read before the ledger lock is taken.
-    ownerRecord = await drive.verifyOwner({ config, item: target, channel: o.channel, msgId: o["msg-id"], fetchImpl, env, sleep });
-  } else if (command === "done" && o["human-msg-id"] !== undefined) {
+    const proof = { config, item: target, channel: o.channel, msgId: o["msg-id"], fetchImpl, env, sleep };
+    if ((o.as ?? "dropped") === "dropped" && humanInstructionSource(target)) {
+      if (!closedProperly(target)) cancellation = await drive.verifyOwner({ ...proof, cancel: true });
+    } else ownerRecord = await drive.verifyOwner(proof);
+  } else if ((command === "done" || (command === "drop" && o.reason?.trim())) && o["human-msg-id"] !== undefined) {
     const target = find(await readLedger(root, role));
-    if (!isWorkerItem(target) && !driven(target) && target.status !== "done") {
-      if (!hasHumanMsgId(humanAck) || sameHumanMsgId(humanAck, target.from.msg_id))
+    const source = command === "done" ? target.from : humanInstructionSource(target);
+    if (!isWorkerItem(target) && !driven(target) && target.status !== "done" &&
+        source && (command === "done" || target.status !== "dropped")) {
+      if (!hasHumanMsgId(humanAck) || sameHumanMsgId(humanAck, source.msg_id))
         throw new Error("--human-msg-id에는 원 지시와 다른 사람 확인 답글 번호가 필요합니다");
       const authors = configuredHumans(config, roleConfig);
       if (!Array.isArray(authors) || !authors.length) throw new Error("No configured humans for this role's --human-msg-id");
-      const channel = o.channel ?? target.from.channel;
+      const channel = o.channel ?? source.channel;
       const adapter = createAdapter(config.provider, { fetchImpl, env, sleep });
-      const message = await verifyCardReply({ adapter, authors, item: target, channel, msgId: humanAck, ordinary: true });
-      const direct = (roleConfig?.direct_channels ?? config.defaults?.direct_channels ?? config.direct_channels ?? []).includes(channel);
-      const guildId = message.guild_id || roleConfig?.guild_id || config.defaults?.guild_id || config.guild_id;
-      humanResult = adapter.messageUrl(channel, humanAck, { direct, guildId }) ?? `${channel}/${humanAck}`;
+      const proof = { adapter, authors, item: target, channel, msgId: humanAck, ordinary: true };
+      if (command === "drop") cancellation = await verifyCardCancellation(proof);
+      else {
+        const message = await verifyCardReply(proof);
+        const direct = (roleConfig?.direct_channels ?? config.defaults?.direct_channels ?? config.direct_channels ?? []).includes(channel);
+        const guildId = message.guild_id || roleConfig?.guild_id || config.defaults?.guild_id || config.guild_id;
+        humanResult = adapter.messageUrl(channel, humanAck, { direct, guildId }) ?? `${channel}/${humanAck}`;
+      }
     }
   }
   let startedItem;
@@ -598,6 +616,17 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     if (command === "attach") return drive.attach(item, o.pid, clock(), { root, config, role });
     if (command === "confirm") {
       if (!driven(item)) throw new Error("confirm requires an item with an instruction file");
+      const source = humanInstructionSource(item);
+      if ((o.as ?? "dropped") === "dropped" && source) {
+        if (closedProperly(item)) {
+          if (item.status === "dropped" && item.drive.closed.by === "owner" &&
+              item.drive.closed.channel === o.channel && item.drive.closed.msg_id === o["msg-id"]) return item.id;
+          throw new Error("Item is already closed with different evidence");
+        }
+        if (!cancellation) throw new Error("A verified owner cancellation is required");
+        cancellation.assertBound(item, l.items, source);
+        ownerRecord = cancellation.record;
+      }
       close(item, o.as ?? "dropped", { by: "owner", ...ownerRecord });
       if (o.reason) item.note = o.reason;
       return item.id;
@@ -650,24 +679,38 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     else if (command === "drop") {
       const currentDrops =
         item.drop_count ?? (item.status === "dropped" ? 1 : 0);
-      if (hasHumanMsgId(item.from?.msg_id)) {
+      const source = humanInstructionSource(item);
+      if (source) {
+        if (item.status === "done" || item.status === "dropped") {
+          if (item.status === "dropped" && item.drop_confirmation?.msg_id === humanAck &&
+              item.drop_confirmation.channel === (o.channel ?? source.channel)) return item.id;
+          throw new Error("Item is already closed with different evidence");
+        }
+        if (!cancellation) throw new Error("Dropping a human instruction requires --human-msg-id <explicit cancellation ID>");
+        cancellation.assertBound(item, l.items, source);
+        if (item.status === "escalated_human")
+          throw new Error(`사람에게 올림(escalated_human) 상태인 카드(${item.id})는 중단할 수 없습니다`);
         const priorDrops = l.items
-          .filter((i) => sameHumanMsgId(i.from?.msg_id, item.from.msg_id))
+          .filter((i) => sameHumanMsgId(humanInstructionSource(i)?.msg_id, source.msg_id))
           .reduce((sum, i) => sum + itemDropCount(i), 0);
-        if (item.status === "escalated_human" || priorDrops >= MAX_HUMAN_DROPS) {
+        if (priorDrops >= MAX_HUMAN_DROPS) {
           item.status = "escalated_human";
           item.drop_count = currentDrops + 1;
           item.checked_at = new Date(clock()).toISOString();
           item.note = `사람에게 올림 (drop ${priorDrops + 1}회 거절): ${o.reason.trim()}`;
           escalationError = new Error(
-            `사람 지시 카드(${item.id}, msg_id=${normalizeMsgId(item.from.msg_id)})는 drop ${MAX_HUMAN_DROPS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
+            `사람 지시 카드(${item.id}, msg_id=${normalizeMsgId(source.msg_id)})는 drop ${MAX_HUMAN_DROPS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
           );
           return item.id;
         }
+        item.checked_at = new Date(clock()).toISOString();
+        item.drop_confirmation = { ...cancellation.record, at: item.checked_at };
       }
       item.status = "dropped";
       item.drop_count = currentDrops + 1;
     } else {
+      if (item.status === "dropped" && item.drop_confirmation)
+        throw new Error("Item is already closed by a verified cancellation");
       if (item.status === "done") {
         if ((o.result !== undefined && item.result !== o.result && item.result !== path.resolve(root, o.result)) ||
             (o["human-msg-id"] !== undefined && item.human_msg_id !== humanAck))

@@ -22,7 +22,7 @@ import {
 } from "./ledger.mjs";
 export { processStart };
 import { resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
-import { createAdapter, verifyCardReply } from "./messenger.mjs";
+import { createAdapter, verifyCardCancellation, verifyCardReply } from "./messenger.mjs";
 import { measureMinFreeGb } from "../lib/disk-free.mjs";
 import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { publishScheduledCompletion } from "./completion-wake.mjs";
@@ -605,10 +605,12 @@ export async function tick({ root, config, configPath, now = Date.now(), dry = f
 
 // Owner confirmation = a message written by a configured owner that names the
 // item (first 8 characters of its id), directly or as a reply to a message that names it.
-export async function verifyOwner({ config, item, channel, msgId, fetchImpl, env, sleep }) {
+export async function verifyOwner({ config, item, channel, msgId, fetchImpl, env, sleep, cancel = false }) {
   const cfg = driveConfig(config);
   if (!cfg.owners.length) throw new Error("drive.owner_ids is not configured");
   const adapter = createAdapter(config.provider, { fetchImpl, env, sleep });
-  const message = await verifyCardReply({ adapter, authors: cfg.owners, item, channel, msgId });
+  const proof = { adapter, authors: cfg.owners, item, channel, msgId };
+  if (cancel) return verifyCardCancellation(proof);
+  const message = await verifyCardReply(proof);
   return { channel, msg_id: msgId, author: message.author.id };
 }

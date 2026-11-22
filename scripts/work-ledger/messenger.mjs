@@ -5,15 +5,26 @@ export function configuredHumans(config, role) {
     config.human_ids ?? config.humans ?? [];
 }
 
+async function readHumanMessage({ adapter, authors, channel, msgId, ordinary }) {
+  if (!/^\d+$/.test(channel ?? "") || !/^\d+$/.test(msgId ?? ""))
+    throw new Error(ordinary ? "A numeric confirmation channel and --human-msg-id are required" : "confirm requires numeric --channel and --msg-id");
+  const message = await adapter.message(channel, msgId);
+  const sender = ordinary ? "human" : "owner";
+  if (message?.id !== msgId || (message.channel_id !== undefined && message.channel_id !== channel) ||
+      !authors.includes(message.author?.id) || message.author?.bot || message.author?.system || message.webhook_id)
+    throw new Error(`Message was not written by a configured ${sender}`);
+  return message;
+}
+
+function hasSource(item, channel, id) {
+  return [item.from, ...(item.intake_messages ?? [])].some(source =>
+    source.channel === channel && source.msg_id?.trim() === id);
+}
+
 // Instructed work uses the owner's short card reference. Ordinary work can
 // also be acknowledged by directly replying to a source recorded on the card.
 export async function verifyCardReply({ adapter, authors, item, channel, msgId, ordinary = false }) {
-  if (!/^\d+$/.test(channel ?? "") || !/^\d+$/.test(msgId ?? ""))
-    throw new Error(ordinary ? "done requires a numeric confirmation channel and --human-msg-id" : "confirm requires numeric --channel and --msg-id");
-  const message = await adapter.message(channel, msgId);
-  const sender = ordinary ? "human" : "owner";
-  if (message?.id !== msgId || !authors.includes(message.author?.id))
-    throw new Error(`Message was not written by a configured ${sender}`);
+  const message = await readHumanMessage({ adapter, authors, channel, msgId, ordinary });
   const key = ordinary ? item.id : item.id.slice(0, 8);
   const namesCard = text => typeof text === "string" && (ordinary
     ? (text.match(/[A-Za-z0-9_-]+/g) ?? []).includes(key)
@@ -22,12 +33,55 @@ export async function verifyCardReply({ adapter, authors, item, channel, msgId, 
   const ref = message.message_reference;
   if (ref?.message_id) {
     const parentChannel = ref.channel_id ?? channel;
-    if (ordinary && [item.from, ...(item.intake_messages ?? [])].some(source =>
-      source.channel === parentChannel && source.msg_id?.trim() === ref.message_id)) return message;
+    if (ordinary && hasSource(item, parentChannel, ref.message_id)) return message;
     const parent = message.referenced_message ?? await adapter.message(parentChannel, ref.message_id);
     if (namesCard(parent?.content)) return message;
   }
   throw new Error(`Confirmation does not name item ${key} or reply to its record`);
+}
+
+// Match the whole directive so acknowledgements, questions, quoted instructions
+// and negations cannot supply intent. A directive without an ID needs a reply.
+function cancellationTarget(content) {
+  const line = typeof content === "string" ? content.trim().replace(/[.!]+$/, "").trimEnd() : "";
+  const match = /^(?:please[ \t]+)?(?:cancel|drop|취소|중단)(?:[ \t]+([A-Za-z0-9_-]+))?$/i.exec(line) ??
+    /^(?:네[, \t]+)?(?:([A-Za-z0-9_-]+)[ \t]+)?(?:취소|중단)(?:합니다|하세요|해(?:[ \t]*주세요|줘)?)?$/u.exec(line);
+  if (!match) throw new Error("An explicit cancellation is required: cancel <card ID> or a cancellation reply to its record");
+  return match[1];
+}
+
+export async function verifyCardCancellation({ adapter, authors, item, channel, msgId, ordinary = false }) {
+  const message = await readHumanMessage({ adapter, authors, channel, msgId, ordinary });
+  const target = cancellationTarget(message.content);
+  const ref = message.message_reference;
+  const parentChannel = ref?.channel_id ?? channel;
+  const reply = (ref?.type ?? 0) === 0 && /^\d+$/.test(parentChannel) && /^\d+$/.test(ref?.message_id ?? "");
+  let parentTokens = [];
+  if (!target && reply && !hasSource(item, parentChannel, ref.message_id)) {
+    const parent = message.referenced_message ?? await adapter.message(parentChannel, ref.message_id);
+    if (parent?.id === ref.message_id && (parent.channel_id === undefined || parent.channel_id === parentChannel) &&
+        (!parent.edited_timestamp || Date.parse(parent.edited_timestamp) <= Date.parse(message.edited_timestamp ?? message.timestamp)))
+      parentTokens = parent.content?.match(/[A-Za-z0-9_-]+/g) ?? [];
+  }
+  return {
+    record: { channel, msg_id: msgId, author: message.author.id },
+    // The messenger was read without the lock. Resolve the reference against
+    // current cards under the writer lock, including ambiguous short IDs or sources.
+    assertBound(card, items, source) {
+      const tasks = items.filter(row => row.kind !== "worker");
+      if (tasks.some(row => {
+        const proof = row.drop_confirmation ?? row.drive?.closed;
+        return row.id !== card.id && proof?.channel === channel && proof.msg_id === msgId;
+      })) throw new Error("Cancellation was already used for another item");
+      const sources = !target && reply
+        ? tasks.filter(row => hasSource(row, parentChannel, ref.message_id)) : [];
+      const names = target ? [target] : parentTokens;
+      const matches = sources.length ? sources : tasks.filter(row =>
+        names.includes(row.id) || (!ordinary && names.includes(row.id.slice(0, 8))));
+      if (msgId === source.msg_id.trim() || matches.length !== 1 || matches[0].id !== card.id)
+        throw new Error(`Cancellation does not name item ${ordinary ? card.id : card.id.slice(0, 8)} unambiguously or reply to its record`);
+    },
+  };
 }
 
 export function createAdapter(

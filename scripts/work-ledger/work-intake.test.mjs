@@ -255,3 +255,116 @@ test("a stored human completion refers to an actual reply by the configured pers
   assert.equal(await close("700"), card.id);
   assert.equal(reads, previous);
 });
+
+test("only an explicit cancellation by a configured human can drop their work card", async t => {
+  const { root, run, rows } = await setup(t, {
+    roles: [{ role: "writer", channels: ["100"], user_ids: ["300"] }],
+    defaults: { human_ids: ["500"] },
+    provider: { type: "discord", token_env: "FIXTURE_TOKEN" },
+  });
+  await run([post("600", "<@300> prepare the note", { author_id: "500", channel: "100" })]);
+  await run([post("601", "<@300> add sources", { author_id: "500", channel: "100", reply_to_id: "600" })]);
+  const [card] = await rows("writer");
+  const ref = { channel_id: "100", message_id: "601" };
+  const messages = {
+    701: { content: "continue " + card.id },
+    702: { content: "yes", message_reference: ref },
+    703: { content: "do not cancel " + card.id },
+    704: { content: "cancel " + card.id, author: { id: "999" } },
+    705: { content: "cancel " + card.id, author: { id: "500", bot: true } },
+    706: { content: "cancel " + card.id, webhook_id: "500" },
+    707: { content: "cancel " + card.id + "-other", message_reference: ref },
+    708: { content: "취소할까요?", message_reference: ref },
+    709: { content: "cancel", message_reference: { ...ref, channel_id: "101" } },
+    710: { content: "취소해 주세요.", message_reference: ref },
+    711: { content: "cancel " + card.id },
+    712: { content: "cancel " + card.id, id: "711" },
+  };
+  let reads = 0;
+  const deps = { now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl: async (url, options) => {
+    reads++;
+    assert.equal(options.headers.Authorization, "Bot fixture");
+    const [, channel, id] = /channels\/(\d+)\/messages\/(\d+)$/.exec(url.pathname);
+    if (!messages[id]) return new Response("", { status: 404 });
+    return Response.json({ id, channel_id: channel, author: { id: "500" }, ...messages[id] });
+  } };
+  const drop = (...options) => main(["drop", card.id, "--root", root, "--role", "writer", "--reason", "요청자 중단", ...options], deps);
+  await assert.rejects(drop(), /--human-msg-id/);
+  await assert.rejects(drop("--human-msg-id", "600"), /--human-msg-id/);
+  for (const id of ["701", "702", "703", "704", "705", "706", "707", "708", "709", "712", "799"]) {
+    await assert.rejects(drop("--human-msg-id", id), undefined, id);
+  }
+  assert.deepEqual((await rows("writer"))[0], card);
+  const args = ["--channel", "102", "--human-msg-id", "710"];
+  assert.deepEqual(await Promise.all([drop(...args), drop(...args)]), [card.id, card.id]);
+  const [cancelled] = await rows("writer");
+  assert.equal(cancelled.status, "dropped");
+  assert.equal(cancelled.drop_count, 1);
+  assert.deepEqual(cancelled.drop_confirmation, { channel: "102", msg_id: "710", author: "500", at: iso(now) });
+  const beforeRetry = reads;
+  assert.equal(await drop(...args, "--reason", "duplicate invocation"), card.id);
+  assert.equal(reads, beforeRetry);
+  await assert.rejects(drop("--human-msg-id", "710"), /already closed/);
+  await assert.rejects(drop("--human-msg-id", "711"), /already closed/);
+  await assert.rejects(main(["done", card.id, "--root", root, "--role", "writer", "--result", "https://example.org/result"]), /already closed/);
+  assert.deepEqual((await rows("writer"))[0], cancelled);
+});
+
+test("a cancellation lookup cannot overwrite a completion committed while the messenger is reading", async t => {
+  const { root, rows } = await setup(t, { provider: { type: "discord", token_env: "FIXTURE_TOKEN" } });
+  const role = ["--root", root, "--role", "writer"];
+  const id = await main(["add", ...role, "--id", "card-a", "--title", "A", "--channel", "100",
+    "--msg-id", "600", "--due", iso(now + 1000)], { now });
+  const result = "https://example.org/result";
+  const fetchImpl = async () => {
+    await main(["done", id, ...role, "--result", result], { now });
+    return Response.json({ id: "721", author: { id: "human" }, content: "cancel card-a" });
+  };
+  await assert.rejects(main(["drop", id, ...role, "--reason", "stop", "--human-msg-id", "721"], {
+    now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl,
+  }), /already closed/);
+  const [card] = await rows("writer");
+  assert.deepEqual([card.status, card.result, card.drop_count], ["done", result, undefined]);
+});
+
+test("a recreated card needs its own cancellation and a historical self card with human intake requires proof", async t => {
+  const { root, rows } = await setup(t, { intake: { enabled: false }, provider: { type: "discord", token_env: "FIXTURE_TOKEN" } });
+  const role = ["--root", root, "--role", "writer"];
+  const add = (id, source, channel = "100") => main(["add", ...role, "--id", id, "--title", id, "--due", iso(now + 1000),
+    "--channel", channel, "--msg-id", source], { now });
+  const messages = {
+    701: { content: "cancel", message_reference: { message_id: "600" } },
+    702: { content: "cancel", message_reference: { message_id: "600" } },
+    703: { content: "cancel first" }, 704: { content: "second 취소" },
+    705: { content: "취소", message_reference: { message_id: "630" } },
+  };
+  const drop = (card, ...args) => main(["drop", card, ...role, "--reason", "stop", ...args], {
+    now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl: async url => {
+      const [, channel, id] = /channels\/(\d+)\/messages\/(\d+)$/.exec(url.pathname);
+      assert.equal(channel, "100");
+      return Response.json({ id, author: { id: "human" }, ...messages[id] });
+    },
+  });
+  await add("first", "600");
+  await drop("first", "--human-msg-id", "701");
+  await add("second", "600");
+  await assert.rejects(drop("second", "--human-msg-id", "701"), /already used/);
+  await assert.rejects(drop("second", "--human-msg-id", "702"), /unambiguously/);
+  await assert.rejects(drop("second", "--human-msg-id", "703"), /does not name/);
+  assert.equal((await rows("writer"))[1].status, "open");
+  await drop("second", "--human-msg-id", "704");
+  await add("mixed", "self", "internal");
+  await changeLedger(root, "writer", ledger => {
+    ledger.items[2].intake_messages = [{ channel: "100", msg_id: "630", at: iso(now) }];
+  });
+  await assert.rejects(drop("mixed"), /--human-msg-id/);
+  await assert.rejects(drop("mixed", "--human-msg-id", "630"), /--human-msg-id/);
+  await drop("mixed", "--human-msg-id", "705");
+  assert.deepEqual((await rows("writer")).map(row => row.drop_confirmation.msg_id), ["701", "704", "705"]);
+
+  await add("legacy", "650");
+  await changeLedger(root, "writer", ledger => { ledger.items[3].status = "dropped"; });
+  assert.match(await main(["list", ...role]), /legacy \[dropped\]/);
+  await assert.rejects(drop("legacy", "--human-msg-id", "705"), /already closed/);
+  assert.equal((await rows("writer"))[3].drop_confirmation, undefined);
+});

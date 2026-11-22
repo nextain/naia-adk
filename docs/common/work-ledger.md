@@ -4,7 +4,7 @@
 
 부탁받은 일과 기한을 대화 안에만 두면 세션이 다시 시작되거나 대화가 줄어들 때 놓칠 수 있습니다. 일꾼이 결과 파일을 써도 담당자가 읽지 않으면 일이 멈춥니다. 업무 장부는 할 일을 파일로 남기고, 감시 대본은 세션 밖에서 10분마다 장부를 확인해 담당 역할을 깨웁니다.
 
-부탁·지시를 받으면 답하기 전에 `add`로 기록합니다. 끝난 일은 `done`, 중단한 일은 까닭과 함께 `drop`으로 남깁니다. 일꾼에게 맡겼다면 결과 경로와 끝 파일을 함께 기록합니다. 결과를 실제로 읽은 다음 `touch`로 확인 시각을 남깁니다.
+부탁·지시를 받으면 답하기 전에 `add`로 기록합니다. 끝난 일은 `done`으로 남깁니다. 사람이 맡긴 일반 업무는 역할 설정에 등록된 사람이 메신저에서 취소를 지시하면 `drop`으로 중단을 기록합니다. 일꾼에게 맡겼다면 결과 경로와 끝 파일을 함께 기록합니다. 결과를 실제로 읽은 다음 `touch`로 확인 시각을 남깁니다.
 
 ## 사람에게 묻고 기다릴 때
 
@@ -53,13 +53,15 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary add --title '초�
 node scripts/work-ledger/ledger.mjs --root . --role secretary list
 node scripts/work-ledger/ledger.mjs --root . --role secretary touch --id ITEM_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary done --id ITEM_ID --result results/draft.md
-node scripts/work-ledger/ledger.mjs --root . --role secretary drop --id ITEM_ID --reason '요청자가 중단함'
+node scripts/work-ledger/ledger.mjs --root . --role secretary drop --id ITEM_ID --reason '요청자가 중단함' --human-msg-id CANCELLATION_MESSAGE_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary report --every-min 60 --channel CHANNEL_ID --msg-id REPORT_MESSAGE_ID
 ```
 
 `add`가 성공하면 기한 안내를 표준 오류(stderr)에 먼저 쓰고, 이후 명령에 쓸 항목 ID 한 줄을 표준 출력(stdout)에 씁니다. `touch`는 결과를 읽은 시각(`checked_at`)을 갱신합니다. 일반 카드는 `done --result`에 내용이 있는 결과 파일 또는 HTTP(S) 주소를 주면 그 위치(`result`)와 완료 시각(`completed_at`)을 같은 카드에 기록합니다. 상대 파일 경로의 기준은 `--root`입니다. HTTP(S) 주소는 참조용으로 저장합니다.
 
 설정에 등록한 사람이 이미 확인한 경우에는 `--human-msg-id 답글_ID`로 그 답글을 결과로 남길 수도 있습니다. 답글에 카드 ID가 있거나 해당 카드의 원글에 단 답글이어야 합니다. 다른 채널의 답글은 `--channel 채널_ID`를 함께 줍니다. 이전에 완료한 카드는 기존 기록대로 조회됩니다.
+
+사람 지시를 중단하려면 역할의 `human_ids`에 등록한 사람이 메신저에 `cancel ITEM_ID` 또는 `ITEM_ID 취소`라고 쓴 글의 ID를 `drop --human-msg-id`에 줍니다. 카드의 원글이나 후속 글, 카드 ID를 적은 글에 `취소해 주세요` 또는 `cancel`이라고 단 답글도 쓸 수 있습니다. 한 역할에 같은 원글을 가리키는 카드가 여럿이면 전체 카드 ID를 적습니다. 다른 역할에도 같은 ID를 직접 붙였으면 해당 지시의 원글에 답글을 답니다. 취소 글이 다른 채널에 있으면 `--channel`로 그 채널을 지정합니다. 장부는 `drop_confirmation`에 채널·메시지·작성자와 처리 시각을 남깁니다. 사람 지시를 접수한 적이 없는 자체 카드(`--msg-id -`)는 `--reason`으로 중단합니다.
 
 `report`는 실제 보고를 보낸 뒤 그 글 ID와 보낸 시각을 기록합니다. 장부의 보고 주기가 0이면 역할 설정의 보고 주기를 사용합니다. 정기 보고를 끄려면 설정과 장부의 주기를 모두 0으로 둡니다.
 
@@ -166,7 +168,7 @@ node scripts/work-ledger/ledger.mjs --root . drive --dry
 
 - `add`에 `--prompt --result-file --model` 셋을 함께 주면 지시서가 붙습니다. 셋 중 일부만 주거나, 지시서 파일이 없거나 비었거나, 결과 파일이 이미 있거나, 모델이 `drive.worker.models`에 없으면 등록을 거절합니다. 지시서 파일(`--prompt`)에는 [상위 구조 적합 세 칸](../guides/architecture-fit-before-fix.md)(`original_request`·`parent_structure`·`acceptance_rationale`)을 적고, `drive`의 기본 머리글(`DEFAULT_PREAMBLE`)도 실행 전 세 칸 확인을 일꾼에게 함께 전달합니다. `adopt`는 이미 있는 열린 항목에 지시서를 붙입니다.
 - `start`는 기한을 기다리지 않고 지금 띄웁니다. `attach`는 손으로 띄운 일꾼의 프로세스 번호를 항목에 붙여 감시가 같은 일을 또 띄우지 않게 합니다.
-- 지시서가 붙은 항목은 `drop`으로 닫지 못하고 `due`로 기한을 옮기지 못합니다. 닫는 길은 둘입니다. 결과가 있으면 `done --result <파일 또는 주소>`(파일이면 실제로 있고 내용이 있어야 함), 중단이면 `confirm`으로 `drive.owner_ids`에 적힌 사람이 그 항목 ID 앞 8자를 적은 글(또는 그런 글에 단 답글)을 가리킵니다. 기록 없이 닫힌 항목은 다음 순회가 다시 열고 그 역할에 알립니다.
+- 지시서가 붙은 항목은 `drop`으로 닫지 못하고 `due`로 기한을 옮기지 못합니다. 결과가 있으면 `done --result <파일 또는 주소>`로 닫습니다(파일이면 실제로 있고 내용이 있어야 함). 중단은 `confirm --as dropped`에서 `drive.owner_ids`에 등록된 사람의 글로 확인합니다. 사람 지시 카드라면 위와 같은 형식으로 취소를 명시해야 합니다. 이때 역할의 장부에서 카드 하나만 가리키는 ID 앞 8자도 쓸 수 있습니다. 기록 없이 닫힌 항목은 다음 순회가 다시 열고 그 역할에 알립니다.
 - `drive`는 순회를 한 번 손으로 돌립니다. `--dry`는 무엇을 띄울지만 보여 주고 아무것도 쓰지 않습니다. 순회가 오류를 보고하면 종료 코드가 1입니다.
 
 순회는 10분 감시(`ledger-watch.mjs`) 안에서 `drive.enabled`가 `true`일 때만 돕니다. 따로 거는 일정은 없습니다. 한 번 돌 때 설정의 모든 역할 장부를 보고 지시서가 붙은 열린 항목마다 다음을 합니다.

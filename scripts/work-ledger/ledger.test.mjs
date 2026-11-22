@@ -277,7 +277,7 @@ test("report deadline and report command reset", async () => {
   ]);
   assert.equal((await readLedger(root, "secretary")).report.last_msg_id, "new");
 });
-test("concurrent CLI adds preserve both and drop needs reason", async () => {
+test("concurrent CLI adds preserve both and a reason alone cannot drop a human card", async () => {
   const root = await setup();
   const args = [
     "add",
@@ -303,7 +303,7 @@ test("concurrent CLI adds preserve both and drop needs reason", async () => {
     main(["drop", "task", "--root", root, "--role", "secretary"]),
     /reason/,
   );
-  await main([
+  await assert.rejects(main([
     "drop",
     "task",
     "--root",
@@ -312,10 +312,10 @@ test("concurrent CLI adds preserve both and drop needs reason", async () => {
     "secretary",
     "--reason",
     "중복",
-  ]);
+  ]), /--human-msg-id/);
   assert.equal(
     (await readLedger(root, "secretary")).items[0].status,
-    "dropped",
+    "open",
   );
 });
 test("corrupt ledger and provider failure produce wake and errors", async () => {
@@ -2137,6 +2137,17 @@ test("max_human_wakes validation warns once to stderr and user_ids never inherit
 
 test("human instruction cards cap drop and due deferrals at 2 and escalate on 3rd attempt", async () => {
   const root = await setup();
+  await mkdir(path.join(root, "config"), { recursive: true });
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify({
+    ...config, provider: { type: "discord", token_env: "FIXTURE_TOKEN", guild_id: "777" },
+  }));
+  const cancellationMessages = { 601: "ds-1", 602: "ds-2", 603: "ds-3", 611: "trim-1", 612: "trim-2", 613: "trim-3" };
+  const drop = (card, message, reason) => main([
+    "drop", card, "--root", root, "--role", "secretary", "--reason", reason, "--channel", "111", "--human-msg-id", message,
+  ], { now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl: async url => {
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({ id, author: { id: "human" }, content: "cancel " + cancellationMessages[id] });
+  } });
   // 1) 같은 사람 지시(msg_id=msg-deepseek)를 drop 뒤 새 카드로 재생성하는 회피도 합산하여 3회째 drop에서 거절·사람에게 올림 전환
   for (const round of [1, 2]) {
     await main(
@@ -2159,19 +2170,7 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
       ],
       { now },
     );
-    await main(
-      [
-        "drop",
-        `ds-${round}`,
-        "--root",
-        root,
-        "--role",
-        "secretary",
-        "--reason",
-        `재생성 ${round}`,
-      ],
-      { now },
-    );
+    await drop(`ds-${round}`, `60${round}`, `재생성 ${round}`);
   }
   await main(
     [
@@ -2194,19 +2193,7 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     { now },
   );
   await assert.rejects(
-    main(
-      [
-        "drop",
-        "ds-3",
-        "--root",
-        root,
-        "--role",
-        "secretary",
-        "--reason",
-        "또 미룸",
-      ],
-      { now },
-    ),
+    drop("ds-3", "603", "또 미룸"),
     /사람에게 올림/,
   );
   const afterDrop3 = await readLedger(root, "secretary");
@@ -2261,10 +2248,6 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
   );
 
   // 사람 확인 답글 번호와 함께 완료(done) 처리하면 더 이상 깨우지 않지만, 같은 msg_id(공백 변형 포함) 재생성은 계속 차단됨
-  await mkdir(path.join(root, "config"), { recursive: true });
-  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify({
-    ...config, provider: { type: "discord", token_env: "FIXTURE_TOKEN", guild_id: "777" },
-  }));
   await main(
     ["done", "ds-3", "--root", root, "--role", "secretary", "--channel", "111", "--human-msg-id", "504", "--reason", "대표님 보고 후 완료"],
     { now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl: async () => Response.json({ id: "504", author: { id: "human" }, content: "ds-3 확인" }) },
@@ -2322,7 +2305,7 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     ],
     { now },
   );
-  await main(["drop", "trim-1", "--root", root, "--role", "secretary", "--reason", "1차"], { now });
+  await drop("trim-1", "611", "1차");
   await main(
     [
       "add",
@@ -2343,7 +2326,7 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     ],
     { now },
   );
-  await main(["drop", "trim-2", "--root", root, "--role", "secretary", "--reason", "2차"], { now });
+  await drop("trim-2", "612", "2차");
   await main(
     [
       "add",
@@ -2365,7 +2348,7 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     { now },
   );
   await assert.rejects(
-    main(["drop", "trim-3", "--root", root, "--role", "secretary", "--reason", "3차"], { now }),
+    drop("trim-3", "613", "3차"),
     /사람에게 올림/,
   );
 

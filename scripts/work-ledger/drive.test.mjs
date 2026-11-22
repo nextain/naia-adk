@@ -124,11 +124,12 @@ for (const withDrive of [false, true])
     const resultUrl = "https://example.org/reports/first";
     assert.equal(await call("done", first, "--role", "lead", "--result", resultUrl, ...config), first);
     await call("touch", "--id", second, "--reason", "요청자가 중단함", "--role", "lead", ...config);
-    assert.equal(await call("drop", "--id", second, "--reason", "요청자가 중단함", "--role", "lead", ...config), second);
+    await assert.rejects(call("drop", "--id", second, "--reason", "요청자가 중단함", "--role", "lead", ...config), /--human-msg-id/);
+    await assert.rejects(call("drop", "--id", second, "--reason", "요청자가 중단함", "--human-msg-id", "444", "--role", "lead", ...config), /No configured humans/);
     assert.equal(await call("report", "--role", "lead", ...config, "--channel", "111", "--msg-id", "333", "--every-min", "120"), "보고 기록");
     const ledger = await readLedger(root, "lead");
     assert.equal(ledger.items[0].result, resultUrl);
-    assert.deepEqual(ledger.items.map((entry) => [entry.status, entry.checked_at !== null, entry.drive]), [["done", true, undefined], ["dropped", true, undefined]]);
+    assert.deepEqual(ledger.items.map((entry) => [entry.status, entry.checked_at !== null, entry.drive]), [["done", true, undefined], ["open", true, undefined]]);
     assert.equal(ledger.items[1].note, "요청자가 중단함");
     assert.deepEqual([ledger.report.last_msg_id, ledger.report.every_min, ledger.report.channel], ["333", 120, "111"]);
     assert.match(await call("list", "--role", "lead"), new RegExp(`${first} \\[done\\] 2099-01-02T06:00:00Z 15시까지 올림`));
@@ -642,10 +643,13 @@ test("an instructed item closed without a record is reopened; an owner message c
   assert.equal((await item(root, "writer", "abcd1234-task")).status, "open");
   assert.deepEqual((await pass(root, config, now + 30 * MIN)).alerts, [], "one notice per reopening");
   const messages = {
-    501: { id: "501", author: { id: "777" }, content: "abcd1234 그만해도 됩니다" },
-    502: { id: "502", author: { id: "900" }, content: "그만해도 됩니다" },
+    501: { id: "501", author: { id: "777" }, content: "abcd1234 취소" },
+    502: { id: "502", author: { id: "900" }, content: "중단하세요" },
     503: { id: "503", author: { id: "900" }, content: "네 중단하세요", message_reference: { message_id: "504" } },
     504: { id: "504", author: { id: "1" }, content: "장부 abcd1234 중단해도 될까요" },
+    505: { id: "505", author: { id: "900" }, content: "네", message_reference: { message_id: "504" } },
+    506: { id: "506", author: { id: "900" }, content: "continue abcd1234" },
+    507: { id: "507", author: { id: "900" }, content: "cancel abcd1234-other" },
   };
   let limited = 0;
   const calls = [];
@@ -662,15 +666,38 @@ test("an instructed item closed without a record is reopened; an owner message c
     main(["confirm", "abcd1234-task", "--role", "writer", "--root", root, "--channel", "111", "--msg-id", msgId], { now: now + 31 * MIN, fetchImpl, env: { TEST_TOKEN: "token-value" }, sleep: async () => {} });
   await assert.rejects(confirm("501"), /not written by a configured owner/);
   await assert.rejects(confirm("502"), /does not name item abcd1234/);
+  await assert.rejects(confirm("505"), /explicit cancellation/);
+  await assert.rejects(confirm("506"), /explicit cancellation/);
+  await assert.rejects(confirm("507"), /does not name item abcd1234/);
   await assert.rejects(confirm("599"), /Discord HTTP 404/);
   assert.equal((await item(root, "writer", "abcd1234-task")).status, "open");
   assert.equal(await confirm("503"), "abcd1234-task");
+  const reads = calls.length;
+  assert.equal(await confirm("503"), "abcd1234-task");
+  assert.equal(calls.length, reads);
   assert.equal(limited, 2, "a 429 is waited out and retried");
   const closed = await item(root, "writer", "abcd1234-task");
   assert.deepEqual([closed.status, closed.drive.closed.by, closed.drive.closed.msg_id, closed.drive.closed.author], ["dropped", "owner", "503", "900"]);
   const after = await pass(root, config, now + 32 * MIN);
   assert.deepEqual([after.launched, after.alerts, after.errors], [[], [], []]);
   assert.equal((await item(root, "writer", "abcd1234-task")).status, "dropped");
+});
+
+test("an owner cancellation distinguishes instructed cards with the same eight-character prefix", async () => {
+  const { root } = await setup();
+  await addDriven(root, "writer", "abcd1234-first", FUTURE);
+  await addDriven(root, "writer", "abcd1234-second", FUTURE);
+  const confirm = msgId => main(["confirm", "abcd1234-second", "--role", "writer", "--root", root, "--channel", "111", "--msg-id", msgId], {
+    now, env: { TEST_TOKEN: "fixture" }, fetchImpl: async url => {
+      const id = url.pathname.split("/").at(-1);
+      const text = { 511: "cancel abcd1234", 512: "cancel abcd1234-first", 513: "cancel abcd1234-second" }[id];
+      return Response.json({ id, author: { id: "900" }, content: text });
+    },
+  });
+  await assert.rejects(confirm("511"), /unambiguously/);
+  await assert.rejects(confirm("512"), /does not name/);
+  assert.equal(await confirm("513"), "abcd1234-second");
+  assert.deepEqual((await readLedger(root, "writer")).items.map(row => row.status), ["open", "dropped"]);
 });
 
 test("drive is off unless enabled; the command line pass and start/attach work", async () => {
