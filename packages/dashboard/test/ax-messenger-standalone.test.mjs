@@ -2,7 +2,10 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { once } from "node:events"
+import { createInterface } from "node:readline"
+import { setTimeout as delay } from "node:timers/promises"
 import os from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
@@ -88,6 +91,52 @@ test("standalone carries the guarded dashboard and a loadable Matrix client", as
   } finally { fs.rmSync(temporary, { recursive: true, force: true }) }
 })
 
+async function checkShutdown(dashboard, port, signal, manual = false) {
+  const pending = Promise.withResolvers()
+  const backend = http.createServer((_req, res) => pending.resolve(res))
+  await new Promise(resolve => backend.listen(0, "127.0.0.1", resolve))
+  const timeout = AbortSignal.timeout(10_000)
+  const child = spawn(process.execPath, [path.join(dashboard, "server.js")], {
+    cwd: dashboard,
+    env: {
+      ...process.env,
+      PORT: String(port), HOSTNAME: "127.0.0.1", NAIA_DASHBOARD_PORT: "", NAIA_DASHBOARD_HOST: "",
+      NAIA_INSTANCE_CONFIG: "", NAIA_API_PORT: String(backend.address().port),
+      NEXT_MANUAL_SIG_HANDLE: manual ? "1" : "",
+    },
+    stdio: ["ignore", "pipe", "ignore"],
+  })
+  const exited = once(child, "exit", { signal: timeout })
+  try {
+    for await (const line of createInterface({ input: child.stdout, signal: timeout })) {
+      if (line.includes("Dashboard ready")) break
+    }
+    const result = fetch(`http://127.0.0.1:${port}/api/portal/ledger`, { signal: timeout })
+      .then(async res => [res.status, await res.text()], () => null)
+    const response = await Promise.race([pending.promise, exited.then(() => { throw new Error("launcher exited before the request") })])
+    child.kill(signal)
+    if (manual) {
+      assert.deepEqual(await exited, [null, signal])
+      assert.equal(await result, null)
+    } else {
+      // Hold the response until a second connection can no longer reach the listener.
+      while (await fetch(`http://127.0.0.1:${port}/ax/messenger`, { signal: timeout, headers: { connection: "close" } })
+        .then(async res => { await res.text(); return true }, () => false)) {
+        await delay(10, undefined, { signal: timeout })
+      }
+      timeout.throwIfAborted()
+      child.kill(signal)
+      response.end("completed before shutdown")
+      assert.deepEqual(await result, [200, "completed before shutdown"])
+      assert.deepEqual(await exited, [0, null])
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    backend.closeAllConnections()
+    await new Promise(resolve => backend.close(resolve))
+  }
+}
+
 // Exercise the entry point normally shipped by Next, including its actual HTTP guard.
 test("standalone server.js starts the guarded server", async () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "ax-launcher-"))
@@ -148,5 +197,8 @@ test("standalone server.js starts the guarded server", async () => {
       assert.equal(result.status, 0, `${scenario.label}: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`)
       assert.match(result.stdout, /LAUNCHER_GUARDED/, scenario.label)
     }
+    await checkShutdown(dashboard, port, "SIGTERM")
+    await checkShutdown(dashboard, port, "SIGINT")
+    await checkShutdown(dashboard, port, "SIGTERM", true)
   } finally { fs.rmSync(temporary, { recursive: true, force: true }) }
 })

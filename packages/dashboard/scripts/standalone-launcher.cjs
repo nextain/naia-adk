@@ -10,7 +10,7 @@ async function main() {
     ...process.env,
     NAIA_DASHBOARD_PORT: process.env.NAIA_DASHBOARD_PORT || String(Number.parseInt(process.env.PORT, 10) || 3000),
     NAIA_DASHBOARD_HOST: process.env.NAIA_DASHBOARD_HOST || process.env.HOSTNAME || "0.0.0.0",
-  })
+  }, { handleSignals: true })
   const keepAliveTimeout = Number.parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10)
   if (Number.isFinite(keepAliveTimeout) && keepAliveTimeout > 0) server.keepAliveTimeout = keepAliveTimeout
 }

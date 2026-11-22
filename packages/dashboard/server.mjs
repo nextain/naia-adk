@@ -744,6 +744,20 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
   return new Promise((resolve, reject) => {
     server.on("error", reject)
     server.listen(fd === null ? { port, host } : { fd }, () => {
+      if (deps.handleSignals && !customEnv.NEXT_MANUAL_SIG_HANDLE) {
+        let stopping = false
+        const shutdown = () => {
+          if (stopping) return
+          stopping = true
+          server.close(async error => {
+            if (error) console.error(error)
+            try { await nextApp.close() } catch (error) { console.error(error) }
+            process.exit(0)
+          })
+        }
+        process.on("SIGTERM", shutdown)
+        process.on("SIGINT", shutdown)
+      }
       console.log(fd === null ? `> Dashboard ready on http://${host}:${port}` : `> Dashboard ready on inherited socket fd ${fd}`)
       resolve(server)
     })
