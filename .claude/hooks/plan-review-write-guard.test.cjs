@@ -414,7 +414,7 @@ test("8. 손상된 잠금·잘못된 입력·시한 초과(hook-watchdog) 시 �
 	assert.match(parsed.reason, /계획 리뷰 쓰기 관문이 .*초 안에 판정하지 못해 막습니다/);
 });
 
-test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중단되면 잠금과 빈 폴더를 깨끗이 지운다", async () => {
+test("9. approval-plan.mjs review 실행 중 잠금을 잡고 중단하면 검수 프로세스와 잠금을 정리한다", async (t) => {
 	const base = fs.mkdtempSync(path.join(scratch, "e2e-review-"));
 	const root = path.join(base, "repo");
 	const stateDir = path.join(base, "approval-state");
@@ -498,10 +498,23 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 
 	const observedLockFile = path.join(base, "observed-lock.json");
 	const mockMuse = path.join(base, "mock-muse.js");
+	const helperPidFile = path.join(base, "completed-review-helpers.json");
+	const reviewerPids = path.join(base, "cancelled-review-pids.json");
+	t.after(() => {
+		for (const file of [helperPidFile, reviewerPids]) {
+			if (!fs.existsSync(file)) continue;
+			for (const pid of JSON.parse(fs.readFileSync(file, "utf8"))) {
+				if (deployPlan.isPidAlive(pid)) process.kill(pid, "SIGKILL");
+			}
+		}
+	});
 	const passCriteria = deployPlan.CRITERIA.map(([id]) => `${id}: PASS`).join("\n");
 	fs.writeFileSync(mockMuse, [
 		"#!/usr/bin/env node",
 		"const fs = require('fs');",
+		"const helper = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'ignore' });",
+		`fs.writeFileSync(${JSON.stringify(helperPidFile)}, JSON.stringify([helper.pid]));`,
+		"helper.unref();",
 		`const lockPath = ${JSON.stringify(deployPlan.planReviewLockPath(root))};`,
 		`if (fs.existsSync(lockPath)) fs.copyFileSync(lockPath, ${JSON.stringify(observedLockFile)});`,
 		`process.stdout.write(${JSON.stringify(`판정: PASS\n${passCriteria}\n참고 지적: 0\n남은 지적: 0\n`)});`,
@@ -520,6 +533,8 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 		timeout: 20000,
 	});
 	assert.equal(runRes.status, 0, `review failed: ${runRes.stdout}\n${runRes.stderr}`);
+	const [helperPid] = JSON.parse(fs.readFileSync(helperPidFile, "utf8"));
+	if (process.platform !== "win32") assert.equal(deployPlan.isPidAlive(helperPid), false, "completed reviewer must release its helper");
 	assert.equal(fs.existsSync(observedLockFile), true, "lock file must exist while reviewer is running");
 	const observed = JSON.parse(fs.readFileSync(observedLockFile, "utf8"));
 	assert.equal(observed.plan, ".agents/progress/sample-work/gates/deploy-plan.json");
@@ -529,7 +544,15 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 
 	// 중단(SIGTERM) 시에도 trap/핸들러가 잠금과 빈 폴더를 지워야 하며, 도는 동안에는 중복 리뷰와 외부 Edit 를 모두 막는다.
 	const slowMuse = path.join(base, "slow-muse.js");
-	fs.writeFileSync(slowMuse, "#!/usr/bin/env node\nsetInterval(() => {}, 10000);\n", { mode: 0o755 });
+	fs.writeFileSync(slowMuse, [
+		"#!/usr/bin/env node",
+		"if (process.argv[2] === '--helper') {",
+		`  require('node:fs').writeFileSync(${JSON.stringify(reviewerPids)}, JSON.stringify([process.ppid, process.pid]));`,
+		"} else {",
+		"  require('node:child_process').spawn(process.execPath, [__filename, '--helper'], { stdio: 'ignore' });",
+		"}",
+		"setTimeout(() => {}, 20000);",
+	].join("\n"), { mode: 0o755 });
 	const child = spawn(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-sigterm.md")], {
 		cwd: root,
 		env: {
@@ -540,13 +563,19 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+	const closed = new Promise((resolve) => child.once("close", resolve));
+	t.after(() => {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+	});
 
 	const lockPath = deployPlan.planReviewLockPath(root);
 	const deadline = Date.now() + 8000;
-	while (!fs.existsSync(lockPath) && Date.now() < deadline) {
+	while (!fs.existsSync(reviewerPids) && Date.now() < deadline) {
 		await new Promise((r) => setTimeout(r, 40));
 	}
 	assert.equal(fs.existsSync(lockPath), true, "lock must appear during slow review");
+	const pids = JSON.parse(fs.readFileSync(reviewerPids, "utf8"));
+	assert.ok(pids.every(pid => deployPlan.isPidAlive(pid)));
 
 	// 리뷰 진행 중 외부 세션이 Edit 를 시도하면 실제로 막힌다.
 	const midReviewEdit = runHook({
@@ -573,7 +602,10 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	assert.match(secondReview.stderr, /이미 진행 중인 계획 리뷰 잠금이 있습니다/);
 
 	child.kill("SIGTERM");
-	await new Promise((resolve) => child.on("close", resolve));
+	assert.equal(await closed, 143);
+	assert.deepEqual(pids.filter(pid => deployPlan.isPidAlive(pid)), [], "cancelled reviewer and helper must both exit");
+	const interrupted = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+	assert.deepEqual(interrupted.reviewers, [], "interrupted review must not publish a verdict");
 	assert.equal(fs.existsSync(lockPath), false, "lock file must be removed on SIGTERM");
 	assert.equal(fs.existsSync(path.join(root, ".agents/state")), false, "empty .agents/state must be removed on SIGTERM");
 });
