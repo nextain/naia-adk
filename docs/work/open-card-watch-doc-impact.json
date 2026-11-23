@@ -1,0 +1,7 @@
+{
+  "work": "open-card-watch",
+  "metadata_api": "packages/core/work-ledger-meta.d.mts",
+  "repository_docs": { "status": "UPDATED", "path": "docs/guides/role-wake-registry.md" },
+  "user_manual": { "status": "UPDATED", "path": "docs/guides/role-wake-registry.md" },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/guides/role-wake-registry.md", "detail": "Match a registered watcher to the owner's ledger and wake box. Preserve the exact card scope of a delegate." }
+}

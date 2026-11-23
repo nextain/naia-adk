@@ -39,7 +39,7 @@ export function parseIsoTime(value) {
   return wall.toISOString().slice(0, 19) === value.slice(0, 19) ? ms : NaN;
 }
 
-function resolveWakeDir(role, wlRole, meta) {
+export function resolveWakeDir(role, wlRole, meta) {
   const direct = nonEmptyLine(role.wakeDir);
   if (direct) return direct;
   const raw = nonEmptyLine(wlRole?.wake_dir);
@@ -63,8 +63,10 @@ function validateJsonItem(item) {
 }
 
 async function readRoleJsonLedger(filePath, roleId) {
-  const raw = await readFile(filePath, 'utf8');
-  const doc = JSON.parse(raw);
+  return validateRoleJsonLedger(JSON.parse(await readFile(filePath, 'utf8')), roleId);
+}
+
+export function validateRoleJsonLedger(doc, roleId) {
   if (!doc || typeof doc !== 'object' || doc.version !== 1 || doc.role !== roleId || !Array.isArray(doc.items)) {
     throw Error('invalid json ledger schema');
   }
