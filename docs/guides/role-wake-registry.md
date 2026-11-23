@@ -43,6 +43,25 @@ The registry therefore requires a consumer that runs outside the session:
 - `deliver` hands each new wake file to `delivery.command` in arrival order
   (file time, then name: box names mix clocks and free titles) and records it
   in `state_dir/delivered-<role>.jsonl`.
+- Gateway and route relays for the same Discord message are handed over once
+  per role. Direct relay filenames or Discord wake metadata identify the message.
+  The body is read before grouping so ledger notices retain their
+  own delivery attempts, including stalled-card notices with a source id in
+  the filename. Reference links inside ordinary notes keep their original
+  meaning and do not identify the note itself. Agent-request observer notices
+  retain their separate stage identity.
+- A successful message handover adds a `message:<id>` receipt to the existing
+  delivery ledger. A later relay for that id is recorded as `duplicate` without
+  another handover. Old successful direct-relay filename receipts also supply
+  message ids when read. First-seen `baseline` rows supply file history only.
+- A merged input contains at most 32,768 characters. Larger groups are handed
+  over as complete originals. These original-only file receipts carry
+  `message_id: null`, so a run limit cannot discard the remaining originals.
+  Merged spool files are created when a handover is
+  attempted and removed after success or failure.
+  When work headers are enabled, the original Discord metadata selects the
+  matching work card before the merged input is formatted. Remote box reads
+  are reused within a pass, while a retry reads the current work ledger.
 - A file that fails is written to `state_dir/failed-<role>.json` and the run
   goes on to the files behind it and to the other roles. The file is retried
   after 60 seconds, doubling up to `retry_max_seconds`; new files go before
@@ -88,6 +107,14 @@ The header applies to `delivery.command`. Wait-only consumers, in-session
 liveness wakes, drive notifications (`drive.notify.command`), and the Gateway
 router use their own delivery paths. The optional busy probe records status
 while the configured delivery command handles queuing.
+
+The delivery command's successful exit is the recorded handover boundary.
+A process killed after sending input and before writing its receipt can leave
+an uncertain delivery. Consumer acknowledgements remain part of instance
+acceptance. The per-run limit bounds attempts during one pass and does not
+provide busy-session backpressure or a backlog rate limit. Repeated ledger
+notices and accumulated inputs therefore require separate producer and
+instance delivery controls.
 
 ## DM rooms
 

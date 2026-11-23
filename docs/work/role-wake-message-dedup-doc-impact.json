@@ -1,0 +1,47 @@
+{
+  "work": "role-wake-message-dedup",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/role-wake-registry.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/role-wake-registry.md"
+    ],
+    "detail": "Documents message receipt migration, original-preserving size fallback, and delivery/queue limitations for instance operators."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "detail": "The existing wake-completion-contract already requires consumer acknowledgements and reconciliation of uncertain sends. This bounded regression fix documents its behavior and limits in the existing role-wake guide instead of adding another general procedure."
+  },
+  "validation": {
+    "base": "88631361c3e3f0bd49bad41ba03c8a7795697541",
+    "baseline_command": "node --test scripts/role-wake.test.mjs",
+    "baseline_passed": 35,
+    "command": "node --test scripts/role-wake.test.mjs",
+    "passed": 52,
+    "failed": 0,
+    "red_evidence": "Six new integration regressions failed against the unchanged base before implementation.",
+    "integration_command": "node --test scripts/role-wake.test.mjs scripts/stalled-cards.test.mjs scripts/work-ledger/*.test.mjs",
+    "integration_result": {
+      "passed": 276,
+      "failed": 0,
+      "fixture": "A private SESSION_HEALTH_TEST_TMP avoids a pre-existing shared /tmp fixture permission conflict."
+    },
+    "diff_check": "PASS",
+    "guide_sync_check": "PASS",
+    "oss_readiness": "PASS: all five hard gates report zero findings"
+  },
+  "review": {
+    "independent_review": "Root relayed independent instance findings for cross-run Discord duplicates and stalled ledger notices. Both have regression coverage. No live delivery acceptance is claimed.",
+    "publication": "Feature branch push authorized for remote review. Merge, deployment and service activation remain separate."
+  },
+  "architecture_fit": {
+    "original_request": "Prevent repeated wake inputs from disrupting role sessions and prepare the shared upstream fix.",
+    "parent_structure": "The shared Naia ADK role wake registry, per-role durable delivery receipts, routed wake boxes and delivery-time work headers.",
+    "acceptance_rationale": "Extend the existing handover and receipt path while preserving shared routing, remote-box delivery and work-header selection. Instance credentials, service controls and model choices stay outside the patch."
+  }
+}

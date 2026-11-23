@@ -880,3 +880,306 @@ test('the example configuration is a valid registry', () => {
     { kind: 'session-health', roles: ['role-a'] },
   ]);
 });
+
+test('wakes for the same discord message are delivered once, merged', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const box = path.join(f.root, 'wake');
+  const gw = path.join(box, '0001-100000000000000001-gw.md');
+  const route = path.join(box, '0002-100000000000000001-route-role-a.md');
+  const solo = path.join(box, '0003-100000000000000002-gw.md');
+  fs.writeFileSync(gw, '# Discord wake\nMessage ID: 100000000000000001\nbody one\n');
+  fs.writeFileSync(route, '[relay] https://discord.com/channels/1/2/100000000000000001\n');
+  fs.writeFileSync(solo, '# Discord wake\nMessage ID: 100000000000000002\nsolo\n');
+  for (const file of [gw, route, solo]) fs.utimesSync(file, new Date(NOW), new Date(NOW));
+  assert.deepEqual(deliver(registry, f.deps).roles, {
+    'role-a': { delivered: 2, failed: 0, pending: 0 },
+    'role-b': { delivered: 0, failed: 0, pending: 0 },
+  });
+  assert.equal(f.state.runs.length, 2);
+  assert.ok(f.state.runs[0][2].endsWith('.merged.md'));
+  assert.equal(f.state.runs[1][2], solo);
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].filter(key => !key.startsWith('message:')).sort(), [gw, route, solo].map(file => path.basename(file)).sort());
+  deliver(registry, f.deps);
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('ledger cards with one source message keep separate delivery attempts', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const id of ['card-a', 'card-b']) {
+    const file = f.put('role-a', `0001-ledger-${id}-route-role-a.md`);
+    fs.writeFileSync(file, `[장부] ${id}\n출처: 100000000000000003/100000000000000001\n`);
+  }
+  const result = deliver(registry, f.deps).roles['role-a'];
+  assert.equal(result.delivered, 2);
+  assert.equal(result.pending, 0);
+  assert.equal(f.state.runs.length, 2);
+  assert.ok(f.state.runs.every(run => !run[2].endsWith('.merged.md')));
+});
+
+test('oversized duplicate groups deliver complete originals without truncation', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const files = ['0001-100000000000000001-gw.md', '0002-100000000000000001-route-role-a.md'].map(name => f.put('role-a', name));
+  const bodies = files.map((file, i) => `${i}`.repeat(20000));
+  files.forEach((file, i) => fs.writeFileSync(file, bodies[i]));
+  const received = [];
+  f.deps.run = (command, args) => received.push(fs.readFileSync(args[1], 'utf8'));
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 2);
+  assert.deepEqual(received, bodies);
+  assert.equal(readLedger(registry, registry.roles[0]).size, 2);
+});
+
+test('bounded delivery leaves no unattempted merged spool files', t => {
+  const f = setup(t);
+  f.doc.delivery.max_per_run = 1;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const id of ['100000000000000001', '100000000000000002']) {
+    f.put('role-a', `0001-${id}-gw.md`);
+    f.put('role-a', `0002-${id}-route-role-a.md`);
+  }
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 2);
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 0);
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+});
+
+test('failed merged delivery retains every member for retry and cleans its spool', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  const second = f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  f.state.failOn = '.merged.md';
+  const failed = deliver(registry, f.deps).roles['role-a'];
+  assert.deepEqual(failed, { delivered: 0, failed: 2, pending: 2 });
+  assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  assert.ok(fs.existsSync(first) && fs.existsSync(second));
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+  f.state.now += 60000;
+  f.state.failOn = null;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(readLedger(registry, registry.roles[0]).size, 3);
+});
+
+test('a duplicate relay arriving in a later run is recorded without another input', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 1);
+  assert.ok(readLedger(registry, registry.roles[0]).has('0002-100000000000000001-route-role-a.md'));
+});
+
+test('cross-run message receipts survive retention of the original relay', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  fs.unlinkSync(first);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 0);
+  assert.equal(f.state.runs.length, 1);
+});
+
+test('oversized groups crossing the run limit preserve every original body', t => {
+  const f = setup(t);
+  f.doc.delivery.max_per_run = 1;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  const second = f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  fs.writeFileSync(first, 'a'.repeat(20000));
+  fs.writeFileSync(second, 'b'.repeat(20000));
+  const received = [];
+  f.deps.run = (command, args) => received.push(fs.readFileSync(args[1], 'utf8'));
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 1);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 0);
+  assert.deepEqual(received, ['a'.repeat(20000), 'b'.repeat(20000)]);
+});
+
+
+test('a ledger notice remains deliverable after its source Discord message was delivered', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  const ledger = f.put('role-a', '0002-ledger-card-a-route-role-a.md');
+  fs.writeFileSync(ledger, '[장부] overdue card a\n출처: 100000000000000003/100000000000000001\n');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 2);
+  assert.equal(f.state.runs[1][2], ledger);
+});
+
+
+test('legacy successful filename receipts suppress a later relay after upgrade', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  fs.appendFileSync(path.join(f.dir, 'state', 'delivered-role-a.jsonl'), JSON.stringify({
+    file: '0001-100000000000000001-gw.md', at: new Date(NOW).toISOString(), status: 'delivered',
+  }) + '\n');
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 0);
+});
+
+test('legacy baseline rows leave new source-message relays deliverable', t => {
+  const f = setup(t);
+  const registry = f.load();
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.equal(f.state.runs.length, 1);
+});
+
+
+test('real stalled ledger notices read their body before considering a filename id', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const names = [
+    '100000000000000004-stalled-adk-canonical-100000000000000005-route-role-a.md',
+    '100000000000000006-stalled-adk-canonical-100000000000000005-route-role-a.md',
+  ];
+  for (const name of names) {
+    const file = f.put('role-a', name);
+    fs.writeFileSync(file, '[장부] 멈춘 카드: 하네스북 기준 naia-adk 복구\n역할: alpha\n카드 id: adk-canonical-100000000000000005\n');
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('a ledger body overrides a filename that matches the direct relay format', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const stamp of ['0001', '0002']) {
+    const file = f.put('role-a', `${stamp}-100000000000000001-route-role-a.md`);
+    fs.writeFileSync(file, '[장부] overdue\n출처: 100000000000000003/100000000000000001\n');
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('notes referring to one source link retain their separate delivery attempts', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const name of ['0001-note.md', '0002-note.md']) {
+    const file = f.put('role-a', name);
+    fs.writeFileSync(file, `Evidence for ${name} https://discord.com/channels/1/2/100000000000000001\n`);
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+});
+
+test('merged relays preserve the matching-source work header and both original bodies', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  f.doc.roles['role-a'].ledger = 'custom.json';
+  f.write();
+  writeWorkLedger(path.join(f.root, 'custom.json'), 'role-a', [
+    ledgerRow('original'),
+    ledgerRow('recent', { from: { channel: '', msg_id: '-', quote: '' }, due: '2026-01-12T00:00:00Z' }),
+  ]);
+  const registry = f.load();
+  const received = readAtDelivery(f);
+  deliver(registry, f.deps);
+  const route = f.put('role-a', `0001-${ORIGINAL_MESSAGE}-route-role-a.md`);
+  const gw = f.put('role-a', `0002-${ORIGINAL_MESSAGE}-gw.md`);
+  const routeBody = 'Relay copy with no source metadata\n';
+  const gatewayBody = `# Discord wake\n\nRole: role-a\nChannel: general (${SOURCE_CHANNEL})\nAuthor: Human\nMessage ID: ${ORIGINAL_MESSAGE}\n\nOriginal request\n`;
+  fs.writeFileSync(route, routeBody);
+  fs.writeFileSync(gw, gatewayBody);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.equal(received.length, 1);
+  assert.ok(received[0].body.startsWith('[내 장부 먼저]\n- original | open |'));
+  assert.ok(received[0].body.includes(routeBody) && received[0].body.includes(gatewayBody));
+  assert.equal(fs.readFileSync(route, 'utf8'), routeBody);
+  assert.equal(fs.readFileSync(gw, 'utf8'), gatewayBody);
+  assert.deepEqual(fs.readdirSync(path.join(registry.stateDir, 'spool', 'role-a')), []);
+});
+
+test('merged via relays retry with fresh work headers and preserve original receipt keys', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  const outside = path.join(f.dir, 'remote');
+  const ledger = path.join(f.root, 'custom.json');
+  f.doc.roles['role-a'].ledger = ledger;
+  f.doc.roles['role-a'].extra_boxes = [{ path: outside, via: ['/opt/read'] }];
+  f.write();
+  const names = [`0001-${ORIGINAL_MESSAGE}-gw.md`, `0002-${ORIGINAL_MESSAGE}-route-role-a.md`];
+  const bodies = [
+    `# Discord wake\n\nRole: role-a\nChannel: general (${SOURCE_CHANNEL})\nAuthor: Human\nMessage ID: ${ORIGINAL_MESSAGE}\n\nRequest\n`,
+    'Relayed request\n',
+  ];
+  let found = false, reads = 0;
+  const received = readAtDelivery(f);
+  const run = f.deps.run;
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/read' && args[0] === 'find') return found ? names.map(name => `${NOW / 1000}\t${name}\n`).join('') : '';
+    if (command === '/opt/read' && args[0] === 'cat') {
+      reads += 1;
+      return Buffer.from(bodies[names.indexOf(path.basename(args[1]))]);
+    }
+    return run(command, args, options);
+  };
+  const registry = f.load();
+  deliver(registry, f.deps);
+  found = true;
+  writeWorkLedger(ledger, 'role-a', [ledgerRow('first')]);
+  f.state.failOn = names[0];
+  assert.equal(deliver(registry, f.deps).roles['role-a'].failed, 2);
+  assert.equal(readLedger(registry, registry.roles[0]).has(path.join(outside, names[0])), false);
+  writeWorkLedger(ledger, 'role-a', [ledgerRow('second')]);
+  f.state.now += 61_000;
+  f.state.failOn = null;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(reads, 4);
+  assert.ok(received[0].body.startsWith('[내 장부 먼저]\n- first |'));
+  assert.ok(received[1].body.startsWith('[내 장부 먼저]\n- second |'));
+  for (const name of names) assert.equal(readLedger(registry, registry.roles[0]).has(path.join(outside, name)), true);
+  assert.deepEqual(fs.readdirSync(path.join(registry.stateDir, 'spool', 'role-a')), []);
+});
+
+test('grouped delivery keeps role routing and the configured busy observation', t => {
+  const f = setup(t);
+  f.doc.delivery.busy_probe = ['/opt/probe', '{role}'];
+  f.write();
+  const received = readAtDelivery(f);
+  const run = f.deps.run;
+  const probed = [];
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/probe') { probed.push(args[0]); return 'busy'; }
+    return run(command, args, options);
+  };
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const role of ['role-a', 'role-b']) {
+    for (const stamp of ['0001', '0002']) {
+      const file = path.join(f.root, 'wake', `${stamp}-${ORIGINAL_MESSAGE}-route-${role}.md`);
+      fs.writeFileSync(file, `Wake for ${role}\n`);
+    }
+  }
+  const result = deliver(registry, f.deps).roles;
+  for (const role of ['role-a', 'role-b']) assert.deepEqual(result[role], { delivered: 1, failed: 0, pending: 0, busy: true });
+  assert.deepEqual(probed, ['role-a', 'role-b']);
+  assert.equal(received.length, 2);
+  for (const attempt of received) {
+    assert.ok(attempt.body.includes(`Wake for ${attempt.role}`));
+    assert.ok(!attempt.body.includes(`Wake for ${attempt.role === 'role-a' ? 'role-b' : 'role-a'}`));
+  }
+});

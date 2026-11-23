@@ -240,7 +240,19 @@ export function readLedger(registry, role) {
   let text;
   try { text = fs.readFileSync(ledgerFile(registry, role), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   const names = new Set();
-  for (const line of text.split('\n')) { if (!line) continue; try { names.add(JSON.parse(line).file); } catch { /* a torn last line is retried */ } }
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line);
+      names.add(entry.file);
+      // Upgrade successful gateway/route receipts written before message ids
+      // were stored. Baseline rows were never handed to a consumer.
+      if (entry.status === 'delivered' && entry.message_id !== null) {
+        const id = entry.message_id ?? messageIdOf(path.basename(entry.file), null);
+        if (id) names.add(`message:${id}`);
+      }
+    } catch { /* a torn last line is retried */ }
+  }
   return names;
 }
 
@@ -343,12 +355,14 @@ function handOver(registry, role, entry, deps) {
   let body;
   const readBody = () => {
     if (body) return body;
+    if (entry.body !== undefined) return (body = Buffer.from(entry.body));
     if (!entry.box?.via) return (body = fs.readFileSync(entry.file));
     const [reader, ...prefix] = entry.box.via;
     return (body = Buffer.from(deps.run(reader, [...prefix, 'cat', entry.file], { encoding: 'buffer' })));
   };
   try {
-    const header = registry.delivery.workHeader ? workHeader(registry, role, readBody, deps.now()) : null;
+    const sourceBody = () => entry.sourceBody ?? readBody();
+    const header = registry.delivery.workHeader ? workHeader(registry, role, sourceBody, deps.now()) : null;
     if (header !== null || entry.box?.via) {
       const original = readBody();
       spooled = path.join(registry.stateDir, 'spool', role.id, entry.name);
@@ -372,9 +386,47 @@ function probeBusy(command, role, deps) {
 }
 
 const boxMark = box => `box:${box.dir}`;
+// Several wake files can name the same Discord message: a gateway relay plus
+// a route relay (`<ts>-<id>-gw.md` and `<stamp>-<id>-route-<role>.md`), or
+// another relay with a message id in its body. Ledger notices identify separate
+// cards even when they share a source message. Files that share a message
+// id go out as one handover while every member is still recorded, which keeps
+// retention and replay protection working file by file.
+const MERGE_MAX_CHARS = 32768;
+export function messageIdOf(name, body) {
+  if (/-ledger-/.test(name ?? '') || /^\[장부\]/m.test(body ?? '')) return null;
+  if (/^Author: agent-request-watch\r?$/m.test(body ?? '')) return null;
+  const fromName = /^\d+-(\d{17,20})-(?:gw|route-[A-Za-z0-9_-]+|ten-[A-Za-z0-9_-]+)\.md$/.exec(name ?? '');
+  if (fromName) return fromName[1];
+  return typeof body === 'string' ? wakeSource(body, null).msgId ?? null : null;
+}
+function readWakeBody(entry, deps) {
+  if (entry.body !== undefined) return entry.body;
+  if (entry.box?.via) {
+    const [command, ...prefix] = entry.box.via;
+    entry.body = deps.run(command, [...prefix, 'cat', entry.file]).toString('utf8');
+  } else {
+    entry.body = fs.readFileSync(entry.file, 'utf8');
+  }
+  return entry.body;
+}
+
+export function mergeBodies(id, bodies) {
+  const joined = bodies.join('\n\n---\n\n');
+  const head = `[merged ${bodies.length} wakes — same message ${id}]\n`;
+  if (head.length + joined.length <= MERGE_MAX_CHARS) return head + joined;
+  throw new RangeError('Merged wake exceeds the delivery size limit');
+}
 function deliverRole(registry, role, deps, now, at) {
   const { entries, errors, unreadable } = boxEntries(role, deps);
-  const append = (keys, status) => { if (keys.length) fs.appendFileSync(ledgerFile(registry, role), keys.map(file => `${JSON.stringify({ file, at, status })}\n`).join(''), { mode: 0o600 }); };
+  const append = (keys, status, messageId) => {
+    if (!keys.length) return;
+    const rows = keys.map(file => ({ file, at, status,
+      ...(messageId === undefined ? {} : { message_id: messageId }),
+    }));
+    const text = rows.map(row => `${JSON.stringify(row)}\n`).join('');
+    fs.appendFileSync(ledgerFile(registry, role), text, { mode: 0o600 });
+  };
   const error = errors.length ? { error: errors.join('; ') } : {};
   let seen = readLedger(registry, role);
   // Boxes looked at for the first time: the role's own box while it has no
@@ -397,6 +449,23 @@ function deliverRole(registry, role, deps, now, at) {
     baseline = known.length;
     seen = new Set([...(seen ?? []), ...known.map(entry => entry.key)]);
   }
+  const messageKeyId = entry => {
+    try {
+      const id = messageIdOf(entry.name, readWakeBody(entry, deps));
+      if (id) return id;
+    } catch { /* unreadable here still gets its own delivery attempt */ }
+    return null;
+  };
+  // Message receipts survive separate pump runs and late copies from another
+  // relay, even after retention has archived the delivered originals.
+  const messageMark = id => `message:${id}`;
+  for (const entry of entries.filter(entry => !seen.has(entry.key))) {
+    const id = messageKeyId(entry);
+    if (id && seen.has(messageMark(id))) {
+      append([entry.key], 'duplicate');
+      seen.add(entry.key);
+    }
+  }
   const fresh = entries.filter(entry => !seen.has(entry.key));
   const before = readFailures(registry, role);
   const failures = Object.fromEntries(Object.entries(before).filter(([key]) => fresh.some(entry => entry.key === key)));
@@ -406,24 +475,67 @@ function deliverRole(registry, role, deps, now, at) {
   const retries = fresh.filter(entry => failures[entry.key] && failures[entry.key].next <= now).sort((a, b) => failures[a.key].count - failures[b.key].count);
   const order = [...fresh.filter(entry => !failures[entry.key]), ...retries];
   const busy = order.length && registry.delivery.busyProbe ? { busy: probeBusy(registry.delivery.busyProbe, role, deps) } : {};
-  let delivered = 0, attempts = 0, streak = 0;
-  for (const entry of order) {
+  const groups = [];
+  {
+    const byKey = new Map();
+    for (const entry of order) {
+      const id = messageKeyId(entry);
+      const key = id === null ? `file:${entry.key}` : `msg:${id}`;
+      let group = byKey.get(key);
+      if (!group) { group = { id, members: [] }; byKey.set(key, group); groups.push(group); }
+      group.members.push(entry);
+    }
+  }
+  const noteFailure = key => {
+    const count = (failures[key]?.count ?? 0) + 1;
+    failures[key] = { count, first: failures[key]?.first ?? at, last: at, next: now + Math.min(registry.delivery.retryMaxSeconds, 60 * 2 ** Math.min(count - 1, 20)) * 1000 };
+  };
+  const handovers = [];
+  for (const group of groups) {
+    if (group.id === null || group.members.length < 2) {
+      for (const member of group.members) handovers.push({ members: [member], entry: member, messageId: group.id });
+      continue;
+    }
+    try {
+      const bodies = group.members.map(member => readWakeBody(member, deps));
+      const body = mergeBodies(group.id, bodies);
+      const sourceBody = bodies.find(value => /^# Discord wake\r?\n/.test(value)) ?? bodies[0];
+      handovers.push({ members: group.members, body, sourceBody, messageId: group.id });
+    } catch {
+      // Every original remains deliverable if merging is too large or unreadable.
+      for (const member of group.members) handovers.push({ members: [member], entry: member });
+    }
+  }
+  let delivered = 0, filesDone = 0, attempts = 0, streak = 0;
+  for (const handover of handovers) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
     attempts += 1;
-    let ok = true;
-    try { handOver(registry, role, entry, deps); } catch { ok = false; }
+    let ok = true, mergedFile = null;
+    try {
+      let entry = handover.entry;
+      if (!entry) {
+        const dir = path.join(registry.stateDir, 'spool', role.id);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        mergedFile = path.join(dir, `${handover.members[0].name.replace(/[/\\]/g, '_')}.merged.md`);
+        fs.writeFileSync(mergedFile, handover.body, { mode: 0o600 });
+        entry = { ...handover.members[0], file: mergedFile, box: null, body: handover.body, sourceBody: handover.sourceBody };
+      }
+      handOver(registry, role, entry, deps);
+    } catch { ok = false; } finally {
+      if (mergedFile) fs.rmSync(mergedFile, { force: true });
+    }
     if (ok) {
-      append([entry.key], 'delivered');
-      delete failures[entry.key];
-      delivered += 1; streak = 0;
+      append(handover.members.map(member => member.key), 'delivered', handover.messageId ?? null);
+      if (handover.messageId) append([messageMark(handover.messageId)], 'message');
+      for (const member of handover.members) delete failures[member.key];
+      delivered += 1; filesDone += handover.members.length; streak = 0;
     } else {
-      const count = (failures[entry.key]?.count ?? 0) + 1;
-      failures[entry.key] = { count, first: failures[entry.key]?.first ?? at, last: at, next: now + Math.min(registry.delivery.retryMaxSeconds, 60 * 2 ** Math.min(count - 1, 20)) * 1000 };
+      for (const member of handover.members) noteFailure(member.key);
       streak += 1;
     }
   }
   if (JSON.stringify(failures) !== JSON.stringify(before)) atomic(failureFile(registry, role), JSON.stringify(failures));
-  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - delivered, ...error, ...busy };
+  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...error, ...busy };
 }
 
 // Hands each new wake file to the instance delivery command, in arrival order. A
