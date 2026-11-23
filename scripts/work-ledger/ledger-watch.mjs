@@ -269,10 +269,10 @@ export async function watch({
               legacyKey: JSON.stringify([role, latest.id, overdueReason, latest.due]),
               publishedAt: receipt?.status === "sent" && receipt.role === role && receipt.id === latest.id && receipt.due === latest.due ? receipt.at : undefined });
           };
-          let failedReceipt = false;
-          try { failedReceipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")).status === "failed"; }
+          let recoverReceipt = false;
+          try { recoverReceipt = ["failed", "claimed"].includes(JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")).status); }
           catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
-          if (item.status === "open" && (config.due_timer?.enabled === true || failedReceipt)) {
+          if (item.status === "open" && (config.due_timer?.enabled === true || recoverReceipt)) {
             await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key], observe,
               emit: async () => {} });
           } else {

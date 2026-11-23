@@ -56,3 +56,5 @@ The original dispatcher test file is unchanged from the base. Its new deadline i
 | `scripts/work-ledger/ledger-instructions.cases.mjs` | Existing state recovery and instruction settings cases |
 | `scripts/work-ledger/ledger-human-limits.cases.mjs` | Existing instruction deferral/drop and ledger-owner boundaries |
 | `scripts/work-ledger/semantic-reminders.test.mjs` | New unchanged-fact, revision, legacy migration and interrupted-publication acceptance |
+
+A previously claimed due-timer receipt also uses the existing recovery path while the timer is disabled. A focused regression asserts convergence to sent after durable publication, no system runner call and no repeated original.
