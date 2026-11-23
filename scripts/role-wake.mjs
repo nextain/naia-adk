@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
+import { isCardEventWakeBody, isCardEventWakeName } from './work-ledger/card-wake.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
@@ -430,9 +431,9 @@ function deliverRole(registry, role, deps, now, at) {
   const error = errors.length ? { error: errors.join('; ') } : {};
   let seen = readLedger(registry, role);
   // Boxes looked at for the first time: the role's own box while it has no
-  // ledger, an extra box until the ledger carries its mark. Such a box is
-  // recorded, not replayed; with the old deliverer's record, only what that
-  // record lists is taken as delivered. A box that cannot be read stays new.
+  // ledger, an extra box until the ledger carries its mark. With the old
+  // deliverer's record, only its listed paths count as acknowledged.
+  // A box that cannot be read stays new.
   const firstLook = [];
   if (seen === null) {
     if (unreadable.includes(role.wakeDir)) return { delivered: 0, failed: 0, pending: 0, ...error };
@@ -442,7 +443,15 @@ function deliverRole(registry, role, deps, now, at) {
   let baseline = null;
   if (firstLook.length) {
     const old = registry.delivery.baselineSeenFile ? readSeenFile(registry.delivery.baselineSeenFile) : null;
-    const known = entries.filter(entry => firstLook.includes(entry.box) && (!old || old.has(entry.file)));
+    // Durable card events are issued only once. Without a previous handoff
+    // record they must be delivered even if the producer ran before first look.
+    const known = entries.filter(entry => {
+      if (!firstLook.includes(entry.box)) return false;
+      if (old) return old.has(entry.file);
+      if (!isCardEventWakeName(entry.name)) return true;
+      try { return !isCardEventWakeBody(readWakeBody(entry, deps)); }
+      catch { return false; } // Keep the possible one-shot pending until it can be read.
+    });
     fs.writeFileSync(ledgerFile(registry, role), '', { flag: 'a', mode: 0o600 });
     append(known.map(entry => entry.key), 'baseline');
     append(firstLook.filter(Boolean).map(boxMark), 'box');
@@ -547,9 +556,9 @@ function deliverRole(registry, role, deps, now, at) {
   return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...(deferred ? { deferred } : {}), ...error, ...busy };
 }
 
-// Hands each new wake file to the instance delivery command, in arrival order. A
-// box seen for the first time is recorded, not replayed. A failed file is kept
-// for retry and reported; it stops neither the files behind it nor other roles.
+// Hands each new wake file to the instance delivery command, in arrival order.
+// First inspection records historical paths and queues unacknowledged card events.
+// A failed file stays available for retry alongside other files and roles.
 export function deliver(registry, deps = defaultDeps(), { only = null } = {}) {
   if (!registry.delivery) fail('delivery is not configured');
   const release = acquireLock(registry);

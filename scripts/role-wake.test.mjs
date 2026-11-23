@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
 import { ledgerPath } from './work-ledger/ledger.mjs';
 import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
+import { cardWakePublisher, escalationReason } from './work-ledger/card-wake.mjs';
 import { formatStalledCardWake } from './lib/stalled-cards.mjs';
 
 const NOW = Date.parse('2026-01-10T00:00:00Z');
@@ -71,6 +74,198 @@ function readAtDelivery(f) {
   };
   return received;
 }
+
+function ledgerWatcher(f, items, role = 'role-a') {
+  f.doc.wake_root = '.agents/work/l4/wake';
+  f.doc.delivery.max_per_run = 100;
+  f.write();
+  const inbox = path.join(f.root, f.doc.wake_root);
+  fs.mkdirSync(path.join(inbox, 'role-b'), { recursive: true });
+  const ledger = ledgerPath(f.root, role);
+  const save = () => writeWorkLedger(ledger, role, items);
+  save();
+  const config = path.join(f.dir, 'work-ledger.json');
+  fs.writeFileSync(config, JSON.stringify({ roles: [{ role, channels: [], human_ids: [] }] }));
+  const clock = path.join(f.dir, 'clock.cjs');
+  fs.writeFileSync(clock, 'Date.now = () => Number(process.env.LEDGER_FIXTURE_NOW);\n');
+  const cli = fileURLToPath(new URL('./work-ledger/ledger-watch.mjs', import.meta.url));
+  const scan = (minutes = 0) => {
+    const env = { ...process.env, ADK_FORBID_SYSTEM_RUNNER: '1', LEDGER_FIXTURE_NOW: String(NOW + minutes * 60_000) };
+    const output = execFileSync(process.execPath, ['--require', clock, cli, '--root', f.root, '--config', config], { env, encoding: 'utf8' });
+    const result = JSON.parse(output);
+    assert.equal(result.event, 'work-ledger-watch');
+    assert.deepEqual(result.errors, []);
+    return result.wakes;
+  };
+  const pending = () => fs.readdirSync(inbox).filter(name => name.endsWith('.md')).sort();
+  return { inbox, scan, save, pending };
+}
+
+test('independent watcher runs keep all 67 escalated cards pending once and the first consumer delivers each card', t => {
+  const f = setup(t);
+  const cards = Array.from({ length: 67 }, (_, i) => ledgerRow(i === 66 ? 'long'.repeat(90) : `work-${i}`, { status: 'escalated_human' }));
+  const { inbox, scan, pending, save } = ledgerWatcher(f, cards);
+  const ids = cards.map(card => card.id).sort();
+  for (const [i, minutes] of [0, 31, 62].entries()) {
+    assert.equal(scan(minutes).length, i === 0 ? 67 : 0);
+    const names = pending();
+    assert.equal(names.length, 67);
+    assert.deepEqual(names.map(name => fs.readFileSync(path.join(inbox, name), 'utf8').match(/^작업카드: (.+)$/m)[1]).sort(), ids);
+  }
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  fs.writeFileSync(path.join(inbox, '~notes-route-role-a.md'), 'Existing role note\n');
+  const firstLook = pump();
+  assert.equal(firstLook.baseline, 1);
+  assert.equal(firstLook.delivered, 67);
+  assert.equal(pump().delivered, 0);
+  for (const name of pending()) fs.unlinkSync(path.join(inbox, name));
+  assert.deepEqual(scan(3 * 24 * 60), []);
+  // Both a changed escalation and a later return to its earlier state are new episodes.
+  cards[0].note = 'new attempt'; save();
+  assert.equal(scan(3 * 24 * 60 + 1).length, 1);
+  cards[0].note = ''; save();
+  assert.equal(scan(3 * 24 * 60 + 2).length, 1);
+  cards[0].status = 'done'; save();
+  assert.deepEqual(scan(3 * 24 * 60 + 3), []);
+  cards[0].status = 'escalated_human'; save();
+  assert.equal(scan(3 * 24 * 60 + 4).length, 1);
+  assert.equal(pump().delivered, 3);
+  assert.equal(readLedger(registry, registry.roles[0]).size, 71);
+});
+
+test('a completed worker can publish new bytes during a handoff and after its receipt without replacing any notice', t => {
+  const f = setup(t);
+  const card = ledgerRow('worker-card', { due: '2030-01-01T00:00:00Z', worker: { name: 'writer', result: 'result.md', done_file: 'worker.done' } });
+  const { scan, save } = ledgerWatcher(f, [card]);
+  const result = path.join(f.root, card.worker.result), marker = path.join(f.root, card.worker.done_file);
+  fs.writeFileSync(result, 'first');
+  fs.writeFileSync(marker, 'complete');
+  fs.utimesSync(marker, new Date(NOW), new Date(NOW));
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  assert.equal(scan().length, 1);
+  const received = [];
+  f.deps.run = (bin, [, file]) => {
+    assert.equal(bin, '/opt/deliver');
+    received.push({ file, body: fs.readFileSync(file, 'utf8') });
+    if (received.length === 1) {
+      assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+      fs.writeFileSync(result, 'second');
+      fs.utimesSync(marker, new Date(NOW + 60_000), new Date(NOW + 60_000));
+      assert.equal(scan(1).length, 1);
+      assert.equal(fs.readFileSync(file, 'utf8'), received[0].body);
+    }
+  };
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 0);
+  // Temporary unavailability and unrelated card edits leave confirmed bytes intact.
+  fs.renameSync(result, `${result}.saved`);
+  assert.deepEqual(scan(2), []);
+  fs.renameSync(`${result}.saved`, result);
+  card.title = 'revised title'; save();
+  assert.deepEqual(scan(3), []);
+  fs.writeFileSync(result, 'third');
+  assert.equal(scan(4).length, 1);
+  assert.equal(pump().delivered, 1);
+  fs.utimesSync(marker, new Date(NOW + 5 * 60_000), new Date(NOW + 5 * 60_000));
+  assert.equal(scan(5).length, 1);
+  assert.equal(pump().delivered, 1);
+  assert.deepEqual(scan(24 * 60 + 2), []);
+  assert.equal(pump().delivered, 0);
+  assert.equal(new Set(received.map(r => r.file)).size, 4);
+  for (const [i, bytes] of ['first', 'second', 'third', 'third'].entries()) {
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    assert.ok(received[i].body.includes(`결과 SHA-256: ${sha}`));
+    assert.equal(fs.readFileSync(received[i].file, 'utf8'), received[i].body);
+  }
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].sort(), received.map(r => path.basename(r.file)).sort());
+});
+
+test('upgrade adopts old pending, delivered and archived card notices without rewriting their receipts', async t => {
+  const f = setup(t);
+  const cards = ['pending', 'consumed', 'archived'].map(id => ledgerRow(id, { status: 'escalated_human', result: 'prior-result.md' }));
+  const { inbox, scan, pending, save } = ledgerWatcher(f, cards);
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  const sent = {};
+  const oldNotice = async (card, at) => {
+    const stamp = new Date(at).toISOString().replace(/\D/g, '');
+    sent[JSON.stringify(['role-a', card.id, escalationReason])] = at;
+    await writeLedgerWake(inbox, { stamp, role: 'role-a', id: card.id, title: card.title, reason: escalationReason,
+      details: `출처: ${card.from.channel}/${card.from.msg_id}\n기한: ${card.due}\n결과: (없음)\n메모: (없음)` });
+    return path.join(inbox, `${stamp}-ledger-${card.id}-route-role-a.md`);
+  };
+  const consumed = await oldNotice(cards[1], NOW), archived = await oldNotice(cards[2], NOW);
+  assert.equal(pump().delivered, 2);
+  fs.unlinkSync(archived);
+  // Every already queued historical copy is retained for its existing consumer key.
+  const original = await oldNotice(cards[0], NOW), repeated = await oldNotice(cards[0], NOW + 1);
+  const receipts = path.join(registry.stateDir, 'delivered-role-a.jsonl');
+  const before = fs.readFileSync(receipts);
+  fs.writeFileSync(path.join(path.dirname(ledgerPath(f.root, 'role-a')), 'watch-state.json'), JSON.stringify({ version: 1, sent }));
+  assert.deepEqual(scan(62), []);
+  assert.deepEqual(pending(), [consumed, original, repeated].map(file => path.basename(file)).sort());
+  assert.deepEqual(fs.readFileSync(receipts), before);
+  assert.equal(pump().delivered, 2);
+  assert.deepEqual(scan(2 * 24 * 60), []);
+  cards[1].result = 'new-result.md'; save();
+  assert.equal(scan(2 * 24 * 60 + 1).length, 1);
+  assert.equal(pump().delivered, 1);
+});
+
+test('a cold box honors old handoffs and shares no receipt keys between compact events for a long role', t => {
+  const f = setup(t);
+  const role = 'r'.repeat(205);
+  f.doc.roles = { [role]: f.doc.roles['role-a'] };
+  const cards = ['first', 'second'].map(id => ledgerRow(id, { status: 'escalated_human' }));
+  const { inbox, pending, scan, save } = ledgerWatcher(f, cards, role);
+  assert.equal(scan().length, 2);
+  const names = pending();
+  assert.equal(names.length, 2);
+  assert.ok(names.every(name => name.startsWith('~') && Buffer.byteLength(name) <= 255));
+  f.doc.delivery.baseline_seen_file = path.join(f.dir, 'delivered-by-previous-instance');
+  fs.writeFileSync(f.doc.delivery.baseline_seen_file, path.join(inbox, names[0]) + '\n');
+  f.write();
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps).roles[role];
+  assert.equal(pump().delivered, 1);
+  assert.ok(f.state.runs[0][2].endsWith(names[1]));
+  cards[0].note = 'next attempt'; save();
+  assert.equal(scan(1).length, 1);
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 0);
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].sort(), pending());
+});
+
+test('publication retries across watch-state commit and inbox rename never reissue a consumed event', async t => {
+  const f = setup(t);
+  const wakeDir = path.join(f.root, 'wake');
+  const wakes = [];
+  const empty = () => ({ card_events: {}, sent: {} });
+  const publisher = state => cardWakePublisher({ root: f.root, wakeDir, state, wakes, oldWakeFiles: [] });
+  const observation = id => ({ role: 'role-a', item: ledgerRow(id), reason: escalationReason, details: 'first attempt', revision: 'first' });
+  // A terminated watcher prepared a body without committing the corresponding head.
+  await publisher(empty()).observe(observation('abandoned'));
+  const committed = empty(), next = publisher(committed);
+  await next.flush();
+  assert.deepEqual(wakes, []);
+  await next.observe(observation('confirmed'));
+  // The next termination followed the state commit and preceded the inbox rename.
+  const recovered = publisher(structuredClone(committed));
+  await recovered.flush();
+  assert.deepEqual(wakes.map(wake => wake.id), ['confirmed']);
+  await recovered.flush(true);
+  const [name] = fs.readdirSync(wakeDir).filter(name => name.endsWith('.md'));
+  fs.unlinkSync(path.join(wakeDir, name));
+  await recovered.observe(observation('confirmed'));
+  await recovered.flush(true);
+  assert.deepEqual(wakes.map(wake => wake.id), ['confirmed']);
+  assert.deepEqual(fs.readdirSync(path.join(wakeDir, '.ledger-card-outbox')), []);
+});
 
 test('work-header delivery uses producer metadata, falls back to recent work, and leaves the original intact', t => {
   const f = setup(t);

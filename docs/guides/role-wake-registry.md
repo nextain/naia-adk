@@ -72,10 +72,11 @@ The registry therefore requires a consumer that runs outside the session:
   after 60 seconds, doubling up to `retry_max_seconds`; new files go before
   retries and retries with fewer failures go first. Three failures in a row
   end that role's turn for the run (its session is probably down).
-- A box seen for the first time is recorded, not replayed: the role's own box
-  on the first run, an extra box whenever it is added. With
-  `baseline_seen_file`, only the files that record lists count as delivered
-  and the rest are delivered.
+- On first inspection of a role's own box or a newly added extra box, the
+  deliverer records the files already present. It delivers any new-format
+  work-ledger escalation or worker-result notice, because the watcher issues
+  each change only once. With `baseline_seen_file`, a listed path counts as
+  delivered, including a card notice, and the remaining paths are delivered.
 - A file in a box read through `via` is copied to `state_dir/spool/<role>/`,
   the copy is delivered, and the copy is removed. Extra boxes are never swept.
 - The work-ledger watcher writes addressed files to the top-level wake box.
@@ -184,7 +185,7 @@ the workspace owner.
    delivered and delivers the rest, so nothing the old deliverer left behind is
    swallowed and nothing it delivered is replayed. Without such a record, run
    `deliver` once while the old deliverer still runs (the first run records
-   the existing box contents without replay) and then stop it; a file that
+   existing files and delivers one-shot card notices) and then stop it; a file that
    arrives in between is delivered twice rather than lost. Never leave both
    running. Remove `baseline_seen_file` once every role has a ledger.
 5. Install `watch --repair` on a separate scheduler.
