@@ -1,0 +1,6 @@
+{
+  "work": "composer-screen",
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/composer-screen.md"]},
+  "user_manual": {"status": "UPDATED", "files": ["docs/guides/composer-screen.md"], "detail": "Describes the read-only tool-aware screen classifier, strict Muse hint styling, unknown version drift and the distinction from native input acknowledgement."},
+  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/composer-screen.md"], "detail": "A clipped empty-composer hint needs its known provider catalog and renderer style; arbitrary slash commands and real drafts must stay pending."}
+}
