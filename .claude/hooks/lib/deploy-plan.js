@@ -229,6 +229,28 @@ function siteAllowlist(root, verifyCommit = false) {
 	}
 	return { digest: sha256(bytes), items: policy.items };
 }
+// Observe the site's policy bytes so edits invalidate open reviews. Strict review
+// never interprets these bytes as a reviewer setting or a command exception.
+function strictPolicyFileDigest(root, name) {
+	const file = path.join(root, name);
+	let current = root;
+	for (const part of name.split("/")) {
+		current = path.join(current, part);
+		let stat;
+		try { stat = fs.lstatSync(current); }
+		catch (error) { if (error.code === "ENOENT") return null; throw error; }
+		if (current === file ? !stat.isFile() : !stat.isDirectory()) throw new Error("Strict gate policy files must stay in their registered site root");
+	}
+	return readTargetFile(root, name).digest;
+}
+function strictReviewPolicy(root) {
+	const inputs = gateConfigPin.GATE_CONFIG_FILES.map(name => [name, strictPolicyFileDigest(root, name)]);
+	return {
+		root, strictDefaults: true, config: null,
+		hash: sha256(JSON.stringify(["gate-review/strict-defaults/v1", inputs])),
+		allowlist: { digest: strictPolicyFileDigest(root, "config/deploy-gate.json"), items: [] },
+	};
+}
 async function withGateConfig(options, fn) {
 	const root = path.resolve(options.root || ROOT);
 	const trusted = await approvedConfigAt(options, root);
@@ -237,12 +259,17 @@ async function withGateConfig(options, fn) {
 	if (!Array.isArray(options.reviewProfiles) || !options.reviewProfiles.length) throw new Error("reviewProfiles must register at least one gate");
 	const profiles = [], ids = new Set(), roots = new Set();
 	for (const entry of options.reviewProfiles) {
-		const site = registeredPolicyRoot(entry?.root);
+		const site = registeredRoot(entry?.root);
 		if (typeof entry?.id !== "string" || !PROFILE_ID.test(entry.id) || ids.has(entry.id) || roots.has(site)) throw new Error("Each gate requires a distinct profile ID and site root");
 		ids.add(entry.id); roots.add(site);
-		const policy = await approvedConfigAt(entry, site);
-		if (!policy) throw new Error(`Gate ${entry.id} has no current approved policy`);
-		profiles.push({ ...policy, id: entry.id, approverId: entry.approverId, allowlist: siteAllowlist(site, true) });
+		if (entry.policy === "strict-defaults") {
+			profiles.push({ ...strictReviewPolicy(site), id: entry.id });
+		} else {
+			if (entry.policy !== undefined && entry.policy !== "approved-config") throw new Error(`Gate ${entry.id} has an unknown review policy`);
+			const policy = await approvedConfigAt(entry, registeredPolicyRoot(site));
+			if (!policy) throw new Error(`Gate ${entry.id} has no current approved policy`);
+			profiles.push({ ...policy, id: entry.id, approverId: entry.approverId, allowlist: siteAllowlist(site, true) });
+		}
 	}
 	profiles.sort((a, b) => a.id < b.id ? -1 : 1);
 	return gateConfigContext.run({ root, owner: trusted, profiles }, fn);
@@ -252,7 +279,10 @@ function registeredReviewProfiles(root, verifyCommits = false) {
 	if (!ctx?.profiles) return [];
 	if (ctx.root !== path.resolve(root)) throw new Error("Plan root differs from the registered review scope");
 	for (const p of ctx.profiles) {
-		if (gateConfigPin.snapshotGateConfig(registeredPolicyRoot(p.root))?.hash !== p.hash || siteAllowlist(p.root, verifyCommits).digest !== p.allowlist.digest) throw new Error(`Gate ${p.id} policy changed; reload its registered approval`);
+		const current = p.strictDefaults ? strictReviewPolicy(registeredRoot(p.root)) : {
+			hash: gateConfigPin.snapshotGateConfig(registeredPolicyRoot(p.root))?.hash, allowlist: siteAllowlist(p.root, verifyCommits),
+		};
+		if (current.hash !== p.hash || current.allowlist.digest !== p.allowlist.digest) throw new Error(`Gate ${p.id} policy changed; reload its registered policy`);
 	}
 	return ctx.profiles;
 }
@@ -271,7 +301,7 @@ function reviewProfileBinding(planFile, root) {
 	const p = ctx.selected;
 	const plan = resultFile(ctx.root, path.relative(ctx.root, path.resolve(planFile)));
 	if (plan !== path.resolve(planFile)) throw new Error("Review requires a canonical plan within its registered root");
-	return { id: p.id, scope_sha256: sha256(JSON.stringify(["gate-review/v1", p.id, p.root, p.hash, p.allowlist.digest, p.approverId, ctx.root, plan])) };
+	return { id: p.id, ...(p.strictDefaults ? { policy: "strict-defaults" } : {}), scope_sha256: sha256(JSON.stringify(["gate-review/v1", p.id, p.root, p.hash, p.allowlist.digest, p.approverId, ctx.root, plan])) };
 }
 function reviewRecordDirectory(gatesDir, create = false) {
 	const p = gateConfigContext.getStore()?.selected;
@@ -1075,6 +1105,7 @@ function reviewPrompt(plan, sha, root, opts = null) {
 		...((plan.incident && plan.incident.actions) || []).flatMap((a) => (a.commands || []).map((c) => `- 장애 ${a.id}: ${commandHash(c)}`)),
 		"",
 		...(profile ? [`Review gate: ${profile.id}. Registered policy and plan scope: ${profile.scope_sha256}`] : []),
+		...(profile?.policy === "strict-defaults" ? ["Review policy: strict-defaults. Use the built-in reviewers. This gate grants no read-only command exceptions."] : []),
 		...pinnedFilesText(plan, root),
 		...roLines,
 	].join("\n");
@@ -1321,7 +1352,7 @@ function singleReviewProblems(gatesDir, sha, base) {
 		}
 		return { ok: problems.length === 0, problems, reviewers, input_manifest_sha256: manifest, ...(profile && !problems.length ? { read_only_scripts: reviewedReads } : {}), summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
-	if (rec && (profile ? rec.review_profile?.id !== profile.id || rec.review_profile.scope_sha256 !== profile.scope_sha256 || rec.plan !== path.relative(base, file) : rec.review_profile !== undefined)) problems.push("Review record differs from the registered gate policy or plan scope");
+	if (rec && (profile ? rec.review_profile?.id !== profile.id || rec.review_profile.scope_sha256 !== profile.scope_sha256 || rec.review_profile.policy !== profile.policy || rec.plan !== path.relative(base, file) : rec.review_profile !== undefined)) problems.push("Review record differs from the registered gate policy or plan scope");
 	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
 	if (plan) problems.push(...riskAcceptanceProblems(plan));
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
@@ -1981,7 +2012,8 @@ async function evaluate(ctx) {
 			"긴급 되돌리기는 kind rollback, 설정만 바꾸는 명령(환경 변수·복제 수·재시작·리비전 끄기)과 VM·컨테이너 안 조회·진단은 kind ops(reason 한 줄)로 적습니다. 배포 스크립트처럼 코드를 올리는 명령은 ops 가 될 수 없습니다. 승인자에게 붙여 넣을 명령을 넘기지 마십시오.",
 		].join("\n") };
 		facts = (r && r.facts) || [];
-		readOnlyNoCode = !!(r && r.readOnlyNoCode === true) && ![...targets.keys()].some(file => pinned.has(file));
+		readOnlyNoCode = !!(r && r.readOnlyNoCode === true) && ![...targets.keys()].some(file => pinned.has(file))
+			&& !gateConfigContext.getStore()?.profiles?.some(profile => profile.strictDefaults);
 	}
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];

@@ -4120,7 +4120,7 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	assert.ok(deployPlan.formProblems(newDatedV1).some((m) => m.includes("architecture_fit")));
 });
 
-test("registered gates independently review one plan through review, check, report and preapprove", (t) => {
+function registeredReviewFixture(t, author = "argon") {
 	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
 	gitRun(root, ["init", "-q"]);
 	gitRun(root, ["config", "user.name", "Fixture"]);
@@ -4134,7 +4134,7 @@ test("registered gates independently review one plan through review, check, repo
 	fs.writeFileSync(path.join(root, everySite.path), "printf version\n");
 	writeGateConfig(root, { readOnlyScripts: [primaryOnly, everySite] });
 	const { planFile, gatesDir } = createValidPlan(root, {
-		author_model: "argon", services: ["fixture:local"],
+		author_model: author, services: ["fixture:local"],
 		scenario: [
 			{ id: "s1", title: "Print readiness", commands: ["printf ready"], files: { [scriptPath]: primaryOnly.sha256, [everySite.path]: everySite.sha256 }, success_check: "Read the local fixture output", on_failure: "Use the local rollback check" },
 			{ id: "r1", branch: "rollback", title: "Print previous status", commands: ["printf previous"], success_check: "Read previous local status", on_failure: "Keep the local fixture stopped" },
@@ -4177,6 +4177,7 @@ const root = ${JSON.stringify(root)}, site = ${JSON.stringify(tmp)};
 const ids = ${JSON.stringify(ids)};
 const profiles = ids.map(id => {
 	const directory = path.join(site, id === "secondary" && process.env.FIXTURE_REPLACEMENT ? "replacement" : id);
+	if (process.env.FIXTURE_STRICT === "both" || process.env.FIXTURE_STRICT === id) return { id, root: directory, policy: "strict-defaults" };
 	const code = pin.approvalCode(pin.snapshotGateConfig(directory).hash);
 	const approverId = "1".repeat(18), channelId = "2".repeat(18), messageId = "3".repeat(18);
 	return { id, root: directory, approverId, token: "local-only", refs: [{ code, channelId, messageId }],
@@ -4190,6 +4191,7 @@ if (process.argv[2] === "fixture-read-only") {
 	const decision = await engine.withGateConfig(options, () => engine.evaluate({
 		root, cwd: root, env: process.env, services: ["fixture:local"], command: "printf ready",
 		sessionId: "local-fixture", transcriptPath: ${JSON.stringify(transcriptPath)},
+		...(process.env.FIXTURE_READ_ONLY ? { readiness: () => ({ ok: true, readOnlyNoCode: true }) } : {}),
 	}));
 	console.log(JSON.stringify({ allow: decision.allow, event: decision.audit.event }));
 } else await runApprovedApprovalPlan(options, process.argv.slice(2));
@@ -4198,7 +4200,11 @@ if (process.argv[2] === "fixture-read-only") {
 		cwd: root, timeout: 30000, encoding: "utf8",
 		env: { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, APPROVAL_PLAN_MUSE_BIN: reviewer, ...env },
 	});
-	const review = ["review", planFile, "--author", "argon"];
+	return { tmp, root, gatesDir, planFile, ids, run, scriptPath, everySite, transcriptPath, review: ["review", planFile, "--author", author] };
+}
+
+test("registered gates independently review one plan through review, check, report and preapprove", (t) => {
+	const { root, gatesDir, planFile, ids, run, scriptPath, everySite, transcriptPath, review } = registeredReviewFixture(t);
 	const unverified = run(review, { FIXTURE_UNVERIFIED: "secondary" });
 	assert.notEqual(unverified.status, 0);
 	assert.equal(fs.existsSync(path.join(gatesDir, "reviews")), false);
@@ -4246,4 +4252,55 @@ if (process.argv[2] === "fixture-read-only") {
 		message: { role: "user", content: [{ type: "text", text: codes.join(" ") }] } }) + "\n");
 	assert.equal(admit({ FIXTURE_REPLACEMENT: "1" }).allow, false);
 	assert.equal(admit({}).allow, true);
+});
+
+test("explicit strict review registrations use code-fixed independent reviews and grant no read-only exceptions", t => {
+	const { tmp, planFile, gatesDir, ids, run, review } = registeredReviewFixture(t, "codex");
+	const seconds = path.join(tmp, "secondary", ".claude", "deploy", "config.json");
+	fs.renameSync(seconds, seconds + ".unused");
+	const mixed = { FIXTURE_STRICT: "secondary" }, both = { FIXTURE_STRICT: "both" };
+	const receipt = id => JSON.parse(fs.readFileSync(path.join(gatesDir, "reviews", id, deployPlan.REVIEW_FILE)));
+	const succeeds = (args, env) => {
+		const result = run(args, env);
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		return result.stdout;
+	};
+	const prompts = succeeds(["review-prompt", planFile], mixed);
+	assert.equal(prompts.match(/Review gate:/g).length, 2);
+	assert.equal(prompts.match(/Review policy: strict-defaults/g).length, 1);
+	succeeds(review, mixed);
+	assert.equal(receipt("primary").reviewers[0].model, "fixture-primary");
+	assert.equal(receipt("secondary").reviewers[0].model, deployPlan.REVIEW_MODELS.muse.model);
+	assert.deepEqual(receipt("secondary").read_only_scripts, []);
+	succeeds(["check", planFile], mixed);
+	assert.deepEqual(JSON.parse(succeeds(["fixture-read-only"], mixed)), []);
+	assert.equal(run(["check", planFile], both).status, 1, "changing the trusted registration requires fresh reviews");
+	succeeds(review, both);
+	const records = ids.map(receipt);
+	assert.deepEqual(records.map(row => row.review_profile.policy), ["strict-defaults", "strict-defaults"]);
+	assert.ok(records.every(row => row.reviewers[0].model === deployPlan.REVIEW_MODELS.muse.model && !row.read_only_scripts.length));
+	assert.notEqual(records[0].prompt_sha256, records[1].prompt_sha256);
+	assert.notEqual(records[0].reviewers[0].receipt.input_manifest_sha256, records[1].reviewers[0].receipt.input_manifest_sha256);
+	succeeds(["check", planFile], both);
+	assert.deepEqual(JSON.parse(succeeds(["fixture-admission"], { ...both, FIXTURE_READ_ONLY: "1" })), { allow: false, event: "plan-approval-requested" });
+	fs.writeFileSync(seconds, "{}\n");
+	for (const args of [["check", planFile], ["report", planFile], ["preapprove", planFile, "--session", "fixture"]]) {
+		assert.equal(run(args, both).status, 1, "an observed site policy change invalidates persisted evidence");
+	}
+});
+
+test("a registered policy must be explicit and stable throughout a strict review", async t => {
+	const { tmp, root } = makeWorkspace(t);
+	const site = path.join(tmp, "site");
+	fs.mkdirSync(site);
+	const registered = (policy, fn) => deployPlan.withGateConfig({ root, reviewProfiles: [{ id: "secondary", root: site, policy }] }, fn);
+	for (const policy of [undefined, "approved-config", "unknown"]) {
+		await assert.rejects(registered(policy, () => "unexpected success"));
+	}
+	await registered("strict-defaults", () => {
+		assert.deepEqual(deployPlan.registeredReviewProfileIds(root), ["secondary"]);
+		fs.mkdirSync(path.join(site, "config"));
+		fs.writeFileSync(path.join(site, "config", "deploy-gate.json"), "{}\n");
+		assert.throws(() => deployPlan.registeredReviewProfileIds(root), /policy changed/);
+	});
 });
