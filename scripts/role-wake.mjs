@@ -283,7 +283,7 @@ function lockIsStale(text, ageMs) {
   return start !== owner.start;
 }
 
-function acquireLock(registry) {
+export function acquireLock(registry) {
   fs.mkdirSync(registry.stateDir, { recursive: true, mode: 0o700 });
   const lock = path.join(registry.stateDir, 'deliver.lock');
   const mine = JSON.stringify({ pid: process.pid, start: processStart(process.pid), at: new Date().toISOString() });
