@@ -1,0 +1,18 @@
+{
+  "work": "role-session-owner-rpc",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/work/role-session-owner-rpc.md", "docs/guides/role-owner-rpc.md"],
+    "reason": "Binds the account transport to the existing Gateway grant, canonical attempt, registered identities and same-turn native ACK."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-owner-rpc.md", "docs/guides/role-session-registration.md", "docs/guides/role-session-input.md"],
+    "reason": "Documents fixed helper/probe argv, explicit UID boundaries, uncertainty and coordinated normal-start/rollback conditions."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-owner-rpc.md"],
+    "reason": "Separates frontend selection from native server ownership and keeps unknown helper outcomes from becoming unsafe replay permission."
+  }
+}

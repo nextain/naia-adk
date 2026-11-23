@@ -38,12 +38,21 @@ function program(process) {
   return { first, name: ['node', 'nodejs'].includes(first) ? path.basename(tokens[1] ?? '').replace(/\.m?js$/, '') : first };
 }
 
-export function resolveAgentProcess(foreground, processes) {
+export function resolveAgentProcess(foreground, processes, registeredPid = null) {
   const queue = [...foreground], seen = new Set();
   while (queue.length) {
     const item = queue.shift(), executable = program(item);
     const tool = [...tools].find(tool => executable.name === tool || executable.name.startsWith(tool + '-bin'));
-    if (tool) return { ...item, tool };
+    if (tool) {
+      if (!registeredPid || item.pid === registeredPid) return { ...item, tool };
+      // A registration selects one exact frontend within the foreground group
+      // or its known launch ancestry, independent of unrelated sibling order.
+      // Other providers never authorize traversal into their worker children.
+      if (tool === 'codex' && ['node', 'nodejs'].includes(executable.first)) {
+        if (!seen.has(item.pid)) { seen.add(item.pid); queue.push(...processes.filter(child => child.ppid === item.pid)); }
+      }
+      continue;
+    }
     if (!wrappers.has(executable.first) || !Number.isInteger(item.pid) || seen.has(item.pid)) continue;
     seen.add(item.pid);
     queue.push(...processes.filter(child => child.ppid === item.pid));
@@ -52,6 +61,7 @@ export function resolveAgentProcess(foreground, processes) {
 }
 
 export function validateBinding(session, agent, native) {
+  if (session?.registration_error) return /^[a-z_]{1,64}$/.test(session.registration_error) ? session.registration_error : 'registration_unavailable';
   if (native?.error) return native.error === 'session_unbound' ? 'session_unbound' : 'native_unreadable';
   if (session?.kind !== 'codex-jsonl' || agent?.tool !== 'codex') return 'unsupported';
   if (!session.thread_id || !session.native_path || !session.cwd || !session.process_start || !Number.isInteger(session.pid)) return 'session_unbound';
@@ -147,7 +157,7 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
       return finish(75, 'transport_payload_changed');
     }
     const inspected = await deps.inspect(profile);
-    const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
+    const agent = resolveAgentProcess(inspected.foreground, inspected.processes, profile.registration ? profile.session?.pid : null);
     if (!agent) return finish(75, 'unknown_agent');
     const readNative = async query => {
       try { return await deps.native(profile.session, hash, agent, query); }
@@ -254,7 +264,7 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
       : { ...projection, reason: 'legacy_nonterminal_attempt', code: 75 };
     if (!['submitting', 'submitted_unconfirmed', 'accepted'].includes(before.status)) return { ...projection, reason: 'attempt_phase_unknown', code: 75 };
     const inspected = await deps.inspect(profile);
-    const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
+    const agent = resolveAgentProcess(inspected.foreground, inspected.processes, profile.registration ? profile.session?.pid : null);
     if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
     const turn = before.active_turn_id ? { expected_turn_id: before.active_turn_id } : {};
     const cursor = legacy ? { offset: before.native_after_offset } : before.native_cursor;

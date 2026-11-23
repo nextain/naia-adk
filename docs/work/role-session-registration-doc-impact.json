@@ -1,0 +1,18 @@
+{
+  "work": "role-session-registration",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-registration.md", "docs/work/role-session-registration.md"],
+    "reason": "Specifies explicit launch registration, separate frontend/server identity, generation publication and private owner-account resolution."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-registration.md", "docs/guides/role-session-input.md"],
+    "reason": "Documents optional policy and launcher boundaries without changing model selection or existing fixed/provider paths."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/work/role-session-registration.md"],
+    "reason": "Separates a daemon owner from its frontend and preserves native submission uncertainty across normal startup."
+  }
+}
