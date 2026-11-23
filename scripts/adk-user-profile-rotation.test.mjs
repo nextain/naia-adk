@@ -36,7 +36,7 @@ function fixture(t) {
   const existing = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: Array.from({ length: 7 }, (_, i) => ({ type: "command", command: `printf existing-pre-${i}` })) }], PostToolUse: [{ hooks: Array.from({ length: 18 }, (_, i) => ({ type: "command", command: `printf existing-post-${i}` })) }] } }
   write(project, existing); fs.chmodSync(project, 0o640)
   const oldArgs = { mode: "apply", target: "codex", home, instanceRoot: instance, adkRoot: ROOT, registeredDeployHooks: oldDescriptor, registeredDeployHooksSha256: oldDescriptorSha }
-  run(oldArgs)
+  run(oldArgs, new Date("2025-01-01T00:00:00Z"))
   const originalSettings = [user, project].map(f => fs.readFileSync(f))
   data.instance.files[0].sha256 = hash("changed service policy")
   write(registration, data)
@@ -71,7 +71,7 @@ test("inverse rotation restores the exact original pair using the same validated
   const backup = path.join(f.dir, "registration.next.before.json")
   fs.copyFileSync(f.registration, backup)
   fs.copyFileSync(f.oldRecord, f.registration)
-  run({ ...f.oldArgs, previousRegisteredDeployHooks: f.descriptor, previousRegisteredDeployHooksSha256: f.descriptorSha, previousRegistrationFile: backup })
+  run({ ...f.oldArgs, previousRegisteredDeployHooks: f.descriptor, previousRegisteredDeployHooksSha256: f.descriptorSha, previousRegistrationFile: backup }, new Date("2025-01-01T00:00:02Z"))
   unchanged(f)
 })
 
@@ -91,6 +91,8 @@ for (const [name, mutate] of [
   ["old registration profile differs", f => { const d = read(f.oldRecord); d.profiles[0].root = f.home; write(f.oldRecord, d); const e = read(f.oldDescriptor); e.registration.sha256 = hash(fs.readFileSync(f.oldRecord)); f.args.previousRegisteredDeployHooksSha256 = write(f.oldDescriptor, e) }],
   ["old envelope engine differs", f => { const e = read(f.oldDescriptor); e.engine.commit = "0".repeat(40); f.args.previousRegisteredDeployHooksSha256 = write(f.oldDescriptor, e) }],
   ["old envelope path differs", f => { const e = read(f.oldDescriptor); e.registration.file = f.oldRecord; f.args.previousRegisteredDeployHooksSha256 = write(f.oldDescriptor, e) }],
+  ["old envelope has an unknown field", f => { const e = read(f.oldDescriptor); e.command = "unrequested"; f.args.previousRegisteredDeployHooksSha256 = write(f.oldDescriptor, e) }],
+  ["previous slot is missing", f => { const s = read(f.user); s.hooks.PreToolUse = []; write(f.user, s); f.originalSettings[0] = fs.readFileSync(f.user) }],
   ["unexpected previous command", f => { const s = read(f.user); hooks(s)[0].command += " extra"; write(f.user, s); f.originalSettings[0] = fs.readFileSync(f.user) }],
   ["duplicate previous slot", f => { const s = read(f.user); s.hooks.PreToolUse[0].hooks.push({ ...hooks(s)[0] }); write(f.user, s); f.originalSettings[0] = fs.readFileSync(f.user) }],
 ]) test(`rotation rejects ${name} before either settings write`, t => {
@@ -123,6 +125,18 @@ test("rotation revalidates the previous backup after reading the current pair", 
   })
   assert.throws(() => run(f.args), /registered deploy descriptor/)
   assert.equal(changed, true)
+  unchanged(f)
+})
+
+test("ordinary rotation rejects a foreign previous-backup owner", { skip: process.getuid() === 0 }, t => {
+  const f = fixture(t), open = fs.openSync, stat = fs.fstatSync, close = fs.closeSync, targets = new Map()
+  t.mock.method(fs, "openSync", (file, ...args) => { const fd = open(file, ...args); targets.set(fd, file === f.oldRecord); return fd })
+  t.mock.method(fs, "closeSync", fd => { targets.delete(fd); return close(fd) })
+  t.mock.method(fs, "fstatSync", (fd, ...args) => {
+    const value = stat(fd, ...args)
+    return targets.get(fd) ? new Proxy(value, { get(target, key) { return key === "uid" ? target.uid + (typeof target.uid === "bigint" ? 1n : 1) : Reflect.get(target, key) } }) : value
+  })
+  assert.throws(() => run(f.args), /invalid input file or owner/)
   unchanged(f)
 })
 

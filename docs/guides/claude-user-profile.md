@@ -123,3 +123,33 @@ SessionStart 훅을 추가하거나 Claude 설정을 바꾸지 않습니다. 두
 실제 세션의 시작 cwd가 프로젝트여야 하며, tool의 workdir만 바꾼 시험으로 대체하지
 않습니다. 공식 hook/completed의 run.id에는 tool_use_id가 붙으므로 같은 도구 호출의
 두 관문 완료를 묶을 수 있습니다. 설치 완료와 실제 수신 완료를 따로 기록합니다.
+
+### Native Codex 등록 지문 교체
+
+같은 engine·프로젝트·두 profile을 유지하며 등록 파일 지문만 바꿀 때는
+`scripts/adk-user-profile.mjs`의 기존 `check`/`apply`에 다음 세 인자를 함께 줍니다.
+
+```bash
+--previous-registered-deploy-hooks /private/previous-descriptor.json \
+--previous-registered-deploy-hooks-sha256 <previous-descriptor-sha256> \
+--previous-registration-file /private/registered-gate.before.json
+```
+
+기본 `--registered-deploy-hooks`와 그 SHA는 새 descriptor를 가리켜야 하며,
+고정 위치의 실제 등록 파일도 새 descriptor와 일치해야 합니다. 이전 등록 백업은
+이전 descriptor에 적힌 SHA로 검증합니다. 세 입력은 canonical 일반 파일과 소유권·
+크기·지문 검사를 거치며 실행 경로로 사용하지 않습니다. 두 descriptor의 home,
+instance, engine root/commit/entry 지문, 등록 목적지와 두 profile id/scope/root가
+같아야 합니다. 이전 입력을 생략하면 다른 등록 명령은 계속 거절합니다.
+
+설치기는 검증한 이전 두 명령 또는 이미 같은 새 명령만 받아 기존 paired writer로
+교체합니다. 다른 25개 등의 기존 정의·추가 설정은 유지하며, 누락·중복·다른 명령은
+쓰기에 앞서 거절합니다. 설치 source와 등록된 engine root는 달라도 됩니다.
+새 등록 파일과 두 hook의 교체가 끝날 때까지 실제 hook 호출자를 quiesce해야 합니다.
+그 사이의 서로 다른 등록 지문을 준비 완료로 보고하지 않습니다. Gateway나 다른
+수신기를 이 설치의 이유로 중지할 필요는 없습니다.
+
+설치 후 공식 native discovery에서 바뀐 두 정의만 확인·신뢰 등록하고 기존 신뢰
+상태는 보존합니다. 되돌릴 때도 이전·새 descriptor 역할을 바꾸고 교체 직전 등록의
+정확한 백업을 제공하여 같은 검증과 paired writer를 사용합니다. 실제 native 수신,
+권한 동의와 서비스 실행을 설치 성공으로 대신하지 않습니다.

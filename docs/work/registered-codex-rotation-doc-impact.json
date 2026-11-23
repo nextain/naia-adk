@@ -1,0 +1,13 @@
+{
+  "issue": "registered-codex-rotation",
+  "requirements": ["Bounded installer lifecycle fix; existing registered-gate/v2 and adk-registered-deploy-hooks/v1 contracts remain unchanged"],
+  "architecture_fit": {
+    "original_request": "Allow an existing exact registered native Codex pair to move to a new registration digest while preserving the other definitions and supporting a verified inverse rotation.",
+    "parent_structure": "The shared user-profile installer validates typed descriptors and uses its existing paired writer for user/project settings.",
+    "acceptance_rationale": "Validate a pinned previous descriptor and registration backup, then accept only their exact two previous commands or the exact desired commands. No removal mode, arbitrary command, new registration schema or runtime authority engine is added."
+  },
+  "repository_docs": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "user_manual": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md", "section": "Native Codex 등록 지문 교체" },
+  "validation_scope": "Exact forward/inverse rotation and idempotence; unchanged existing25 settings; previous input ownership/type/size/SHA and topology rejection; missing/duplicate/unexpected slots; prewrite revalidation and paired-writer failure restoration; existing installer regression slice. No live installation, trust, model turn or service action."
+}
