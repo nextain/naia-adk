@@ -93,6 +93,10 @@ opaque attempts are preserved rather than reset during upgrade.
 Validate one fixed source with registration, existing idle/active/legacy tests,
 two account policies and real helper/Unix/native-ACK fixtures before deployment.
 The fixtures use temporary shell and Node processes, never a production model.
+Linux `/proc`, UID and Unix-endpoint fixture suites skip other platforms; pure
+protocol tests remain platform-independent. Active inspection requests thread
+metadata without turns, followed by one latest turn with items not loaded. A
+multi-megabyte history fixture verifies that these responses stay bounded.
 Install the dependency closure from the same lockfile; verify `ws` resolution as
 both execution accounts. Source archives without dependencies are insufficient.
 

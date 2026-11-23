@@ -1,4 +1,5 @@
-import test from 'node:test';
+import nodeTest from 'node:test';
+const test=(name,fn)=>nodeTest(name,{skip:process.platform!=='linux'},fn);
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { roleSessionFlowFixture as fixture } from './test/role-session-flow-fixture.mjs';
