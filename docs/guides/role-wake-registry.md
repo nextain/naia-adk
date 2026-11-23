@@ -26,6 +26,7 @@ only; the script is the same on every server.
 | `delivery.workHeader` | Set to `true` to prepend the role's work ledger summary to a private delivery copy. Defaults to `false`. |
 | `delivery.busy_probe` | Optional command array with `{role}` and `{pane}` placeholders. At the start of a role's delivery attempts it may report `busy` or `idle` on stdout. The delivery summary records `true`, `false`, or `null` when the probe fails, times out after five seconds, or returns another value. Delivery proceeds in each case. |
 | `delivery.retry_max_seconds` | Longest gap between retries of a file that failed (default 300). |
+| `delivery.priority_user_ids` | Optional Discord user ids whose direct requests may precede older inputs. Defaults to `[]`. |
 | `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
 | `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
 | `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). Each entry `{ kind, path, roles? }` accepts an optional non-empty string array `roles` listing the role ids that view covers: when set, `role is missing` checks only those ids and any unknown id in `roles` is an error; when omitted, every registry role is required. Every row present in the file—even outside `roles`—is still checked against the registry for unknown roles and mismatched fields (`bot_id`, etc.). |
@@ -43,6 +44,16 @@ The registry therefore requires a consumer that runs outside the session:
 - `deliver` hands each new wake file to `delivery.command` in arrival order
   (file time, then name: box names mix clocks and free titles) and records it
   in `state_dir/delivered-<role>.jsonl`.
+- Configured priority users are recognized only from gateway files whose first
+  Discord metadata block agrees with the filename's message id and recipient
+  role. The metadata author must be configured, and the URL must identify a
+  registered role DM or the original body must explicitly mention that role's
+  bot. Quoted metadata, ledger notices and unrelated public messages retain
+  their ordinary order. A route copy inherits its gateway group's priority.
+  Priority groups run newest first. After three successful priority handovers,
+  the oldest eligible ordinary input gets a turn. The per-role streak survives
+  runner restarts; deferred or failed attempts do not consume this allowance.
+  Original files and previous receipts are preserved.
 - Gateway and route relays for the same Discord message are handed over once
   per role. Direct relay filenames or Discord wake metadata identify the message.
   The body is read before grouping so ledger notices retain their
@@ -72,10 +83,11 @@ The registry therefore requires a consumer that runs outside the session:
   after 60 seconds, doubling up to `retry_max_seconds`; new files go before
   retries and retries with fewer failures go first. Three failures in a row
   end that role's turn for the run (its session is probably down).
-- A box seen for the first time is recorded, not replayed: the role's own box
-  on the first run, an extra box whenever it is added. With
-  `baseline_seen_file`, only the files that record lists count as delivered
-  and the rest are delivered.
+- On first inspection of a role's own box or a newly added extra box, the
+  deliverer records the files already present. It delivers any new-format
+  work-ledger escalation or worker-result notice, because the watcher issues
+  each change only once. With `baseline_seen_file`, a listed path counts as
+  delivered, including a card notice, and the remaining paths are delivered.
 - A file in a box read through `via` is copied to `state_dir/spool/<role>/`,
   the copy is delivered, and the copy is removed. Extra boxes are never swept.
 - The work-ledger watcher writes addressed files to the top-level wake box.
@@ -184,7 +196,7 @@ the workspace owner.
    delivered and delivers the rest, so nothing the old deliverer left behind is
    swallowed and nothing it delivered is replayed. Without such a record, run
    `deliver` once while the old deliverer still runs (the first run records
-   the existing box contents without replay) and then stop it; a file that
+   existing files and delivers one-shot card notices) and then stop it; a file that
    arrives in between is delivered twice rather than lost. Never leave both
    running. Remove `baseline_seen_file` once every role has a ledger.
 5. Install `watch --repair` on a separate scheduler.

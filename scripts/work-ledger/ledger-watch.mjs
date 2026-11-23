@@ -3,7 +3,8 @@ import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { readFile, mkdir, writeFile, stat, readdir, unlink, link } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { cardWakePublisher, escalationReason, ledgerWakeBody, ledgerWakeName, validCardEvent } from "./card-wake.mjs";
 import {
   readLedger,
   changeLedger,
@@ -36,16 +37,8 @@ const ISO_TIMESTAMP_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
 export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details, once = false }) {
-  const route = `-route-${role}.md`;
-  const filename = (nonce = "") => {
-    const normal = `${stamp}-ledger-${id}${nonce}${route}`;
-    if (Buffer.byteLength(normal) <= 255) return normal;
-    const available = 255 - Buffer.byteLength(route);
-    if (available < 5) throw new Error("Role too long for wake filename");
-    const digest = createHash("sha256").update(JSON.stringify([role, id, reason, stamp, nonce])).digest("hex");
-    return `${digest.slice(0, available)}${route}`;
-  };
-  const content = `[장부] ${reason}: ${String(title).replace(/[\r\n]/g, " ")}\n${details}\n`;
+  const filename = (nonce = "") => ledgerWakeName({ stamp, role, id, reason }, nonce);
+  const content = ledgerWakeBody({ reason, title, details });
   const write = file => writeFile(file, content, { flag: "wx", mode: 0o600 });
   const target = path.join(wakeDir, filename());
   if (once) {
@@ -215,6 +208,7 @@ function emptyWatchState() {
     wake_mention_only: {},
     wake_reset_at: {},
     wake_meta: {},
+    card_events: {},
     human_wait_sent: {},
     channel_failures: {},
   };
@@ -290,6 +284,7 @@ function sanitizeWatchState(raw, roleMaxHumanWakes, warnings) {
         Number.isFinite(v.effective_ms),
     ),
     wake_counts: cleanCounts,
+    card_events: pickMap(raw.card_events, validCardEvent),
   };
   if (topInvalid) {
     return { state, stateError: "감시 상태 파일 읽기 실패" };
@@ -443,6 +438,8 @@ export async function watch({
       else receipts.add(name);
     }
     const wakes = [];
+    const cardWakes = cardWakePublisher({ root, wakeDir, state, oldWakeFiles, wakes });
+    await cardWakes.flush();
     const readCache = new Map();
     const failedThisRound = new Set();
     const successfulThisRound = new Set();
@@ -577,6 +574,7 @@ export async function watch({
         );
         continue;
       }
+      cardWakes.observedRole(role);
       const driveErrors = driveFailure !== undefined
         ? (ledger.items.some((item) => driven(item) && !closedProperly(item)) ? [driveFailure] : [])
         : (drive?.errors ?? []).filter((text) => text.startsWith(`${role}: `));
@@ -653,27 +651,20 @@ export async function watch({
             });
           }
         } else if (item.status === "escalated_human") {
-          await wake(
-            role,
-            item.id,
-            "사람에게 올림",
-            item.title,
-            `${details}\n메모: ${item.note || "(없음)"}`,
-          );
+          const legacyDetails = `${details}\n메모: ${item.note || "(없음)"}`;
+          const escalation = item.result ? `${legacyDetails}\n카드 결과: ${item.result}` : legacyDetails;
+          await cardWakes.observe({ role, item, reason: escalationReason, legacyDetails, details: escalation,
+            revision: [item.title, escalation, item.drop_count ?? 0, item.defer_count ?? 0],
+            evidenceAt: Math.max(Date.parse(item.checked_at) || 0, Date.parse(item.updated_at) || 0) });
         }
         if (item.worker) {
           try {
-            const info = await stat(path.resolve(root, item.worker.done_file));
-            if (!item.checked_at || Date.parse(item.checked_at) < info.mtimeMs)
-              await wake(
-                role,
-                item.id,
-                "일꾼 끝, 결과 안 읽음",
-                item.title,
-                details,
-              );
+            const info = await stat(path.resolve(root, item.worker.done_file), { bigint: true });
+            if (!item.checked_at || BigInt(Date.parse(item.checked_at)) * 1000000n < info.mtimeNs)
+              await cardWakes.workerResult(role, item, details, info);
           } catch (error) {
             if (error.code !== "ENOENT") {
+              cardWakes.keepWorker(role, item.id);
               errors.push(`worker:${role}:${item.id}`);
               await wake(
                 role,
@@ -1393,7 +1384,9 @@ export async function watch({
     for (const channel of successfulThisRound) {
       if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
     }
+    cardWakes.endInactive();
     await atomicJson(stateFile, state);
+    await cardWakes.flush(true);
     return {
       wakes,
       errors,

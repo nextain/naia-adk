@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
+import { isCardEventWakeBody, isCardEventWakeName } from './work-ledger/card-wake.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
@@ -54,6 +55,7 @@ export function loadRegistry(file) {
     maxPerRun: positive(doc.delivery.max_per_run, DEFAULTS.maxPerRun, 'delivery.max_per_run'),
     lagSeconds: positive(doc.delivery.lag_seconds, DEFAULTS.lagSeconds, 'delivery.lag_seconds'),
     retryMaxSeconds: positive(doc.delivery.retry_max_seconds, DEFAULTS.retryMaxSeconds, 'delivery.retry_max_seconds'),
+    priorityUserIds: doc.delivery.priority_user_ids === undefined ? [] : Array.isArray(doc.delivery.priority_user_ids) && doc.delivery.priority_user_ids.every(id => typeof id === 'string' && SNOWFLAKE.test(id)) ? [...new Set(doc.delivery.priority_user_ids)] : fail('delivery.priority_user_ids must be an array of user ids'),
     baselineSeenFile: doc.delivery.baseline_seen_file === undefined ? null : typeof doc.delivery.baseline_seen_file === 'string' && path.isAbsolute(doc.delivery.baseline_seen_file) ? doc.delivery.baseline_seen_file : fail('delivery.baseline_seen_file must be an absolute path'),
   };
   if (delivery && !delivery.command.some(part => part.includes('{file}'))) fail('delivery.command needs a {file} placeholder');
@@ -411,6 +413,30 @@ function readWakeBody(entry, deps) {
   return entry.body;
 }
 
+function priorityMessage(registry, role, entry, deps) {
+  if (!registry.delivery.priorityUserIds.length) return null;
+  const filename = /^\d+-(\d{17,20})-gw\.md$/.exec(entry.name);
+  if (!filename) return null;
+  let body;
+  try { body = readWakeBody(entry, deps).replaceAll('\r\n', '\n'); } catch { return null; }
+  if (!body.startsWith('# Discord wake\n\n') || /^\[장부\]/m.test(body)) return null;
+  const end = body.indexOf('\n\n', '# Discord wake\n\n'.length);
+  if (end < 0) return null;
+  const fields = new Map();
+  for (const line of body.slice('# Discord wake\n\n'.length, end).split('\n')) {
+    const field = /^([^:]+): (.*)$/.exec(line);
+    if (!field || fields.has(field[1])) return null;
+    fields.set(field[1], field[2]);
+  }
+  const author = /\((\d{17,20})\)$/.exec(fields.get('Author') ?? '');
+  const url = /^https:\/\/discord\.com\/channels\/(@me|\d{17,20})\/(\d{17,20})\/(\d{17,20})$/.exec(fields.get('URL') ?? '');
+  if (!author || !registry.delivery.priorityUserIds.includes(author[1]) ||
+      fields.get('Role') !== role.id || fields.get('Message ID') !== filename[1] || !url || url[3] !== filename[1]) return null;
+  const directMessage = url[1] === '@me' && role.dmChannels.includes(url[2]);
+  const explicitMention = url[1] !== '@me' && role.botId && new RegExp(`<@!?${role.botId}>`).test(body.slice(end + 2));
+  return directMessage || explicitMention ? filename[1] : null;
+}
+
 export function mergeBodies(id, bodies) {
   const joined = bodies.join('\n\n---\n\n');
   const head = `[merged ${bodies.length} wakes — same message ${id}]\n`;
@@ -430,9 +456,9 @@ function deliverRole(registry, role, deps, now, at) {
   const error = errors.length ? { error: errors.join('; ') } : {};
   let seen = readLedger(registry, role);
   // Boxes looked at for the first time: the role's own box while it has no
-  // ledger, an extra box until the ledger carries its mark. Such a box is
-  // recorded, not replayed; with the old deliverer's record, only what that
-  // record lists is taken as delivered. A box that cannot be read stays new.
+  // ledger, an extra box until the ledger carries its mark. With the old
+  // deliverer's record, only its listed paths count as acknowledged.
+  // A box that cannot be read stays new.
   const firstLook = [];
   if (seen === null) {
     if (unreadable.includes(role.wakeDir)) return { delivered: 0, failed: 0, pending: 0, ...error };
@@ -442,7 +468,15 @@ function deliverRole(registry, role, deps, now, at) {
   let baseline = null;
   if (firstLook.length) {
     const old = registry.delivery.baselineSeenFile ? readSeenFile(registry.delivery.baselineSeenFile) : null;
-    const known = entries.filter(entry => firstLook.includes(entry.box) && (!old || old.has(entry.file)));
+    // Durable card events are issued only once. Without a previous handoff
+    // record they must be delivered even if the producer ran before first look.
+    const known = entries.filter(entry => {
+      if (!firstLook.includes(entry.box)) return false;
+      if (old) return old.has(entry.file);
+      if (!isCardEventWakeName(entry.name)) return true;
+      try { return !isCardEventWakeBody(readWakeBody(entry, deps)); }
+      catch { return false; } // Keep the possible one-shot pending until it can be read.
+    });
     fs.writeFileSync(ledgerFile(registry, role), '', { flag: 'a', mode: 0o600 });
     append(known.map(entry => entry.key), 'baseline');
     append(firstLook.filter(Boolean).map(boxMark), 'box');
@@ -486,6 +520,20 @@ function deliverRole(registry, role, deps, now, at) {
       group.members.push(entry);
     }
   }
+  const priorityFile = path.join(registry.stateDir, `priority-${role.id}.json`);
+  let priorityStreak = 0;
+  if (registry.delivery.priorityUserIds.length) {
+    try { priorityStreak = readJson(priorityFile).streak; } catch { /* first priority pass */ }
+    if (!Number.isSafeInteger(priorityStreak) || priorityStreak < 0) priorityStreak = 0;
+    for (const group of groups) {
+      group.priorityId = group.members.map(member => priorityMessage(registry, role, member, deps)).find(Boolean) ?? null;
+    }
+    groups.sort((left, right) => {
+      if (!left.priorityId) return right.priorityId ? 1 : 0;
+      if (!right.priorityId) return -1;
+      return BigInt(left.priorityId) > BigInt(right.priorityId) ? -1 : BigInt(left.priorityId) < BigInt(right.priorityId) ? 1 : 0;
+    });
+  }
   const noteFailure = key => {
     const count = (failures[key]?.count ?? 0) + 1;
     failures[key] = { count, first: failures[key]?.first ?? at, last: at, next: now + Math.min(registry.delivery.retryMaxSeconds, 60 * 2 ** Math.min(count - 1, 20)) * 1000 };
@@ -493,22 +541,27 @@ function deliverRole(registry, role, deps, now, at) {
   const handovers = [];
   for (const group of groups) {
     if (group.id === null || group.members.length < 2) {
-      for (const member of group.members) handovers.push({ members: [member], entry: member, messageId: group.id });
+      for (const member of group.members) handovers.push({ members: [member], entry: member, messageId: group.id, priorityId: group.priorityId });
       continue;
     }
     try {
       const bodies = group.members.map(member => readWakeBody(member, deps));
       const body = mergeBodies(group.id, bodies);
       const sourceBody = bodies.find(value => /^# Discord wake\r?\n/.test(value)) ?? bodies[0];
-      handovers.push({ members: group.members, body, sourceBody, messageId: group.id });
+      handovers.push({ members: group.members, body, sourceBody, messageId: group.id, priorityId: group.priorityId });
     } catch {
       // Every original remains deliverable if merging is too large or unreadable.
-      for (const member of group.members) handovers.push({ members: [member], entry: member });
+      for (const member of group.members) handovers.push({ members: [member], entry: member, priorityId: group.priorityId });
     }
   }
   let delivered = 0, filesDone = 0, deferred = 0, attempts = 0, streak = 0;
-  for (const handover of handovers) {
+  for (let index = 0; index < handovers.length; index += 1) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
+    if (registry.delivery.priorityUserIds.length && priorityStreak >= 3) {
+      const regular = handovers.findIndex((handover, position) => position >= index && !handover.priorityId);
+      if (regular > index) handovers.splice(index, 0, ...handovers.splice(regular, 1));
+    }
+    const handover = handovers[index];
     attempts += 1;
     let ok = true, held = false, mergedFile = null;
     try {
@@ -532,6 +585,10 @@ function deliverRole(registry, role, deps, now, at) {
       if (handover.messageId) append([messageMark(handover.messageId)], 'message');
       for (const member of handover.members) delete failures[member.key];
       delivered += 1; filesDone += handover.members.length; streak = 0;
+      if (registry.delivery.priorityUserIds.length) {
+        priorityStreak = handover.priorityId ? priorityStreak + 1 : 0;
+        atomic(priorityFile, JSON.stringify({ streak: priorityStreak }));
+      }
     } else if (held) {
       for (const member of handover.members) delete failures[member.key];
       deferred += handover.members.length;
@@ -547,9 +604,9 @@ function deliverRole(registry, role, deps, now, at) {
   return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...(deferred ? { deferred } : {}), ...error, ...busy };
 }
 
-// Hands each new wake file to the instance delivery command, in arrival order. A
-// box seen for the first time is recorded, not replayed. A failed file is kept
-// for retry and reported; it stops neither the files behind it nor other roles.
+// Hands each new wake file to the instance delivery command, in arrival order.
+// First inspection records historical paths and queues unacknowledged card events.
+// A failed file stays available for retry alongside other files and roles.
 export function deliver(registry, deps = defaultDeps(), { only = null } = {}) {
   if (!registry.delivery) fail('delivery is not configured');
   const release = acquireLock(registry);

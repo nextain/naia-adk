@@ -11,7 +11,7 @@
     "files": [
       "docs/guides/role-wake-registry.md"
     ],
-    "detail": "Documents message receipt migration, original-preserving size fallback, and delivery/queue limitations for instance operators."
+    "detail": "Documents message receipt migration, original-preserving size fallback, and delivery/queue limitations for instance operators. Configurable direct-user priority, validated gateway metadata and bounded priority bursts are documented."
   },
   "reusable_learning": {
     "status": "N/A",
@@ -22,19 +22,41 @@
     "baseline_command": "node --test scripts/role-wake.test.mjs",
     "baseline_passed": 35,
     "command": "node --test scripts/role-wake.test.mjs",
-    "passed": 53,
+    "passed": 63,
     "failed": 0,
     "red_evidence": "Six new integration regressions failed against the unchanged base before implementation.",
-    "integration_command": "node --test scripts/role-wake.test.mjs scripts/stalled-cards.test.mjs scripts/work-ledger/*.test.mjs",
+    "integration_command": "node --test scripts/role-wake.test.mjs scripts/work-ledger/*.test.mjs; node --test scripts/stalled-cards.test.mjs (private SESSION_HEALTH_TEST_TMP)",
     "integration_result": {
-      "passed": 277,
+      "passed": 287,
       "failed": 0,
+      "role_and_work_ledger": 277,
+      "stalled_cards": 10,
       "fixture": "Private SESSION_HEALTH_TEST_TMP"
     },
     "diff_check": "PASS",
     "guide_sync_check": "PASS",
     "oss_readiness": "PASS: all five hard gates report zero findings",
-    "deferred_delivery": "Exit 75 preserves pending originals, clears prior failures, avoids retry backoff and updates the healthy heartbeat. The new regression failed on the previous commit and passes here."
+    "deferred_delivery": "Exit 75 preserves pending originals, clears prior failures, avoids retry backoff and updates the healthy heartbeat. The new regression failed on the previous commit and passes here.",
+    "priority_regressions": {
+      "old_source_failed": 4,
+      "new_cases": 5,
+      "shared_role_suite_passed_before_producer_integration": 58,
+      "instance_role_suite_passed": 51,
+      "cases": [
+        "new direct owner group before historical inputs",
+        "newest owner request first with gateway-route coalescing",
+        "metadata and ledger spoof rejection",
+        "three successful priority groups then oldest ordinary input",
+        "deferred inputs preserve priority allowance and original files"
+      ],
+      "shared_role_suite_passed_after_producer_integration": 63
+    },
+    "producer_patch": {
+      "source_commit": "47a0f5e5",
+      "patch_sha256": "6063e74071234d5cf38b1c6a5a69115d3aa0c6dda49c644dae88a27f6c95e7a2",
+      "apply_check": "PASS",
+      "combined_role_and_ledger_tests": 277
+    }
   },
   "review": {
     "independent_review": "Root relayed independent instance findings for cross-run Discord duplicates and stalled ledger notices. Both have regression coverage. No live delivery acceptance is claimed.",
@@ -43,6 +65,6 @@
   "architecture_fit": {
     "original_request": "Prevent repeated wake inputs from disrupting role sessions and prepare the shared upstream fix.",
     "parent_structure": "The shared Naia ADK role wake registry, per-role durable delivery receipts, routed wake boxes and delivery-time work headers.",
-    "acceptance_rationale": "Extend the existing handover and receipt path while preserving shared routing, remote-box delivery and work-header selection. Instance credentials, service controls and model choices stay outside the patch."
+    "acceptance_rationale": "Extend the existing handover and receipt path while preserving shared routing, remote-box delivery and work-header selection. Instance credentials, service controls and model choices stay outside the patch. Priority is an optional registry configuration using the existing grouping and handover boundary, with an empty default for other installations."
   }
 }

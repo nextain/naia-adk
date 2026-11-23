@@ -1,0 +1,16 @@
+{
+  "work": "ledger-card-event",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md", "docs/guides/role-wake-registry.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md", "docs/guides/role-wake-registry.md"],
+    "detail": "The watcher guide describes one notice per escalation change and completed worker result. The delivery guide covers first inspection and existing receipt migration."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "reason": "The watcher and delivery guides and their integration tests cover the producer and receipt contract."
+  }
+}
