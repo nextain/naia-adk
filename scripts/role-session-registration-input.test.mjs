@@ -26,8 +26,7 @@ async function fixture(t){
     inspect:async()=>({foreground:[{pid:process.pid,args:'codex'}],processes:[],screen:'› Ask Codex to do anything'}),
     native:(session,hash,agent,query)=>nativeSnapshot(session,hash,query),
     submit:async(p,text)=>{submits++;await fs.appendFile(session.native_path,JSON.stringify({type:'response_item',payload:{role:'user',content:[{type:'input_text',text}]}})+'\n');}};
-  const env={ADK_WAKE_ATTEMPT:'canonical-one',ADK_WAKE_ROLE:'writer',ADK_WAKE_PANE:profile.pane_id,
-    ADK_WAKE_PAYLOAD_SHA256:'b46888789843c9fb4999abe4ab4025fdba24c58da66e3e157ff42bc833048f382'};
+  const env={ADK_WAKE_ATTEMPT:'canonical-one',ADK_WAKE_ROLE:'writer',ADK_WAKE_PANE:profile.pane_id};
   // The canonical transport digest is independent of a potentially changed host rendering.
   const {payloadHash}=await import('./lib/role-session-input.mjs');env.ADK_WAKE_PAYLOAD_SHA256=payloadHash('exact payload');
   const call=(action=[],extra={})=>capture(()=>main([...action,'--config',config,'--role','writer',

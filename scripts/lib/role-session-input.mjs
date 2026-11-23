@@ -50,6 +50,7 @@ export function resolveAgentProcess(foreground, processes) {
 }
 
 export function validateBinding(session, agent, native) {
+  if (session?.registration_error) return /^[a-z_]{1,64}$/.test(session.registration_error) ? session.registration_error : 'registration_unavailable';
   if (native?.error) return native.error === 'session_unbound' ? 'session_unbound' : 'native_unreadable';
   if (session?.kind !== 'codex-jsonl' || agent?.tool !== 'codex') return 'unsupported';
   if (!session.thread_id || !session.native_path || !session.cwd || !session.process_start || !Number.isInteger(session.pid)) return 'session_unbound';

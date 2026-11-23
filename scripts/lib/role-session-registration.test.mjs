@@ -7,7 +7,7 @@ const THREAD = '11111111-2222-4333-8444-555555555555';
 function fixture({ uid = 1000, base = '/private/site-a', daemon = false } = {}) {
   const profile = { pane_id:'w2:p7', session:{kind:'codex-jsonl',thread_id:THREAD,
     cwd:base+'/project',native_path:base+'/native.jsonl'}, registration:{state_dir:base+'/state',uid,
-    frontend_executable:base+'/bin/codex',node_entry:base+'/bin/codex.js',backend:daemon ? {
+    frontend_executable:base+'/bin/codex',launcher_executable:'/bin/bash',node_entry:base+'/bin/codex.js',backend:daemon ? {
       kind:'unix',socket_path:base+'/socket',probe_command:[base+'/bin/read-role-thread'],
     } : {kind:'embedded'}} };
   const argv=[base+'/bin/codex',...(daemon?['--remote','unix://'+base+'/socket']:[]),
@@ -105,7 +105,7 @@ test('a new intent supersedes an observer before its atomic publish',async()=>{
   const native=f.deps.native;
   f.deps.native=async()=>{
     const value=await native();f.deps.native=native;
-    const next=await f.begin();assert.equal(next.code,0);return value;
+    const current=await f.deps.process(20);f.processes.set(20,{...f.launcher});const next=await f.begin();f.processes.set(20,current);assert.equal(next.code,0);return value;
   };
   const result=await observeRegistration({role:'writer',profile:f.profile,launchId:start.intent.launch_id},f.deps);
   assert.equal(result.reason,'intent_superseded');assert.equal(f.records.has('lease'),false);
@@ -114,7 +114,7 @@ test('a new intent supersedes an observer before its atomic publish',async()=>{
 test('an old restored lease cannot replace the current generation',async()=>{
   const f=fixture(), one=await f.begin();f.activate();
   await observeRegistration({role:'writer',profile:f.profile,launchId:one.intent.launch_id},f.deps);
-  const old=structuredClone(f.records.get('lease'));const two=await f.begin();
+  const old=structuredClone(f.records.get('lease'));f.processes.set(20,{...f.launcher});const two=await f.begin();f.activate();
   await observeRegistration({role:'writer',profile:f.profile,launchId:two.intent.launch_id},f.deps);
   f.records.set('lease',old);
   assert.equal((await resolveRegistration({role:'writer',profile:f.profile},f.deps)).reason,'registration_generation_mismatch');
@@ -129,7 +129,7 @@ for(const [name,mutate,reason] of [
   ['server lacks listener inode',f=>{f.processes.get(90).sockets=['999'];},'native_owner_mismatch'],
   ['unloaded saved thread',f=>{f.deps.thread=async()=>({id:THREAD,cwd:f.profile.session.cwd,path:f.profile.session.native_path,status:{type:'notLoaded'}});},'endpoint_thread_mismatch'],
 ])test(`daemon mode rejects ${name}`,async()=>{
-  const f=fixture({daemon:true});mutate(f);const start=await f.begin();
+  const f=fixture({daemon:true});if(name==='frontend does not name endpoint')mutate(f);const start=await f.begin();
   if(start.code!==0){assert.equal(start.reason,reason);return;}
   f.activate();mutate(f);
   const result=await observeRegistration({role:'writer',profile:f.profile,launchId:start.intent.launch_id},f.deps);
@@ -160,4 +160,10 @@ test('registration lease and intent contain digests rather than prompt bodies',a
   await observeRegistration({role:'writer',profile:f.profile,launchId:start.intent.launch_id},f.deps);
   const text=JSON.stringify([...f.records]);assert.ok(!text.includes('private prompt body'));
   assert.ok(!text.includes('configured-model'));assert.match(start.intent.argv_sha256,/^[a-f0-9]{64}$/);
+});
+
+test('an already-running native frontend cannot manufacture a new pre-launch intent',async()=>{
+  const f=fixture();f.activate();
+  const result=await f.begin();assert.equal(result.reason,'launcher_identity_mismatch');
+  assert.equal(f.records.has('intent'),false);
 });

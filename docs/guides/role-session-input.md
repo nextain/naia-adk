@@ -160,3 +160,12 @@ before queueing input and records terminal `not_submitted`. Other failures,
 including an unstructured exit or timeout, remain uncertain. The journal keeps
 only the safe API error code and exit status, never raw stderr or error messages.
 Older uncertain attempts are never reset just because this adapter changed.
+
+## Binding after an authorized normal startup
+
+An installation may opt a role into [explicit session registration](role-session-registration.md)
+to replace its fixed PID/start with a validated lease for the same configured
+thread. This requires a launcher intent and actual process/owner evidence.
+Other-account state uses a separately configured owner resolver; the native
+snapshot read prefix does not implicitly authorize it. Missing registration
+leaves input pending, and an uncertain attempt is never replayed on renewal.
