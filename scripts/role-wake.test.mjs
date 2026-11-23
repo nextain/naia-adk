@@ -1905,3 +1905,50 @@ test('a route received at idle prevents a second owner request when its Gateway 
     assert.equal(disposition.status, equivalent ? 'duplicate' : 'conflicting-copy'); assert.equal(disposition.submission, undefined);
   }
 });
+
+test('semantic deadline and report facts remain one event pending and after consumer receipts', t => {
+  for (const consume of [false, true]) {
+    const f = setup(t), cards = [ledgerRow('due-card', { due: '2026-01-09T00:00:00Z' }), ledgerRow('human-card', { due: '2026-01-09T00:00:00Z', status: 'waiting_human' })];
+    const flow = ledgerWatcher(f, cards);
+    f.doc.roles['role-a'].ledger = path.relative(f.root, ledgerPath(f.root, 'role-a')); f.write();
+    const file = ledgerPath(f.root, 'role-a'), ledger = JSON.parse(fs.readFileSync(file));
+    ledger.report = { every_min: 180, channel: SOURCE_CHANNEL, last_at: null, last_msg_id: null }; fs.writeFileSync(file, JSON.stringify(ledger));
+    const registry = f.load(), pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a']; pump();
+    const initial = flow.scan(); assert.equal(initial.length, 3); const original = flow.pending();
+    assert.ok(original.every(name => name.startsWith('event-')));
+    if (consume) assert.equal(pump().delivered, 3);
+    const received = f.state.runs.length;
+    for (const minutes of [31, 61, 180, 360, 2 * 24 * 60]) {
+      assert.deepEqual(flow.scan(minutes), []); assert.deepEqual(flow.pending(), original);
+      if (consume) assert.equal(pump().delivered, 0);
+    }
+    assert.equal(f.state.runs.length, received);
+    assert.equal(JSON.parse(fs.readFileSync(file)).items[1].due, cards[1].due);
+    // The pending originals and their existing receipts survive a real revision.
+    const revise = mutate => { const j = JSON.parse(fs.readFileSync(file)); mutate(j); fs.writeFileSync(file, JSON.stringify(j)); };
+    for (const [i, mutate] of [
+      j => { j.items[0].due = '2026-01-08T00:00:00Z'; },
+      j => { j.items[0].status = 'waiting_human'; },
+      j => { j.items[0].result = 'actual-result.md'; },
+      j => { j.report.last_at = '2026-01-10T00:00:00Z'; j.report.last_msg_id = STAGE_MESSAGE; },
+    ].entries()) {
+      revise(mutate); assert.equal(flow.scan(2 * 24 * 60 + i + 1).length, 1);
+      assert.deepEqual(flow.scan(2 * 24 * 60 + i + 1), []);
+      if (consume) assert.equal(pump().delivered, 1);
+    }
+    const prior = flow.pending(); revise(j => { j.items[0].status = 'done'; }); assert.deepEqual(flow.scan(3000), []);
+    assert.deepEqual(flow.pending(), prior); revise(j => { j.items[0].status = 'open'; }); assert.equal(flow.scan(3001).length, 1);
+  }
+});
+
+test('semantic overdue upgrade adopts matching legacy pending and delivered facts but publishes a changed due', async t => {
+  const f = setup(t), card = ledgerRow('due-card', { due: '2026-01-09T00:00:00Z' }), flow = ledgerWatcher(f, [card]);
+  const registry = f.load(), pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a']; pump();
+  await writeLedgerWake(flow.inbox, { stamp: new Date(NOW).toISOString().replace(/\D/g, ''), role: 'role-a', id:card.id,
+    reason:'기한 넘음',title:card.title,details:`출처: ${card.from.channel}/${card.from.msg_id}\n기한: ${card.due}\n결과: (없음)` });
+  assert.equal(pump().delivered, 1); const before = fs.readFileSync(path.join(registry.stateDir, 'delivered-role-a.jsonl'));
+  const sent = { [JSON.stringify(['role-a',card.id,'기한 넘음',card.due])]:NOW, [JSON.stringify(['role-a',card.id,'기한 넘음'])]:NOW };
+  fs.writeFileSync(path.join(path.dirname(ledgerPath(f.root,'role-a')),'watch-state.json'),JSON.stringify({version:1,sent}));
+  assert.deepEqual(flow.scan(61),[]);assert.equal(pump().delivered,0);assert.deepEqual(fs.readFileSync(path.join(registry.stateDir,'delivered-role-a.jsonl')),before);
+  card.due='2026-01-08T00:00:00Z';flow.save();assert.equal(flow.scan(62).length,1);assert.equal(pump().delivered,1);
+});
