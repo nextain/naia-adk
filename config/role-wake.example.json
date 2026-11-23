@@ -27,6 +27,7 @@
   },
   "role_views": [
     { "kind": "wake-routes", "path": "/<live-workspace>/docs/common/team/wake-routes.json" },
+    { "kind": "ledger-watch", "path": "/<live-workspace>/config/work-ledger.json" },
     { "kind": "session-health", "path": "/<private>/session-health.json", "roles": ["role-a"] }
   ],
   "roles": {

@@ -10,11 +10,15 @@ import { fileURLToPath } from 'node:url';
 import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
 import { activeMentionPolicy, readGatewayMention } from './lib/active-mention.mjs';
 import { isCardEventWakeBody, isCardEventWakeName } from './work-ledger/card-wake.mjs';
+import { validateWorkLedgerConfig } from '../packages/core/work-ledger-meta.mjs';
+import { cardWatchRole, inspectOpenCardWatches } from './lib/open-card-watch.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
 const INTERPRETERS = new Set(['node', 'python3', 'python']);
-const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'session-health', 'bot-mention-wake']);
+const DEDICATED_CARD_WATCH_VIEWS = new Set(['ledger-watch', 'card-watch']);
+const CARD_WATCH_VIEWS = new Set([...DEDICATED_CARD_WATCH_VIEWS, 'session-health']);
+const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'bot-mention-wake', ...CARD_WATCH_VIEWS]);
 const DEFAULTS = { heartbeatMaxAge: 300, maxPerRun: 50, lagSeconds: 600, retryMaxSeconds: 300, deliveredDays: 3, maxBoxFiles: 500, repeatSeconds: 3600, dmBackupMaxAge: 900 };
 // A role whose session is down fails every file; stop that role for the run after this many in a row.
 const FAIL_STREAK = 3;
@@ -72,7 +76,8 @@ export function loadRegistry(file) {
   const roleViews = (doc.role_views ?? []).map(view => {
     if (!isObject(view) || !VIEW_KINDS.has(view.kind) || typeof view.path !== 'string' || !path.isAbsolute(view.path)) fail('invalid role_views entry');
     if (view.roles !== undefined && (!Array.isArray(view.roles) || !view.roles.length || view.roles.some(id => typeof id !== 'string' || !id.trim()))) fail('role_views roles must be a non-empty string array');
-    return { kind: view.kind, path: view.path, roles: view.roles === undefined ? null : [...new Set(view.roles)] };
+    if (view.kind === 'ledger-watch' && view.root !== undefined && (typeof view.root !== 'string' || !path.isAbsolute(view.root))) fail('ledger-watch root must be an absolute path');
+    return { kind: view.kind, path: view.path, roles: view.roles === undefined ? null : [...new Set(view.roles)], ...(view.kind === 'ledger-watch' && view.root && { root: view.root }) };
   });
   if (!isObject(doc.roles) || !Object.keys(doc.roles).length) fail('roles must be a non-empty object');
   const routeIds = Object.keys(doc.roles).sort((a, b) => b.length - a.length);
@@ -799,6 +804,12 @@ export function deliver(registry, deps = defaultDeps(), { only = null } = {}) {
 }
 
 const VIEW_READERS = {
+  'ledger-watch': doc => {
+    const { roles } = validateWorkLedgerConfig(doc);
+    if (!roles.length) fail('ledger-watch requires roles');
+    return roles.map(entry => ({ id: entry.role }));
+  },
+  'card-watch': doc => [cardWatchRole(doc)],
   'l4-roles': doc => (doc.roles ?? []).map(role => ({ id: role.id, botId: role.botUserIds?.[0] })),
   'wake-routes': doc => Object.entries(doc.roles ?? {}).map(([id, role]) => ({ id, botId: role.bot_id, wakeSubdir: role.wake_subdir })),
   liveness: doc => Object.entries(doc.roles ?? {}).map(([id, role]) => ({ id, tool: role.tool, paneId: role.find?.pane_id })),
@@ -809,7 +820,12 @@ const VIEW_READERS = {
 // Other tools still keep their own role lists. Until each reads the registry, this
 // names every list that disagrees with it.
 export function compareViews(registry) {
+  return inspectViews(registry).findings;
+}
+
+function inspectViews(registry, { checkOpenCards = false, now } = {}) {
   const findings = [];
+  const registeredViews = [];
   const byId = new Map(registry.roles.map(role => [role.id, role]));
   for (const view of registry.roleViews) {
     const scoped = view.roles ? [...new Set(view.roles)] : null;
@@ -817,7 +833,11 @@ export function compareViews(registry) {
       if (!byId.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role in role_views is not in the registry` });
     }
     let rows;
-    try { rows = VIEW_READERS[view.kind](readJson(view.path)); } catch (error) {
+    try {
+      const config = readJson(view.path);
+      rows = VIEW_READERS[view.kind](config);
+      if (checkOpenCards && CARD_WATCH_VIEWS.has(view.kind)) registeredViews.push({ view, config });
+    } catch (error) {
       findings.push({ level: 'error', code: 'role-view-missing', role: null, detail: `${view.kind} ${view.path}: ${error.code === 'ENOENT' ? 'file not found' : 'unreadable'}` });
       continue;
     }
@@ -836,11 +856,14 @@ export function compareViews(registry) {
       if (row.dmUsers !== undefined && role.dmUsers.some(user => !row.dmUsers.includes(user))) diffs.push('dm_users');
       if (diffs.length) findings.push({ level: 'error', code: 'role-view-drift', role: row.id, detail: `${view.kind} ${view.path}: ${diffs.join(', ')} differ` });
     }
-    for (const id of scoped ?? byId.keys()) {
+    const expected = scoped ?? (DEDICATED_CARD_WATCH_VIEWS.has(view.kind) ? [] : byId.keys());
+    for (const id of expected) {
       if (byId.has(id) && !seen.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role is missing` });
     }
   }
-  return findings;
+  if (!checkOpenCards) return { findings };
+  const { summary, findings: cardFindings } = inspectOpenCardWatches(registry, registeredViews, now);
+  return { findings: findings.concat(cardFindings), openCardWatches: summary };
 }
 
 const mentions = (text, root) => new RegExp(`${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`).test(text);
@@ -864,14 +887,15 @@ function retiredUse(registry, deps, processes) {
   return findings;
 }
 
-export function inspect(registry, deps = defaultDeps()) {
+export function inspect(registry, deps = defaultDeps(), options) {
   const now = deps.now();
   let processes = null;
   try { processes = deps.processes(); } catch { /* reported per role below */ }
   const known = [...new Set([...registry.roles.flatMap(role => role.tools), 'claude', 'codex', 'opencode'])];
   let heartbeat = null, lastRun = {};
   try { const doc = readJson(heartbeatFile(registry)); heartbeat = Date.parse(doc.at); if (isObject(doc.roles)) lastRun = doc.roles; } catch { /* never ran */ }
-  const findings = [...retiredUse(registry, deps, processes), ...compareViews(registry)];
+  const views = inspectViews(registry, { ...options, now });
+  const findings = [...retiredUse(registry, deps, processes), ...views.findings];
   const add = (level, code, role, detail) => findings.push({ level, code, role, detail });
   if (registry.delivery && !(Number.isFinite(heartbeat) && now - heartbeat <= registry.delivery.heartbeatMaxAge * 1000)) add('error', 'delivery-stale', null, Number.isFinite(heartbeat) ? `last delivery run ${Math.round((now - heartbeat) / 1000)}s ago` : 'delivery has never run');
   const rows = registry.roles.map(role => {
@@ -932,19 +956,20 @@ export function inspect(registry, deps = defaultDeps()) {
     }
     return row;
   });
-  return { at: new Date(now).toISOString(), registry: registry.file, root: registry.root, rows, findings };
+  return { at: new Date(now).toISOString(), registry: registry.file, root: registry.root, rows, findings, ...(views.openCardWatches && { openCardWatches: views.openCardWatches }) };
 }
 
 // Checks, then restarts what this layer owns: a delivery run that stopped is run
 // here once, so a dead timer does not strand every role. Pane restart and the
 // in-session wait nudge stay with the pane liveness tool.
 export function watch(registry, deps = defaultDeps(), { repair = false } = {}) {
-  let report = inspect(registry, deps);
+  const options = { checkOpenCards: registry.roleViews.some(view => DEDICATED_CARD_WATCH_VIEWS.has(view.kind)) };
+  let report = inspect(registry, deps, options);
   const actions = [];
   if (repair && report.findings.some(finding => finding.code === 'delivery-stale')) {
     const result = deliver(registry, deps);
     actions.push({ action: 'deliver', result });
-    report = inspect(registry, deps);
+    report = inspect(registry, deps, options);
   }
   const errors = report.findings.filter(finding => finding.level === 'error');
   if (repair && registry.notify && errors.length) {
@@ -1014,6 +1039,7 @@ export function boardSection(report) {
     lines.push(`| ${[`${row.name} (${row.id})`, row.paneId, session, `${row.tool ?? '-'} (${row.registeredTools.join(' > ')})`, row.wait, row.box ?? 'unreadable', pending, ago(row.newestMs, now)].map(cell).join(' | ')} |`);
   }
   lines.push('', `registry: ${report.registry} · root: ${report.root} · checked: ${report.at}`);
+  if (report.openCardWatches) lines.push(`Registered watch configurations match ${report.openCardWatches.configured} of ${report.openCardWatches.open} open cards in readable owner ledgers.`);
   if (report.findings.length) lines.push('', ...report.findings.map(finding => `- ${finding.level} ${finding.code}${finding.role ? ` ${finding.role}` : ''}: ${cell(finding.detail)}`));
   return `${lines.join('\n')}\n`;
 }
@@ -1033,7 +1059,7 @@ export function main(argv = process.argv.slice(2), env = process.env, deps = def
   const print = data => out(`${JSON.stringify(data, null, 2)}\n`);
   if (command === 'validate') { print({ ok: true, root: registry.root, roles: registry.roles.map(role => role.id) }); return 0; }
   if (command === 'check' || command === 'watch') {
-    const report = command === 'watch' ? watch(registry, deps, { repair: flag('--repair') }) : inspect(registry, deps);
+    const report = command === 'watch' ? watch(registry, deps, { repair: flag('--repair') }) : inspect(registry, deps, { checkOpenCards: true });
     if (flag('--json')) print(report); else out(boardSection(report));
     return report.findings.some(finding => finding.level === 'error') ? 1 : 0;
   }
