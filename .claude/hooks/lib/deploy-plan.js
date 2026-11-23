@@ -25,8 +25,9 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { AsyncLocalStorage } = require("async_hooks");
+const { acquirePidLock } = require("../../../scripts/lib/pid-lock.cjs");
 const gateConfigPin = require("./gate-config-pin.js");
-const { humanTyped, commandHash, statePath } = require("./deploy-human-approval.js");
+const { humanTyped, containsApprovalCode, commandHash, statePath } = require("./deploy-human-approval.js");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const PLAN_FILE = "deploy-plan.json";
@@ -38,7 +39,6 @@ const STEP_CODE_TTL_MS = 2 * 60 * 60 * 1000;
 // 사전승인 단계 코드 유효 기간: 발급 시각부터 12시간(PLAN TTL과 동일). 일반 단계 코드는 2시간 유지.
 const PREAPPROVE_STEP_TTL_MS = 12 * 60 * 60 * 1000;
 const INCIDENT_VERDICT_TTL_MS = 30 * 60 * 1000;
-const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 // 적대 리뷰 기준. 기준마다 결과 파일에 "<id>: PASS" 줄이 있어야 한다.
 const CRITERIA = [
@@ -193,16 +193,136 @@ const REVIEW_MODELS = Object.freeze({
 });
 // 승인 확인은 비동기이며 검증 함수들은 동기식이다. 검증 범위마다 확인된 스냅샷만 전달한다.
 const gateConfigContext = new AsyncLocalStorage();
-async function withGateConfig(options, fn) {
-	const root = path.resolve(options.root || ROOT);
+async function approvedConfigAt(options, root) {
 	const before = gateConfigPin.snapshotGateConfig(root);
 	const approved = before ? await gateConfigPin.approvedGateConfig({ ...options, root, discordConfirms }) : null;
 	const after = gateConfigPin.snapshotGateConfig(root);
-	const trusted = approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
-	return gateConfigContext.run(trusted, fn);
+	return approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
+}
+const PROFILE_ID = /^[a-z][a-z0-9_-]{0,63}$/;
+function registeredRoot(root) {
+	if (typeof root !== "string" || !path.isAbsolute(root) || path.resolve(root) !== root || fs.realpathSync(root) !== root || !fs.statSync(root).isDirectory()) throw new Error("A registered gate requires a canonical absolute directory");
+	return root;
+}
+function registeredPolicyRoot(root) {
+	registeredRoot(root);
+	for (const name of gateConfigPin.GATE_CONFIG_FILES) {
+		const file = path.join(root, name);
+		if (fs.realpathSync(file) !== file || !fs.lstatSync(file).isFile()) throw new Error("Registered gate configuration must stay in its site root");
+	}
+	return root;
+}
+function siteAllowlist(root, verifyCommit = false) {
+	const dir = path.join(root, "config"), file = path.join(dir, "deploy-gate.json");
+	for (const [target, directory] of [[dir, true], [file, false]]) {
+		let st;
+		try { st = fs.lstatSync(target); }
+		catch (error) { if (error.code === "ENOENT") return { digest: null, items: [] }; throw error; }
+		if (!(directory ? st.isDirectory() : st.isFile())) throw new Error("Gate policy must be a regular file in its registered root");
+	}
+	const bytes = fs.readFileSync(file);
+	const policy = validateReadOnlyScriptsConfig(JSON.parse(bytes));
+	if (!policy.ok) throw new Error(policy.why);
+	if (verifyCommit && policy.items.length) {
+		const clean = verifyRepoFileGitClean(file, null, "config/deploy-gate.json");
+		if (!clean.ok || clean.sha256 !== sha256(bytes)) throw new Error("Registered read-only gate policy differs from its committed bytes");
+	}
+	return { digest: sha256(bytes), items: policy.items };
+}
+// Observe the site's policy bytes so edits invalidate open reviews. Strict review
+// never interprets these bytes as a reviewer setting or a command exception.
+function strictPolicyFileDigest(root, name) {
+	const file = path.join(root, name);
+	let current = root;
+	for (const part of name.split("/")) {
+		current = path.join(current, part);
+		let stat;
+		try { stat = fs.lstatSync(current); }
+		catch (error) { if (error.code === "ENOENT") return null; throw error; }
+		if (current === file ? !stat.isFile() : !stat.isDirectory()) throw new Error("Strict gate policy files must stay in their registered site root");
+	}
+	return readTargetFile(root, name).digest;
+}
+function strictReviewPolicy(root) {
+	const inputs = gateConfigPin.GATE_CONFIG_FILES.map(name => [name, strictPolicyFileDigest(root, name)]);
+	return {
+		root, strictDefaults: true, config: null,
+		hash: sha256(JSON.stringify(["gate-review/strict-defaults/v1", inputs])),
+		allowlist: { digest: strictPolicyFileDigest(root, "config/deploy-gate.json"), items: [] },
+	};
+}
+async function withGateConfig(options, fn) {
+	const root = path.resolve(options.root || ROOT);
+	const trusted = await approvedConfigAt(options, root);
+	if (options.reviewProfiles === undefined) return gateConfigContext.run(trusted, fn);
+	registeredRoot(root);
+	if (!Array.isArray(options.reviewProfiles) || !options.reviewProfiles.length) throw new Error("reviewProfiles must register at least one gate");
+	const profiles = [], ids = new Set(), roots = new Set();
+	for (const entry of options.reviewProfiles) {
+		const site = registeredRoot(entry?.root);
+		if (typeof entry?.id !== "string" || !PROFILE_ID.test(entry.id) || ids.has(entry.id) || roots.has(site)) throw new Error("Each gate requires a distinct profile ID and site root");
+		ids.add(entry.id); roots.add(site);
+		if (entry.policy === "strict-defaults") {
+			profiles.push({ ...strictReviewPolicy(site), id: entry.id });
+		} else {
+			if (entry.policy !== undefined && entry.policy !== "approved-config") throw new Error(`Gate ${entry.id} has an unknown review policy`);
+			const policy = await approvedConfigAt(entry, registeredPolicyRoot(site));
+			if (!policy) throw new Error(`Gate ${entry.id} has no current approved policy`);
+			profiles.push({ ...policy, id: entry.id, approverId: entry.approverId, allowlist: siteAllowlist(site, true) });
+		}
+	}
+	profiles.sort((a, b) => a.id < b.id ? -1 : 1);
+	return gateConfigContext.run({ root, owner: trusted, profiles }, fn);
+}
+function registeredReviewProfiles(root, verifyCommits = false) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx?.profiles) return [];
+	if (ctx.root !== path.resolve(root)) throw new Error("Plan root differs from the registered review scope");
+	for (const p of ctx.profiles) {
+		const current = p.strictDefaults ? strictReviewPolicy(registeredRoot(p.root)) : {
+			hash: gateConfigPin.snapshotGateConfig(registeredPolicyRoot(p.root))?.hash, allowlist: siteAllowlist(p.root, verifyCommits),
+		};
+		if (current.hash !== p.hash || current.allowlist.digest !== p.allowlist.digest) throw new Error(`Gate ${p.id} policy changed; reload its registered policy`);
+	}
+	return ctx.profiles;
+}
+function registeredReviewProfileIds(root) {
+	return registeredReviewProfiles(root).map(profile => profile.id);
+}
+function withReviewProfile(root, id, fn) {
+	const profile = registeredReviewProfiles(root).find(p => p.id === id);
+	if (!profile) throw new Error("Unregistered review profile");
+	return gateConfigContext.run({ ...gateConfigContext.getStore(), selected: profile }, fn);
+}
+function reviewProfileBinding(planFile, root) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx?.selected) return null;
+	registeredReviewProfiles(root);
+	const p = ctx.selected;
+	const plan = resultFile(ctx.root, path.relative(ctx.root, path.resolve(planFile)));
+	if (plan !== path.resolve(planFile)) throw new Error("Review requires a canonical plan within its registered root");
+	return { id: p.id, ...(p.strictDefaults ? { policy: "strict-defaults" } : {}), scope_sha256: sha256(JSON.stringify(["gate-review/v1", p.id, p.root, p.hash, p.allowlist.digest, p.approverId, ctx.root, plan])) };
+}
+function reviewRecordDirectory(gatesDir, create = false) {
+	const p = gateConfigContext.getStore()?.selected;
+	if (!p) return gatesDir;
+	let dir = fs.realpathSync(gatesDir);
+	for (const part of ["reviews", p.id]) {
+		dir = path.join(dir, part);
+		if (create) {
+			try { fs.mkdirSync(dir); } catch (error) { if (error.code !== "EEXIST") throw error; }
+		}
+		if (!fs.lstatSync(dir).isDirectory() || fs.realpathSync(dir) !== dir) throw new Error("Invalid gate review directory");
+	}
+	return dir;
 }
 function trustedGateConfig(root) {
-	const ctx = gateConfigContext.getStore();
+	let ctx = gateConfigContext.getStore();
+	if (ctx?.profiles) {
+		registeredReviewProfiles(root);
+		if (ctx.selected) return ctx.selected.config;
+		ctx = ctx.owner;
+	}
 	if (!ctx || ctx.root !== path.resolve(root)) return null;
 	const current = gateConfigPin.snapshotGateConfig(root);
 	return current && current.hash === ctx.hash ? ctx.config : null;
@@ -397,8 +517,12 @@ function formProblems(plan) {
 	return p;
 }
 
-function planSha(file) {
-	return sha256(fs.readFileSync(file));
+function readPlanSnapshot(file) {
+	try {
+		const bytes = fs.readFileSync(file);
+		const plan = JSON.parse(bytes.toString("utf8"));
+		return plan && typeof plan === "object" ? { plan, sha: sha256(bytes) } : null;
+	} catch { return null; }
 }
 
 /** 24시간 안에 만든 계획서들. */
@@ -413,14 +537,14 @@ function recentPlans(root, now = Date.now()) {
 	const out = [];
 	for (const d of dirs) {
 		const file = path.join(base, d.name, "gates", PLAN_FILE);
-		if (!fs.existsSync(file)) continue;
-		const plan = readJson(file);
-		if (!plan) continue;
+		const snapshot = readPlanSnapshot(file);
+		if (!snapshot) continue;
+		const { plan, sha } = snapshot;
 		const at = Date.parse(plan.createdAt || "");
 		if (!Number.isFinite(at) || now - at > PLAN_MAX_AGE_MS || at - now > 5 * 60 * 1000) continue;
 		const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
 		const actions = plan.incident && Array.isArray(plan.incident.actions) ? plan.incident.actions : [];
-		out.push({ file, plan, steps, actions });
+		out.push({ file, plan, sha, steps, actions });
 	}
 	return out;
 }
@@ -430,10 +554,10 @@ function plansForCommand(command, root, now = Date.now()) {
 	const h = commandHash(command);
 	const has = (e) => e && Array.isArray(e.commands) && e.commands.some((c) => typeof c === "string" && commandHash(c) === h);
 	const out = [];
-	for (const { file, plan, steps, actions } of recentPlans(root, now)) {
+	for (const { file, plan, sha, steps, actions } of recentPlans(root, now)) {
 		const step = steps.find(has);
 		const action = actions.find(has);
-		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha: planSha(file) });
+		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha });
 	}
 	return out;
 }
@@ -521,11 +645,11 @@ function plansCarryingCommand(command, root, cwd, now = Date.now()) {
 		return sliceMatch(ranNorm, normalizedRunArgvs(c, root));
 	};
 	const out = [];
-	for (const { file, plan, steps, actions } of plans) {
+	for (const { file, plan, sha, steps, actions } of plans) {
 		const has = (e) => e && Array.isArray(e.commands) && e.commands.some(carries);
 		const step = steps.find(has);
 		const action = actions.find(has);
-		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha: planSha(file), carried: (step || action).commands.find(carries) });
+		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha, carried: (step || action).commands.find(carries) });
 	}
 	return out;
 }
@@ -731,7 +855,10 @@ function planReadOnlyScriptsBinding(plan, root) {
 		if (!cleanScript.ok || cleanScript.rel !== item.path || cleanScript.sha256 !== item.sha256) continue;
 		bound.push({ sha256: item.sha256, path: item.path, service: item.service, script_sha256: cleanScript.sha256 });
 	}
-	return { ok: true, items: canonicalReadOnlyBinding(bound) };
+	const profile = gateConfigContext.getStore()?.selected;
+	const permitted = profile ? bound.filter(row => profile.allowlist.items.some(rule =>
+		rule.path === row.path && rule.service === row.service && rule.sha256 === row.sha256)) : bound;
+	return { ok: true, items: canonicalReadOnlyBinding(permitted) };
 }
 
 /** 계획 단계 명령이 직접 호출하는 저장소 내 대본 경로를 뽑는다(리뷰 시 본문 고정을 강제하기 위함). */
@@ -778,10 +905,112 @@ function directCommandScriptPaths(command, base) {
 	return [...new Set(out)];
 }
 
+// Both reviewed images must remain available independently of the deployed file.
+function readTargetFile(base, name) {
+	const abs = path.resolve(base, name);
+	if (fs.realpathSync(abs) !== abs) throw new Error(`target pin uses a symlink: ${name}`);
+	const fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+	try {
+		const stat = fs.fstatSync(fd, { bigint: true });
+		if (!stat.isFile()) throw new Error(`not a regular target file: ${name}`);
+		const body = fs.readFileSync(fd);
+		const end = fs.lstatSync(abs, { bigint: true });
+		if (fs.realpathSync(abs) !== abs || stat.dev !== end.dev || stat.ino !== end.ino || stat.ctimeNs !== end.ctimeNs) throw new Error(`target file changed while reading: ${name}`);
+		return { body, digest: sha256(body), identity: `${stat.dev}:${stat.ino}` };
+	} finally { fs.closeSync(fd); }
+}
+
+function targetTransitions(pin, plan, base) {
+	const transitions = new Map();
+	if (pin.transitions === undefined) return transitions;
+	if (!pin.transitions || typeof pin.transitions !== "object" || Array.isArray(pin.transitions)) throw new Error(`invalid target transitions: ${pin.path}`);
+	const scenario = Array.isArray(plan.scenario) ? plan.scenario : [];
+	for (const [id, spec] of Object.entries(pin.transitions)) {
+		const step = scenario.find(s => s?.id === id);
+		if (!step || !spec || !["before", "after"].includes(spec.to) ||
+			(spec.resume !== undefined && typeof spec.resume !== "boolean") ||
+			Object.keys(spec).some(k => !["to", "partial_after", "resume"].includes(k))) {
+			throw new Error(`invalid target transition: ${pin.path} / ${id}`);
+		}
+		const from = pin[spec.to === "after" ? "before" : "after"];
+		const targetPath = path.resolve(base, pin.path);
+		const matching = Object.entries(step.files || {}).filter(([file]) => path.resolve(base, file) === targetPath);
+		if (matching.length !== 1 || String(matching[0][1]).toLowerCase() !== from || pin.before === pin.after) throw new Error(`target transition needs its exact preimage in step.files: ${pin.path} / ${id}`);
+		if (spec.partial_after !== undefined) {
+			const forward = scenario.find(s => s?.id === spec.partial_after);
+			if (spec.to !== "before" || step.branch !== "rollback" || !forward || forward.branch === "rollback" ||
+				scenario.indexOf(forward) >= scenario.indexOf(step) || pin.transitions[forward.id]?.to !== "after" ||
+				!Array.isArray(forward.commands) || !forward.commands.length) {
+				throw new Error(`invalid partial rollback source: ${pin.path} / ${id}`);
+			}
+		}
+		transitions.set(id, { to: pin[spec.to] });
+	}
+	return transitions;
+}
+
+function targetDeclarations(plan) {
+	const config = plan?.file_pins;
+	if (config === undefined) return [];
+	let declarations = config;
+	if (config && typeof config === "object" && !Array.isArray(config)) {
+		if ("role" in config || "path" in config) throw new Error("target file_pins must be an array or targets array");
+		declarations = config.targets === undefined ? [] : config.targets;
+	}
+	if (!Array.isArray(declarations)) throw new Error("file_pins targets must be an array");
+	return declarations;
+}
+
+function targetPins(plan, root) {
+	const base = root ? path.resolve(root) : ROOT;
+	const pins = new Map(), liveFiles = new Set(), sources = new Set();
+	for (const item of targetDeclarations(plan)) {
+		if (!item || item.role !== "target" ||
+			![item.path, item.before_source, item.after_source].every(p => typeof p === "string" && p.trim() && !/[\0\r\n]/.test(p)) ||
+			![item.before, item.after].every(h => typeof h === "string" && /^[a-f0-9]{64}$/i.test(h))) {
+			throw new Error("invalid target file_pins entry");
+		}
+		const pin = { ...item, before: item.before.toLowerCase(), after: item.after.toLowerCase() };
+		const abs = path.resolve(base, pin.path);
+		const live = readTargetFile(base, pin.path);
+		if (liveFiles.has(live.identity)) throw new Error(`duplicate target pin: ${pin.path}`);
+		const before = readTargetFile(base, pin.before_source), after = readTargetFile(base, pin.after_source);
+		if (live.digest !== pin.before && live.digest !== pin.after) throw new Error(`target sha256 mismatch: ${pin.path}`);
+		if (before.digest !== pin.before || after.digest !== pin.after) throw new Error(`target source sha256 mismatch: ${pin.path}`);
+		liveFiles.add(live.identity);
+		sources.add(before.identity);
+		sources.add(after.identity);
+		pins.set(abs, { ...pin, current: live.digest, beforeBody: before.body, afterBody: after.body, transitions: targetTransitions(pin, plan, base) });
+	}
+	for (const identity of liveFiles) if (sources.has(identity)) throw new Error("target sources must be independent of all live targets");
+	return pins;
+}
+
+function verifyTargetPreconditions(plan, root, entry) {
+	const targets = targetPins(plan, root);
+	for (const [file, want] of Object.entries(entry.files || {})) {
+		const target = targets.get(path.resolve(root, file));
+		const expected = String(want).toLowerCase();
+		if (target && target.current !== expected) {
+			throw new Error(`${entry.id} 단계의 대상 시작 지문 불일치: ${file} (계획 ${expected}, 현재 ${target.current}). 대상별 현재 상태와 단계 결과를 확인하십시오. 복구하려면 현재 지문과 일치하는 검수된 단계를 사용하십시오. 해당 단계가 없으면 복구 계획을 새로 검수받으십시오.`);
+		}
+	}
+	return targets;
+}
+
+function verifyTargetResults(plan, root, stepId) {
+	for (const target of targetPins(plan, root).values()) {
+		const result = target.transitions.get(stepId);
+		if (result && target.current !== result.to) throw new Error(`target postimage mismatch: ${target.path} / ${stepId}`);
+	}
+}
+
 /** 계획서 소속 저장소 root 기준. 모든 단계와 선조치의 고정 파일을 검사한다. */
 function pinnedFileProblems(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
 	const problems = [];
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [String(e.message)]; }
 	for (const entry of [...(Array.isArray(plan?.scenario) ? plan.scenario : []), ...(Array.isArray(plan?.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry) continue;
 		const pinnedAbs = new Map();
@@ -790,8 +1019,11 @@ function pinnedFileProblems(plan, root) {
 			for (const [file, want] of Object.entries(entry.files)) {
 				try {
 					const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(base, file);
-					const actual = sha256(fs.readFileSync(abs));
-					if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || actual !== String(want).toLowerCase()) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
+					const target = targets.get(abs);
+					const actual = target ? target.current : sha256(fs.readFileSync(abs));
+					const expected = String(want).toLowerCase();
+					const matches = target ? expected === target.before || expected === target.after : actual === expected;
+					if (!/^[a-f0-9]{64}$/.test(expected) || !fs.statSync(abs).isFile() || !matches) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
 					else pinnedAbs.set(abs, actual);
 				} catch { problems.push(`${entry.id}: 고정 파일을 읽지 못함: ${file}`); }
 			}
@@ -826,6 +1058,7 @@ function resultFile(gatesDir, result, allowMissing = false) {
 }
 
 function reviewPrompt(plan, sha, root, opts = null) {
+	const profile = reviewProfileBinding(opts?.planFile, root);
 	const roItems = opts && Array.isArray(opts.readOnlyScripts) ? canonicalReadOnlyBinding(opts.readOnlyScripts) : [];
 	const roLines = roItems.length
 		? [
@@ -871,6 +1104,8 @@ function reviewPrompt(plan, sha, root, opts = null) {
 		...(plan.scenario || []).flatMap((s) => (s.commands || []).map((c) => `- ${s.id}: ${commandHash(c)}`)),
 		...((plan.incident && plan.incident.actions) || []).flatMap((a) => (a.commands || []).map((c) => `- 장애 ${a.id}: ${commandHash(c)}`)),
 		"",
+		...(profile ? [`Review gate: ${profile.id}. Registered policy and plan scope: ${profile.scope_sha256}`] : []),
+		...(profile?.policy === "strict-defaults" ? ["Review policy: strict-defaults. Use the built-in reviewers. This gate grants no read-only command exceptions."] : []),
 		...pinnedFilesText(plan, root),
 		...roLines,
 	].join("\n");
@@ -897,6 +1132,7 @@ const REVIEW_EXECUTOR_FILES = [
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/gate-config-pin.js",
+	"scripts/lib/pid-lock.cjs",
 ];
 /**
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
@@ -904,14 +1140,14 @@ const REVIEW_EXECUTOR_FILES = [
  */
 function reviewInputEntries(planFile, root, opts = null) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(path.dirname(path.resolve(planFile)));
-	const plan = readJson(planFile);
-	if (!plan) throw new Error("계획서를 읽지 못함");
-	const planAbs = path.resolve(planFile);
-	const planBytes = fs.readFileSync(planAbs);
-	const planSha256 = sha256(planBytes);
+	const snapshot = readPlanSnapshot(planFile);
+	if (!snapshot) throw new Error("계획서를 읽지 못함");
+	const { plan, sha: planSha256 } = snapshot;
 	const entries = [{ file: "\0plan", sha256: planSha256 }];
 	const problems = [];
 	const seen = new Set(["\0plan"]);
+	const profile = reviewProfileBinding(planFile, base);
+	if (profile) entries.push({ file: "\0gate_review", sha256: profile.scope_sha256 });
 	let resolvedModels = null;
 	try { resolvedModels = reviewModelsFor(base); }
 	catch (error) { problems.push(`review_models 설정을 읽지 못함: ${error.message}`); }
@@ -926,20 +1162,33 @@ function reviewInputEntries(planFile, root, opts = null) {
 			entries.push({ file: "\0read_only_scripts", sha256: sha256(JSON.stringify(canonicalRo)) });
 		}
 	}
-	const pins = [];
+	const immutablePins = new Map();
+	let targets = new Map();
+	try { targets = targetPins(plan, base); } catch (e) { problems.push(String(e.message)); }
 	for (const entry of [...(Array.isArray(plan.scenario) ? plan.scenario : []), ...(Array.isArray(plan.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry || !entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) continue;
-		for (const [f, want] of Object.entries(entry.files)) pins.push([entry.id, f, want]);
+		for (const [file, want] of Object.entries(entry.files)) {
+			const target = targets.get(path.resolve(base, file));
+			const expected = String(want).toLowerCase();
+			if (target) {
+				if (expected !== target.before && expected !== target.after) problems.push(`${entry.id}: target pin mismatch: ${file}`);
+				continue;
+			}
+			const key = path.normalize(file);
+			const previous = immutablePins.get(key);
+			if (previous && previous.expected !== expected) problems.push(`${entry.id}: conflicting immutable pin: ${file}`);
+			immutablePins.set(key, { id: entry.id, file, expected });
+		}
 	}
-	for (const [id, f, want] of [...new Map(pins.map((p) => [path.normalize(p[1]), p])).values()].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
-		if (seen.has(f)) continue;
-		seen.add(f);
-		const abs = path.isAbsolute(f) ? f : path.join(base, f);
-		let actual = null;
-		try { actual = sha256(fs.readFileSync(abs)); } catch { problems.push(`${id}: 고정 파일을 읽지 못함: ${f}`); continue; }
-		if (!/^[a-f0-9]{64}$/i.test(String(want)) || actual !== String(want).toLowerCase()) { problems.push(`${id}: 고정 파일 sha256 불일치: ${f}`); continue; }
-		entries.push({ file: f, sha256: actual });
+	for (const { id, file, expected } of immutablePins.values()) {
+		if (seen.has(file)) continue;
+		seen.add(file);
+		let actual;
+		try { actual = sha256(fs.readFileSync(path.resolve(base, file))); } catch { problems.push(`${id}: 고정 파일을 읽지 못함: ${file}`); continue; }
+		if (actual !== expected) { problems.push(`${id}: 고정 파일 sha256 불일치: ${file}`); continue; }
+		entries.push({ file, sha256: actual });
 	}
+	for (const target of targets.values()) entries.push({ file: target.path, before: target.before, after: target.after });
 	for (const rel of REVIEW_EXECUTOR_FILES) {
 		try { entries.push({ file: rel, sha256: sha256(fs.readFileSync(path.join(ROOT, rel))) }); }
 		catch { problems.push(`실행기를 읽지 못함: ${rel}`); }
@@ -948,6 +1197,17 @@ function reviewInputEntries(planFile, root, opts = null) {
 	return { base, planSha256, entries, problems, digest: problems.length ? null : sha256(JSON.stringify(entries)) };
 }
 function reviewInputManifest(planFile, root, opts = null) {
+	const profiles = registeredReviewProfiles(root || resolveRepoRoot(path.dirname(path.resolve(planFile))));
+	if (profiles.length && !gateConfigContext.getStore().selected) {
+		const base = root || resolveRepoRoot(path.dirname(path.resolve(planFile)));
+		const plan = readPlanSnapshot(planFile)?.plan;
+		const manifests = profiles.map(p => withReviewProfile(base, p.id, () => {
+			const ro = planReadOnlyScriptsBinding(plan, base);
+			if (!ro.ok) throw new Error(ro.why);
+			return [p.id, reviewInputManifest(planFile, base, { readOnlyScripts: ro.items })];
+		}));
+		return sha256(JSON.stringify(["gate-reviews/v1", manifests]));
+	}
 	const r = reviewInputEntries(planFile, root, opts);
 	if (r.problems.length) throw new Error(r.problems[0]);
 	return r.digest;
@@ -956,12 +1216,20 @@ function reviewInputManifest(planFile, root, opts = null) {
 /** 단계·선조치의 files 에 고정한 파일(감싼 스크립트 등)의 글. 검수자가 명령 바깥 글만 보고 PASS 하지 않게 한다. */
 function pinnedFilesText(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [`대상 파일 검사 실패: ${e.message}. PASS 하지 마십시오`]; }
 	const entries = [...(plan.scenario || []), ...((plan.incident && plan.incident.actions) || [])].filter((x) => x && x.files && typeof x.files === "object");
-	if (!entries.length) return [];
+	if (!entries.length && !targets.size) return [];
 	const L = ["고정 파일(명령이 읽거나 실행하는 파일, 훅이 sha 로 대조):"];
+	for (const target of targets.values()) {
+		for (const [label, digest, body] of [["before", target.before, target.beforeBody], ["after", target.after, target.afterBody]]) {
+			L.push(`- ${target.path} ${label} (sha ${digest}):`, "```", body.length > 200 * 1024 ? `${body.subarray(0, 200 * 1024).toString("utf8")}\n…(200KB 넘어 잘림: 잘린 파일은 FAIL)` : body.toString("utf8"), "```");
+		}
+	}
 	const shown = new Set();
 	for (const x of entries) {
 		for (const [p, want] of Object.entries(x.files)) {
+			if (targets.has(path.resolve(base, p))) continue;
 			const key = `${p}\0${String(want).toLowerCase()}`;
 			if (shown.has(key)) {
 				L.push(`- ${x.id} ${p} (sha ${want}): 위에 같은 sha 로 이미 실음`);
@@ -1028,15 +1296,51 @@ function reviewBodyProblems(text, sha, acceptSecurity = false, opts = null) {
 /** 리뷰 결과의 무결성·대상·작성자 분리·열 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
+	try {
+		const profiles = registeredReviewProfiles(base, true);
+		if (!profiles.length) return selectedReviewProblems(gatesDir, sha, base);
+		const results = profiles.map(p => [p.id, withReviewProfile(base, p.id, () => selectedReviewProblems(gatesDir, sha, base))]);
+		const problems = results.flatMap(([id, r]) => r.problems.map(issue => `[${id}] ${issue}`));
+		const reviewers = results.flatMap(([id, r]) => r.reviewers.map(row => ({ ...row, id: `${id}/${row.id}` })));
+		const summary = results.flatMap(([id, r]) => r.summary.map(row => ({ ...row, reviewer: `${id}/${row.reviewer}` })));
+		const manifests = results.map(([id, r]) => [id, r.input_manifest_sha256]);
+		const verifiedLists = results.map(([, result]) => result.read_only_scripts);
+		const sharedReads = problems.length ? [] : verifiedLists[0].filter(row => verifiedLists.every(items =>
+			items.some(item => item.path === row.path && item.service === row.service && item.sha256 === row.sha256 && item.script_sha256 === row.script_sha256)));
+		return { ok: !problems.length, problems, reviewers, summary, read_only_scripts: sharedReads, findings: profiles.map(p => `gates/reviews/${p.id}/deploy-plan-review-findings.md`),
+			input_manifest_sha256: problems.length ? null : sha256(JSON.stringify(["gate-reviews/v1", manifests])) };
+	} catch (error) {
+		return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null };
+	}
+}
+function selectedReviewProblems(gatesDir, sha, base) {
+	try { return singleReviewProblems(gatesDir, sha, base); }
+	catch (error) { return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null }; }
+}
+function reviewedReadOnlyScripts(gatesDir, root) {
+	if (!gateConfigContext.getStore()?.profiles) {
+		const record = readJson(path.join(gatesDir, REVIEW_FILE));
+		return record?.review_profile === undefined && Array.isArray(record?.read_only_scripts) ? record.read_only_scripts : [];
+	}
+	const snapshot = readPlanSnapshot(path.join(gatesDir, PLAN_FILE));
+	return snapshot ? (reviewProblems(gatesDir, snapshot.sha, root).read_only_scripts || []) : [];
+}
+function singleReviewProblems(gatesDir, sha, base) {
 	let MODELS;
 	try { MODELS = reviewModelsFor(base); }
 	catch (error) {
 		return { ok: false, problems: [`review_models 설정을 읽지 못함: ${error.message}`], reviewers: [], summary: [] };
 	}
-	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
-	const plan = readJson(path.join(gatesDir, PLAN_FILE));
+	const recordDir = reviewRecordDirectory(gatesDir);
+	const file = path.join(gatesDir, PLAN_FILE);
+	const profile = reviewProfileBinding(file, base);
+	const rec = readJson(profile ? resultFile(recordDir, REVIEW_FILE, true) : path.join(recordDir, REVIEW_FILE));
+	const snapshot = readPlanSnapshot(path.join(gatesDir, PLAN_FILE));
+	const plan = snapshot?.plan;
 	const problems = [];
 	const reviewers = [];
+	let manifest = null;
+	let reviewedReads = [];
 	const finish = () => {
 		if (!isRotationRecord(rec)) {
 			const author = rec?.author_model || plan?.author_model;
@@ -1046,26 +1350,34 @@ function reviewProblems(gatesDir, sha, root) {
 				}
 			}
 		}
-		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
+		return { ok: problems.length === 0, problems, reviewers, input_manifest_sha256: manifest, ...(profile && !problems.length ? { read_only_scripts: reviewedReads } : {}), summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
+	if (rec && (profile ? rec.review_profile?.id !== profile.id || rec.review_profile.scope_sha256 !== profile.scope_sha256 || rec.review_profile.policy !== profile.policy || rec.plan !== path.relative(base, file) : rec.review_profile !== undefined)) problems.push("Review record differs from the registered gate policy or plan scope");
 	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
 	if (plan) problems.push(...riskAcceptanceProblems(plan));
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
-	let roOpt = null;
+	let roOpt = profile ? { planFile: file } : null;
 	if (rec && rec.read_only_scripts !== undefined) {
 		const validRo = validateReadOnlyBindingRecords(rec.read_only_scripts);
 		if (!validRo.ok) problems.push(validRo.why);
-		else roOpt = { readOnlyScripts: validRo.items };
+		else roOpt = { planFile: file, readOnlyScripts: validRo.items };
+	}
+	if (profile && plan && rec) {
+		const current = planReadOnlyScriptsBinding(plan, base);
+		if (!current.ok || !Array.isArray(rec.read_only_scripts) || JSON.stringify(roOpt?.readOnlyScripts) !== JSON.stringify(current.items)) problems.push("Reviewed allowlist differs from the current gate policy");
+		else reviewedReads = current.items;
 	}
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, roOpt)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
 	if (!rec) { problems.push("적대 리뷰 기록 없음: " + REVIEW_FILE); return finish(); }
 	if (rec.plan_sha256 !== sha) problems.push("적대 리뷰가 지금 계획서가 아닌 판을 검수함. 계획서를 고쳤으면 다시 검수받을 것");
+	if (snapshot?.sha !== sha) problems.push("현재 계획서 sha256 이 검증 대상과 다름");
 	try {
-		if (!plan || planSha(path.join(gatesDir, PLAN_FILE)) !== sha) problems.push("현재 계획서 sha256 이 검증 대상과 다름");
-	} catch { problems.push("현재 계획서를 읽지 못함"); }
+		const inputs = reviewInputEntries(path.join(gatesDir, PLAN_FILE), base, roOpt);
+		if (inputs.planSha256 === sha) manifest = inputs.digest;
+	} catch {}
 	if (!AUTHOR_MODELS.includes(rec.author_model)) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
 	if (!plan || plan.author_model !== rec.author_model) problems.push("계획서 author_model 과 적대 리뷰 작성자가 다름");
 	if (!isRotationRecord(rec)) {
@@ -1138,7 +1450,7 @@ function reviewProblems(gatesDir, sha, root) {
 		let text = null;
 		try {
 			if (typeof r?.result === "string" && r.result) {
-				const real = resultFile(gatesDir, r.result);
+				const real = resultFile(recordDir, r.result);
 				const stat = fs.statSync(real);
 				const identity = `${stat.dev}:${stat.ino}`;
 				if (resultIdentities.has(identity)) own.push("리뷰어 결과 파일이 서로 같음(경로 별칭 포함)");
@@ -1156,9 +1468,7 @@ function reviewProblems(gatesDir, sha, root) {
 			const receipt = r.receipt;
 			if (!receipt || receipt.model !== r.model || receipt.effort !== r.effort || receipt.prompt_sha256 !== promptSha || receipt.exit_code !== 0 || !Number.isFinite(Date.parse(receipt.started_at)) || !Number.isFinite(Date.parse(receipt.ended_at)) || Date.parse(receipt.started_at) > Date.parse(receipt.ended_at) || receipt.stdout_sha256 !== sha256(parsed.body)) own.push("리뷰어 실행 영수증(모델·강도·시작·끝·종료 코드·요청문·본문 해시) 불일치");
 			// 승인에 쓰는 영수증의 manifest는 필수다. 없거나 현재 값과 다르면 승인 불가(옛 기록은 재리뷰 필요).
-			let current = null;
-			try { current = reviewInputManifest(path.join(gatesDir, PLAN_FILE), base, roOpt); } catch { current = null; }
-			if (!receipt || typeof receipt.input_manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(receipt.input_manifest_sha256) || current === null || receipt.input_manifest_sha256.toLowerCase() !== current) own.push("리뷰어 실행 영수증(input manifest) 없음 또는 불일치(없는 옛 기록은 재리뷰 필요)");
+			if (!receipt || typeof receipt.input_manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(receipt.input_manifest_sha256) || manifest === null || receipt.input_manifest_sha256.toLowerCase() !== manifest) own.push("리뷰어 실행 영수증(input manifest) 없음 또는 불일치(없는 옛 기록은 재리뷰 필요)");
 			const bodyHash = sha256(parsed.body);
 			if (bodyHashes.has(bodyHash)) own.push("두 리뷰어 결과 본문이 바이트로 같음(복사 바꿔치기)");
 			bodyHashes.add(bodyHash);
@@ -1203,21 +1513,18 @@ function saveState(env, data) {
 }
 /**
  * 상태 파일 읽고-고치고-쓰기를 한 번에 하나만. 동시 훅 두 개가 같은 단계 코드를 각각 쓰는 일을 막는다.
- * 잠금을 못 잡으면 통과가 아니라 막음이다. 60초 넘은 잠금은 죽은 훅이 남긴 것으로 보고 치운다.
+ * 디스코드 확인이 길어져도 소유 프로세스가 살아 있는 동안 잠금을 유지한다.
  */
 async function withStateLock(env, fn, waitMs = 10000) {
 	const lock = `${stateFile(env)}.lock`;
-	fs.mkdirSync(path.dirname(lock), { recursive: true });
 	const until = Date.now() + waitMs;
+	let handle;
 	for (;;) {
 		try {
-			fs.mkdirSync(lock);
+			handle = await acquirePidLock(lock, { orphanGraceMs: 120000, unverifiedMaxAgeMs: 0 });
 			break;
 		} catch (e) {
 			if (e.code !== "EEXIST") throw e;
-			try {
-				if (Date.now() - fs.statSync(lock).mtimeMs > 60000) { fs.rmdirSync(lock); continue; }
-			} catch {}
 			if (Date.now() > until) return null;
 			await new Promise((r) => setTimeout(r, 50));
 		}
@@ -1225,22 +1532,16 @@ async function withStateLock(env, fn, waitMs = 10000) {
 	try {
 		return await fn();
 	} finally {
-		try { fs.rmdirSync(lock); } catch {}
+		await handle.release();
 	}
 }
-function newCode(prefix) {
-	let s = "";
-	for (const b of crypto.randomBytes(6)) s += ALPHABET[b % ALPHABET.length];
-	return `${prefix}-${s}`;
-}
-
 // ── 디스코드 승인자 확인 ──────────────────────────────────────────
 const SNOWFLAKE = /^\d{17,20}$/;
 /**
  * 승인자 본인 디스코드 글에 code 가 있는가. 메시지는 AI 가 준 파일이 아니라 디스코드 REST 에서 직접 받는다.
  * 작성자 번호 = approverId(인스턴스 설정값), 봇·웹훅·앱 글 불인정, 글 시각은 코드 발급 뒤.
  */
-async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch, checkTimestamp = true }) {
+async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch, checkTimestamp = true, until = Infinity, messages }) {
 	const configuredId = expectedApproverId !== undefined ? expectedApproverId : approverId;
 	if (!SNOWFLAKE.test(String(approverId || "")) || !SNOWFLAKE.test(String(configuredId || ""))) {
 		return { ok: false, why: "approver-id-unset" };
@@ -1249,25 +1550,30 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 		return { ok: false, why: "approver-id-mismatch" };
 	}
 	if (typeof token !== "string" || !token) return { ok: false, why: "token-unavailable" };
-	const since = Date.parse(sinceIso) || 0;
+	const since = Date.parse(sinceIso);
+	if (checkTimestamp && !Number.isFinite(since)) return { ok: false, why: "invalid-issuance-time" };
 	for (const r of Array.isArray(refs) ? refs : []) {
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
-		let m;
-		try {
-			const res = await fetchImpl(`https://discord.com/api/v10/channels/${r.channelId}/messages/${r.messageId}`, { headers: { authorization: `Bot ${token}` }, signal: AbortSignal.timeout(8000) });
-			if (!res || !res.ok) continue;
-			m = await res.json();
-		} catch {
-			continue;
+		const key = `${r.channelId}/${r.messageId}`;
+		let m = messages?.get(key);
+		if (!m) {
+			try {
+				const res = await fetchImpl(`https://discord.com/api/v10/channels/${r.channelId}/messages/${r.messageId}`, { headers: { authorization: `Bot ${token}` }, signal: AbortSignal.timeout(8000) });
+				if (!res?.ok) continue;
+				m = await res.json();
+				messages?.set(key, m);
+			} catch { continue; }
 		}
 		if (!m || String(m.id) !== String(r.messageId)) continue;
 		if (m.channel_id !== undefined && String(m.channel_id) !== String(r.channelId)) continue;
 		const a = m.author || {};
 		if (String(a.id || "") !== String(approverId) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
-		if (!String(m.content || "").includes(code)) continue;
-		const at = Date.parse(m.timestamp || "");
-		if (checkTimestamp && (!Number.isFinite(at) || at < since)) continue;
-		return { ok: true, at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
+		if (!containsApprovalCode(m.content, code)) continue;
+		const at = m.edited_timestamp ?? m.timestamp;
+		const posted = Date.parse(m.timestamp);
+		const contentAt = Date.parse(at);
+		if (checkTimestamp && (!Number.isFinite(posted) || posted < since || !Number.isFinite(contentAt) || contentAt < posted || contentAt >= until)) continue;
+		return { ok: true, at, via: `discord:${r.channelId}/${r.messageId}` };
 	}
 	return { ok: false, why: "no-discord-confirmation" };
 }
@@ -1297,8 +1603,10 @@ async function loadDiscordToken(repoRoot) {
 }
 
 /** 사람 확인: 대화창 입력 또는 승인자 디스코드 글. */
-async function humanConfirmed(code, sinceIso, ctx) {
-	const typed = humanTyped(ctx.transcriptPath, code, sinceIso);
+async function humanConfirmed(row, plan, ctx) {
+	const { code, createdAt: sinceIso } = row;
+	const until = approvalExpiresAt(row, plan);
+	const typed = humanTyped(ctx.transcriptPath, code, sinceIso, { sessionId: ctx.sessionId, until });
 	if (typed.ok) return { ok: true, at: typed.at, via: "terminal" };
 	const refsFile = path.join(ctx.gatesDir, DISCORD_FILE);
 	const refs = readJson(refsFile);
@@ -1308,7 +1616,7 @@ async function humanConfirmed(code, sinceIso, ctx) {
 	const expectedApproverId = gateCfg?.approver?.discordUserId !== undefined ? gateCfg.approver.discordUserId : ctx.approverId;
 	const approverId = ctx.approverId !== undefined ? ctx.approverId : expectedApproverId;
 	const token = ctx.discordToken !== undefined ? ctx.discordToken : await loadDiscordToken(ctx.repoRoot);
-	const d = await discordConfirms({ code, sinceIso, refs: list, approverId, expectedApproverId, token, fetchImpl: ctx.fetchImpl });
+	const d = await discordConfirms({ code, sinceIso, until, refs: list, approverId, expectedApproverId, token, fetchImpl: ctx.fetchImpl, messages: ctx.messages });
 	return d.ok ? d : { ok: false, why: d.why };
 }
 
@@ -1404,8 +1712,103 @@ function reportPending(state, sha, gatesDir) {
  * sha 불일치)는 state 표시만으로 연장되지 않고 2시간 그대로다.
  */
 function stepCodeTtlMs(challenge, plan) {
-	if (challenge && challenge.preapprove && plan && plan.approval_mode === "preapprove_steps") return PREAPPROVE_STEP_TTL_MS;
+	if (challenge?.preapprove === true && plan?.approval_mode === "preapprove_steps") return PREAPPROVE_STEP_TTL_MS;
 	return STEP_CODE_TTL_MS;
+}
+
+function approvalExpiresAt(row, plan) {
+	return isoMs(row.createdAt) + (row.kind === "plan" ? PLAN_APPROVAL_TTL_MS : stepCodeTtlMs(row, plan));
+}
+
+function knownApprovalSession(sessionId) {
+	return typeof sessionId === "string" && sessionId.trim().length > 0 && sessionId.trim() !== "unknown" && !/[\x00-\x1f\x7f]/.test(sessionId);
+}
+
+// Compute this from the reviewed plan and the session that is actually running.
+// Only SHA-256 commitments are stored alongside the ordinary searchable fields.
+function approvalScope({ root, file, plan, sha, manifest, sessionId }, step = null) {
+	const kind = step ? "step" : "plan";
+	const rel = path.relative(root, file);
+	const commands = step ? step.commands : [plan.scenario, plan.incident.actions].map(
+		(entries) => entries.map((entry) => [entry.id, entry.commands])
+	);
+	const scopeSha = sha256(JSON.stringify([
+		"naia/deploy-approval-scope/v1", fs.realpathSync(root), rel, sha, manifest, sessionId, kind, step?.id ?? null, commands,
+	]));
+	return { kind, plan: rel, planSha: sha, sessionId, step: step?.id ?? null, scopeSha };
+}
+
+function issuedApprovalCode(scope, request) {
+	const hash = sha256(JSON.stringify([
+		"naia/deploy-approval-request/v1", scope.scopeSha, request.nonce, request.createdAt, request.preapprove === true,
+	]));
+	return `${scope.kind.toUpperCase()}-${hash.toUpperCase()}`;
+}
+
+function sameScope(row, scope) {
+	return row && Object.keys(scope).every((key) => row[key] === scope[key]);
+}
+
+function matchesIssuedApproval(row, scope) {
+	return sameScope(row, scope) && !row.readonly && !row.riskAccepted
+		&& typeof row.nonce === "string" && /^[0-9a-f]{32}$/.test(row.nonce)
+		&& Number.isFinite(isoMs(row.createdAt))
+		&& (row.preapprove === undefined || row.preapprove === true)
+		&& (scope.kind !== "step" || Array.isArray(row.executed))
+		&& row.code === issuedApprovalCode(scope, row);
+}
+
+// Call under withStateLock. A missing, stale, spent or unverified request gets
+// a fresh nonce. Only the complete resulting code in a human reply authorizes it.
+function activeApproval(state, scope, plan, now, { preapproveCommands, commandSha } = {}) {
+	const prior = state.challenges.findLast((row) => row?.scopeSha === scope.scopeSha && !row.closed && !row.readonly);
+	const createdAt = new Date(now).toISOString();
+	if (prior) {
+		if (matchesIssuedApproval(prior, scope) && now >= isoMs(prior.createdAt) && now < approvalExpiresAt(prior, plan)
+			&& !(commandSha && prior.executed.includes(commandSha))
+			&& !(preapproveCommands && !prior.preapprove)
+			&& !preapproveCommands?.every((command) => prior.executed.includes(sha256(command)))) return prior;
+		prior.closed = createdAt;
+	}
+	const row = { ...scope, nonce: crypto.randomBytes(16).toString("hex"), createdAt };
+	if (scope.kind === "step") row.executed = [];
+	if (preapproveCommands) row.preapprove = true;
+	row.code = issuedApprovalCode(scope, row);
+	state.challenges.push(row);
+	return row;
+}
+
+function stillReadOnly(request, entry, command, cwd) {
+	if (typeof cwd !== "string" || !path.isAbsolute(cwd)) return false;
+	const { classifyProdMutations } = require("./deploy-command-classifier.js");
+	const { assessReadiness } = require("./deploy-readiness.js");
+	const hits = classifyProdMutations(command, cwd, 0, false, request.root);
+	if (hits.some((hit) => hit.unclassified)) return false;
+	const services = hits.length ? [...new Set(hits.map((hit) => hit.service))] : request.plan.services;
+	const planBinding = { plan: request.plan, entry, command, cwd, gatesDir: path.dirname(request.file) };
+	const result = assessReadiness(services, { root: request.root, command, cwd, planBinding });
+	return result.ok && result.readOnlyNoCode === true;
+}
+
+// Historical bookkeeping only counts for the current scope. Recheck the human
+// evidence for writes and the reviewed read-only exemption for each read.
+async function stepCommandsComplete(state, request, step, evidence, current) {
+	const scope = approvalScope(request, step);
+	const missing = new Map(step.commands.map((command) => [sha256(command), command]));
+	for (const row of state.challenges) {
+		if (!sameScope(row, scope) || !Array.isArray(row.executed)) continue;
+		const included = new Set(row.executed.filter((hash) => missing.has(hash)));
+		if (!included.size) continue;
+		if (row.readonly === true && row.code === null) {
+			for (const hash of included) {
+				if (stillReadOnly(request, step, missing.get(hash), row.cwd)) missing.delete(hash);
+			}
+		} else if (row === current || (matchesIssuedApproval(row, scope) && (await humanConfirmed(row, request.plan, evidence)).ok)) {
+			for (const hash of included) missing.delete(hash);
+		}
+		if (!missing.size) return true;
+	}
+	return false;
 }
 
 /**
@@ -1418,50 +1821,40 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 	const abs = path.resolve(planFile);
 	const base = root ? path.resolve(root) : resolveRepoRoot(path.dirname(abs));
 	const gatesDir = path.dirname(abs);
-	const plan = readJson(abs);
-	if (!plan) return { ok: false, why: "계획서를 읽지 못함" };
-	const sha = planSha(abs);
+	if (!knownApprovalSession(sessionId)) return { ok: false, why: "승인 세션 ID가 필요합니다" };
+	const snapshot = readPlanSnapshot(abs);
+	if (!snapshot) return { ok: false, why: "계획서를 읽지 못함" };
+	const { plan, sha } = snapshot;
 	const form = formProblems(plan);
 	if (form.length) return { ok: false, why: "양식: " + form[0] };
 	if (plan.approval_mode !== "preapprove_steps") return { ok: false, why: 'approval_mode "preapprove_steps" 없음' };
 	const review = reviewProblems(gatesDir, sha, base);
 	if (!review.ok) return { ok: false, why: "리뷰: " + review.problems[0] };
-	let manifest = null;
-	try { manifest = reviewInputManifest(abs, base); } catch (e) { return { ok: false, why: "핀: " + (e && e.message ? e.message : e) }; }
+	const manifest = review.input_manifest_sha256;
 	const made = await withStateLock(env, () => {
+		if (readPlanSnapshot(abs)?.sha !== sha) return { ok: false, why: "발급 중 계획서가 변경되었습니다" };
+		if (registeredReviewProfiles(base).length) {
+			const current = reviewProblems(gatesDir, sha, base);
+			if (!current.ok || current.input_manifest_sha256 !== manifest) return { ok: false, why: "Registered gate review changed while issuing approval codes" };
+		}
 		const state = loadState(env);
-		const fresh = (c) => c && c.planSha === sha && c.sessionId === sessionId && !c.closed;
-		let planCh = state.challenges.filter((c) => c.kind === "plan" && fresh(c) && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
-		if (!planCh) {
-			planCh = { kind: "plan", code: newCode("PLAN"), planSha: sha, plan: path.relative(base, abs), sessionId, createdAt: new Date(now).toISOString() };
-			state.challenges.push(planCh);
-		}
-		const steps = [];
-		for (const s of plan.scenario || []) {
-			let stepCh = state.challenges.filter((c) => c.kind === "step" && c.step === s.id && fresh(c) && now - Date.parse(c.createdAt) < stepCodeTtlMs(c, plan)).pop();
-			if (!stepCh) {
-				stepCh = { kind: "step", code: newCode("STEP"), planSha: sha, step: s.id, sessionId, createdAt: new Date(now).toISOString(), executed: [], preapprove: true };
-				state.challenges.push(stepCh);
-			}
-			steps.push({ step: s.id, code: stepCh.code });
-		}
+		const request = { root: base, file: abs, plan, sha, manifest, sessionId };
+		const planCh = activeApproval(state, approvalScope(request), plan, now);
+		const steps = plan.scenario.map((step) => {
+			const row = activeApproval(state, approvalScope(request, step), plan, now, { preapproveCommands: step.commands });
+			return { step: step.id, code: row.code };
+		});
 		saveState(env, state);
-		return { ok: true, plan: path.relative(base, abs), plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review };
+		return { ok: true, plan: planCh.plan, plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review, report: renderReport(plan, sha, review) };
 	});
 	return made || { ok: false, why: "상태 잠금 실패" };
 }
 
 const CRITERIA_TEXT = Object.fromEntries(CRITERIA);
-// 보고문의 명령은 자르지 않는다. 앞부분만 보이고 뒤에 붙은 절이 승인자 눈에 안 띄는 일을 막는다.
-// 줄바꿈만 " ⏎ " 로 보여 한 줄로 둔다(해시는 공백 정규화 전문에 걸림).
-function fullCommand(c) {
-	return String(c).replace(/\r?\n/g, " ⏎ ").replace(/[ \t]+/g, " ");
-}
-
 /** 승인 보고 양식 그대로, 짧게. */
 function renderReport(plan, sha, review) {
 	const L = [];
-	L.push(`[운영 배포 승인 요청] ${plan.planId}  (계획서 sha ${sha.slice(0, 12)})`);
+	L.push(`[운영 배포 승인 요청] ${plan.planId}  (계획서 sha ${sha})`);
 	L.push(`무엇을 왜: ${plan.what_why}`);
 	if (plan.architecture_fit && typeof plan.architecture_fit === "object") {
 		L.push(`최초 요구: ${plan.architecture_fit.original_request || ""}`);
@@ -1475,8 +1868,13 @@ function renderReport(plan, sha, review) {
 	L.push("시나리오:");
 	for (const s of plan.scenario || []) {
 		L.push(`  ${s.id}${s.branch ? " (되돌리기 갈림길)" : ""}. ${s.title}`);
-		for (const c of s.commands || []) L.push(`     명령 sha ${commandHash(c).slice(0, 12)}: ${fullCommand(c)}`);
+		for (const c of s.commands || []) L.push(`     명령 sha ${sha256(c).slice(0, 12)}: ${JSON.stringify(c)}`);
 		for (const [p, h] of Object.entries(s.files || {})) L.push(`     고정 파일 ${p} sha ${String(h).slice(0, 12)}`);
+		for (const pin of targetDeclarations(plan)) {
+			const transition = pin?.transitions?.[s.id];
+			if (!transition) continue;
+			L.push(`     대상 ${pin.path} 시작 지문 ${pin[transition.to === "after" ? "before" : "after"]} → 완료 지문 ${pin[transition.to]}`);
+		}
 		L.push(`     성공 확인: ${s.success_check}`, `     실패 시: ${s.on_failure}`);
 	}
 	L.push(`위험: ${(plan.risks?.items || []).join(" / ")}`, `최악의 경우: ${plan.risks?.worst_case}`);
@@ -1486,9 +1884,9 @@ function renderReport(plan, sha, review) {
 	L.push(`성공 확인: ${plan.success_verification}`);
 	L.push(`되돌리기: ${plan.rollback?.method} (소요 ${plan.rollback?.duration})`);
 	L.push(`장애 판단 기준: ${(plan.incident?.criteria || []).join(" / ")}`);
-	for (const a of plan.incident?.actions || []) L.push(`장애 시 선조치 ${a.id}: ${a.why_safe}`, ...(a.commands || []).map((c) => `     명령 sha ${commandHash(c).slice(0, 12)}: ${fullCommand(c)}`));
+	for (const a of plan.incident?.actions || []) L.push(`장애 시 선조치 ${a.id}: ${a.why_safe}`, ...(a.commands || []).map((c) => `     명령 sha ${sha256(c).slice(0, 12)}: ${JSON.stringify(c)}`));
 	L.push("남은 위험(승인하면 책임지는 것):", ...(plan.residual_risks || []).map((r) => `  - ${r}`));
-	if (review) L.push(`적대 리뷰: ${review.summary.map((s) => `${s.reviewer}/${s.id} ${s.verdict}`).join(", ")}; 남은 지적 0; 참고 지적 ${(review.reviewers || []).reduce((n, r) => n + (r.advisoryFindings || 0), 0)}건(차단 아님, gates/deploy-plan-review-findings.md)`);
+	if (review) L.push(`적대 리뷰: ${review.summary.map((s) => `${s.reviewer}/${s.id} ${s.verdict}`).join(", ")}; 남은 지적 0; 참고 지적 ${(review.reviewers || []).reduce((n, r) => n + (r.advisoryFindings || 0), 0)}건(차단 아님, ${(review.findings || ["gates/deploy-plan-review-findings.md"]).join(", ")})`);
 	return L.join("\n");
 }
 
@@ -1556,8 +1954,12 @@ async function evaluate(ctx) {
 	const { canonicalTargetPath } = require("./deploy-readiness.js");
 	const pinned = new Map();
 	const pinnedCanonical = new Map();
+	let targets;
+	try { targets = verifyTargetPreconditions(f.plan, fileBase, entry); } catch (e) {
+		return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel }, reason: `대상 파일 검사 실패: ${e.message}` };
+	}
 	for (const [p, h] of Object.entries(entry.files || {})) {
-		const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(fileBase, p);
+		const abs = path.resolve(fileBase, p);
 		const low = String(h).toLowerCase();
 		pinned.set(abs, low);
 		pinnedCanonical.set(canonicalTargetPath(abs, fileBase), low);
@@ -1566,6 +1968,7 @@ async function evaluate(ctx) {
 	const unpinned = refs.filter((r) => {
 		const abs = path.resolve(r.path);
 		const can = canonicalTargetPath(abs, ctx.cwd || fileBase);
+		if (targets.has(can)) return abs !== can || pinned.get(abs) !== r.sha;
 		return pinned.get(abs) !== r.sha && pinnedCanonical.get(can) !== r.sha;
 	});
 	// 글자에 나타나지 않는 도움 파일도 전부 실물과 대조한다. 같은 해시의 다른 경로는 대신할 수 없다.
@@ -1609,13 +2012,42 @@ async function evaluate(ctx) {
 			"긴급 되돌리기는 kind rollback, 설정만 바꾸는 명령(환경 변수·복제 수·재시작·리비전 끄기)과 VM·컨테이너 안 조회·진단은 kind ops(reason 한 줄)로 적습니다. 배포 스크립트처럼 코드를 올리는 명령은 ops 가 될 수 없습니다. 승인자에게 붙여 넣을 명령을 넘기지 마십시오.",
 		].join("\n") };
 		facts = (r && r.facts) || [];
-		readOnlyNoCode = !!(r && r.readOnlyNoCode === true);
+		readOnlyNoCode = !!(r && r.readOnlyNoCode === true) && ![...targets.keys()].some(file => pinned.has(file))
+			&& !gateConfigContext.getStore()?.profiles?.some(profile => profile.strictDefaults);
 	}
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];
+	if (!knownApprovalSession(ctx.sessionId)) return { allow: false, audit: { event: "blocked-approval-session", plan: rel }, reason: "[Harness] 승인 요청을 이 실행에 연결할 세션 ID가 필요합니다." };
 
 	const warnings = formWarnings(f.plan);
-	const locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode }));
+	const locked = await withStateLock(env, async () => {
+		const state = loadState(env);
+		const { expiresAt, ...decision } = await approvalFlow({ ctx, state, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode });
+		if (readPlanSnapshot(f.file)?.sha !== f.sha) return { allow: false, audit: { event: "blocked-plan-changed", plan: rel }, reason: "[Harness] 승인 확인 중 계획서가 변경되었습니다. 현재 계획서로 다시 요청하십시오." };
+		if (decision.allow) {
+			// Discord and prior-step checks can take time. Commit the dispatch only
+			// while the reviewed inputs and the human authorizations are still valid.
+			const checked = reviewProblems(f.gatesDir, f.sha, ctx.root);
+			if (!checked.ok || checked.input_manifest_sha256 !== review.input_manifest_sha256) return { allow: false, audit: { event: "blocked-plan-review", plan: rel }, reason: "[Harness] 승인 확인 중 검수 입력이 변경되었습니다. 현재 계획서를 다시 검수하십시오." };
+			if (readOnlyNoCode) {
+				const ready = ctx.readiness({ plan: f.plan, entry, command: ctx.command, cwd: ctx.cwd || ctx.root, gatesDir: f.gatesDir });
+				if (!ready?.ok || ready.readOnlyNoCode !== true) return { allow: false, audit: { event: "blocked-not-ready", plan: rel }, reason: "[Harness] 읽기 전용 대본의 승인 예외를 다시 확인할 수 없습니다." };
+			}
+			if (f.plan.file_pins !== undefined) {
+				try {
+					verifyTargetPreconditions(f.plan, fileBase, entry);
+					if (decision.audit.event === "incident-action-executed" && f.action !== entry) {
+						verifyTargetPreconditions(f.plan, fileBase, f.action);
+					}
+				} catch (error) {
+					return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel }, reason: error.message };
+				}
+			}
+			if (expiresAt !== undefined && (ctx.now ?? Date.now()) >= expiresAt) return { allow: false, audit: { event: "blocked-approval-expired", plan: rel }, reason: "[Harness] 승인 확인 중 코드가 만료되었습니다. 새 코드로 다시 승인받으십시오." };
+		}
+		saveState(env, state);
+		return decision;
+	});
 	if (locked) {
 		if (warnings.length) {
 			locked.audit = { ...(locked.audit || {}), warnings };
@@ -1626,26 +2058,22 @@ async function evaluate(ctx) {
 	return { allow: false, audit: { event: "blocked-state-lock", plan: rel }, reason: "[Harness] 승인 상태 파일 잠금을 잡지 못해 막습니다(다른 운영 명령 판정이 진행 중). 잠시 뒤 다시 실행하십시오." };
 }
 
-async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode = false }) {
-	const state = loadState(env);
-	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
+async function approvalFlow({ ctx, state, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode = false }) {
+	const request = { root: ctx.root, file: f.file, plan: f.plan, sha: f.sha, manifest: review.input_manifest_sha256, sessionId: ctx.sessionId };
+	const ctxH = { transcriptPath: ctx.transcriptPath, sessionId: ctx.sessionId, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken, messages: new Map() };
 
 	// 전체 계획 승인 (검수 통과한 읽기 전용 고정 ops 대본은 사람 승인 코드 단계를 건너뜀)
 	let planCh = null;
 	let planOk = null;
 	if (!readOnlyNoCode) {
-		planCh = state.challenges.filter((c) => c.kind === "plan" && c.planSha === f.sha && c.sessionId === ctx.sessionId && !c.riskAccepted && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
-		if (!planCh) {
-			planCh = { kind: "plan", code: newCode("PLAN"), planSha: f.sha, plan: rel, sessionId: ctx.sessionId, createdAt: new Date(now).toISOString() };
-			state.challenges.push(planCh);
-			saveState(env, state);
-		}
-		planOk = await humanConfirmed(planCh.code, planCh.createdAt, ctxH);
+		planCh = activeApproval(state, approvalScope(request), f.plan, now);
+		planOk = await humanConfirmed(planCh, f.plan, ctxH);
 		if (!planOk.ok) {
 			return { allow: false, audit: { event: "plan-approval-requested", plan: rel, plan_sha256: f.sha }, reason: [
 				"[Harness] 전체 계획 승인이 아직 없습니다. 아래 승인 보고 양식을 그대로 승인자에게 올리십시오(대화창 또는 디스코드).",
 				"",
 				renderReport(f.plan, f.sha, review),
+				`승인 세션: ${ctx.sessionId} / 계획서: ${f.file}`,
 				...factLines,
 				"",
 				`승인 코드: ${planCh.code}  — 승인자가 대화창에 직접 치거나, 디스코드에 본인 글로 남기면(글 위치를 gates/${DISCORD_FILE} 에 적음) 이 계획 전체가 승인됩니다. 승인은 책임 수용입니다.`,
@@ -1658,7 +2086,6 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	// 앞 장애 선조치 보고가 없으면 다음 선조치도 다음 단계도 못 한다.
 	const pending = reportPending(state, f.sha, f.gatesDir);
 	if (pending) {
-		saveState(env, state);
 		return { allow: false, audit: { event: "blocked-incident-report-pending", plan: rel }, reason: `[Harness] 장애 선조치(${pending.action}, ${pending.at}) 보고가 아직 없습니다. gates/deploy-incident-report-*.md 를 먼저 쓰고 승인자에게 보고하십시오.` };
 	}
 
@@ -1667,29 +2094,19 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		const v = verdictEarly.ok ? verdictEarly : incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now, ctx.root);
 		if (v.ok) {
 			state.incidents.push({ planSha: f.sha, plan: rel, action: f.action.id, command_sha256: h, at: new Date(now).toISOString(), judge: v.judge });
-			saveState(env, state);
-			return { allow: true, audit: { event: "incident-action-executed", plan: rel, plan_sha256: f.sha, action: f.action.id, judge: v.judge, verdict_file: v.file, approved_by: "plan-approval+independent-incident-verdict" }, notice: `장애 선조치 ${f.action.id} 실행. 실행 직후 gates/deploy-incident-report-*.md 로 보고(무슨 일·한 조치·지금 상태·다음 선택지)하십시오. 보고 전에는 다음 단계 승인을 받을 수 없습니다.` };
+			return { allow: true, expiresAt: approvalExpiresAt(planCh, f.plan), audit: { event: "incident-action-executed", plan: rel, plan_sha256: f.sha, action: f.action.id, judge: v.judge, verdict_file: v.file, approved_by: "plan-approval+independent-incident-verdict" }, notice: `장애 선조치 ${f.action.id} 실행. 실행 직후 gates/deploy-incident-report-*.md 로 보고(무슨 일·한 조치·지금 상태·다음 선택지)하십시오. 보고 전에는 다음 단계 승인을 받을 수 없습니다.` };
 		}
 		if (!f.step) return { allow: false, audit: { event: "blocked-incident-unverified", plan: rel, why: v.why }, reason: ["[Harness] 장애 선조치 명령이지만 독립 장애 판정이 없습니다.", `- ${v.why}`, "", "실행 세션이 스스로 장애라고 판단할 수 없습니다. node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <확인 결과·헬스·오류 로그> 로 다른 세션 판정을 받으십시오. 개발로 판정되면 멈추고 보고하십시오."].join("\n") };
 	}
 
 	// 단계 실행
-	saveState(env, state);
 	const steps = f.plan.scenario;
 	const idx = steps.indexOf(f.step);
-	const st2 = loadState(env);
+	const scope = approvalScope(request, f.step);
+	const commandSha = sha256(ctx.command);
 	if (f.step.branch !== "rollback") {
 		for (const prev of steps.slice(0, idx).filter((s) => s.branch !== "rollback")) {
-			const prevCmdHashes = (prev.commands || []).map((c) => commandHash(c));
-			const prevChallenges = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === prev.id && c.sessionId === ctx.sessionId);
-			const executedHashes = new Set();
-			let prevStatusExecuted = false;
-			for (const c of prevChallenges) {
-				if (c.status === "executed") prevStatusExecuted = true;
-				for (const eh of c.executed || []) executedHashes.add(eh);
-			}
-			const allPrevCommandsExecuted = prevCmdHashes.length > 0 && prevCmdHashes.every((ch) => executedHashes.has(ch));
-			if (!prevStatusExecuted || !allPrevCommandsExecuted) {
+			if (!await stepCommandsComplete(state, request, prev, ctxH)) {
 				const why = `${prev.id} 단계가 실제 실행(executed)되지 않음`;
 				return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why }, reason: ["[Harness] 앞 단계가 실제 실행(executed)되지 않아 다음 단계로 넘어갈 수 없습니다.", `- ${why}`, "", `앞 단계(${prev.id}) 명령을 계획서에 적힌 글자 그대로 먼저 실행하고(단계 승인을 거쳐야 실행 기록이 남습니다) 성공 확인(step-ok) 증거를 남기십시오.`, "글자를 덧붙여 돌린 실행이나 step-ok 기록만으로는 실행한 것으로 치지 않습니다."].join("\n") };
 			}
@@ -1700,43 +2117,30 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 	if (readOnlyNoCode) {
 		const isoNow = new Date(now).toISOString();
-		let roCh = st2.challenges.find((c) => c.kind === "step" && c.readonly === true && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId);
+		const cwd = ctx.cwd || ctx.root;
+		let roCh = state.challenges.find((row) => sameScope(row, scope) && row.readonly === true && row.code === null && row.cwd === cwd && Array.isArray(row.executed));
 		if (!roCh) {
-			roCh = { kind: "step", readonly: true, code: null, planSha: f.sha, step: f.step.id, sessionId: ctx.sessionId, createdAt: isoNow, approvedAt: isoNow, approvedVia: "readonly-no-code", status: "executed", executedAt: isoNow, executed: [h], closed: isoNow };
-			st2.challenges.push(roCh);
-		} else {
-			if (!(roCh.executed || []).includes(h)) roCh.executed = [...(roCh.executed || []), h];
-			roCh.status = "executed";
-			roCh.executedAt = isoNow;
+			roCh = { ...scope, readonly: true, code: null, cwd, createdAt: isoNow, approvedAt: isoNow, approvedVia: "readonly-no-code", status: "executed", executed: [], closed: isoNow };
+			state.challenges.push(roCh);
 		}
-		saveState(env, st2);
+		if (!roCh.executed.includes(commandSha)) roCh.executed.push(commandSha);
+		roCh.executedAt = isoNow;
 		return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, approved_by: "readonly-no-code", readonly: true } };
 	}
 
-	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
-	if (stepCh && (stepCh.executed || []).includes(h)) {
-		stepCh.closed = new Date(now).toISOString();
-		stepCh = null;
-	}
-	const stepTtl = stepCodeTtlMs(stepCh, f.plan);
-	if (stepCh && !stepCh.approvedAt && now - Date.parse(stepCh.createdAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
-	if (stepCh && stepCh.approvedAt && now - Date.parse(stepCh.approvedAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
-	if (!stepCh) {
-		stepCh = { kind: "step", code: newCode("STEP"), planSha: f.sha, step: f.step.id, sessionId: ctx.sessionId, createdAt: new Date(now).toISOString(), executed: [] };
-		st2.challenges.push(stepCh);
-		saveState(env, st2);
-	}
+	const stepCh = activeApproval(state, scope, f.plan, now, { commandSha });
 	// 단계 승인은 상태 파일에 적힌 approvedAt 을 믿지 않고 실행할 때마다 사람 입력(대화 기록·디스코드)을 다시 확인한다.
 	{
-		const ok = await humanConfirmed(stepCh.code, stepCh.createdAt, ctxH);
+		const ok = await humanConfirmed(stepCh, f.plan, ctxH);
 		if (!ok.ok) {
 			const prev = steps.slice(0, idx).filter((s) => s.branch !== "rollback").pop();
 			const prevOut = prev ? stepSuccessSummary(f.gatesDir, prev.id) : null;
 			return { allow: false, audit: { event: "step-approval-requested", plan: rel, step: f.step.id }, reason: [
 				`[Harness] 단계 승인 필요: ${f.plan.planId} / ${f.step.id}${f.step.branch ? " (되돌리기 갈림길)" : ""}. ${f.step.title}`,
+				`승인 세션: ${ctx.sessionId} / 계획서: ${f.file} / sha ${f.sha}`,
 				...(prev ? [`앞 단계 ${prev.id} 성공 확인:`, ...(prevOut ? prevOut.split("\n").map((l) => `  ${l}`) : ["  (증거 요약 없음)"])] : []),
 				"이 단계 명령:",
-				...f.step.commands.map((c) => `  sha ${commandHash(c).slice(0, 12)}: ${fullCommand(c)}`),
+				...f.step.commands.map((c) => `  sha ${sha256(c).slice(0, 12)}: ${JSON.stringify(c)}`),
 				`성공 확인: ${f.step.success_check}`,
 				`실패 시: ${f.step.on_failure}`,
 				"",
@@ -1746,21 +2150,16 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 				...hostNote,
 			].join("\n") };
 		}
-		if (!stepCh.approvedAt) stepCh.approvedAt = new Date(now).toISOString();
+		stepCh.approvedAt = ok.at;
 		stepCh.approvedVia = ok.via;
 	}
-	stepCh.executed = [...(stepCh.executed || []), h];
-	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
-	const allExecutedForStep = new Set();
-	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
-		for (const eh of c.executed || []) allExecutedForStep.add(eh);
-	}
-	if (stepCmdHashes.length > 0 && stepCmdHashes.every((ch) => allExecutedForStep.has(ch))) {
+	stepCh.executed.push(commandSha);
+	if (await stepCommandsComplete(state, request, f.step, ctxH, stepCh)) {
 		stepCh.status = "executed";
 		stepCh.executedAt = new Date(now).toISOString();
 	}
-	saveState(env, st2);
-	return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(stepCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${stepCh.approvedVia})` } };
+	const expiresAt = Math.min(approvalExpiresAt(planCh, f.plan), approvalExpiresAt(stepCh, f.plan));
+	return { allow: true, expiresAt, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(stepCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${stepCh.approvedVia})` } };
 }
 
 const TEMPLATE = {
@@ -2179,7 +2578,7 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 	const realTarget = realPathLooseForLock(targetPath);
 	const rel = path.relative(realRepo, realTarget).replace(/\\/g, "/");
 	if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) return false;
-	const m = rel.match(/^(?:\.agents\/progress\/[^/]+\/gates|gates)\/([^/]+)$/);
+	const m = rel.match(/^(?:\.agents\/progress\/[^/]+\/gates|gates)\/(?:reviews\/[a-z][a-z0-9_-]{0,63}\/)?([^/]+)$/);
 	if (!m) return false;
 	const base = m[1];
 	if (base === PLAN_FILE || base === "deploy.json" || base === DISCORD_FILE) return false;
@@ -2192,5 +2591,7 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	targetPins, verifyTargetPreconditions, verifyTargetResults,
+	readPlanSnapshot, approvalScope, matchesIssuedApproval,
+	withStateLock, withGateConfig, selectedReviewProblems, reviewedReadOnlyScripts, registeredReviewProfileIds, withReviewProfile, reviewProfileBinding, reviewRecordDirectory, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

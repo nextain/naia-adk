@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { approvalCodePair } from '@naia-adk/core/approval-codes.mjs'
 import type { ServerResponse } from 'node:http'
 import { MessengerStore, MAX_LIST_LIMIT, approvalDocWarning } from '../messenger-store.js'
 import { MessengerWatch } from '../messenger-watch.js'
@@ -145,9 +146,9 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     watch.onMessage(message)
     const result = store.message(message.id,actor(req))!
     publish('message',result)
-    const codes = result.body.match(/\b(PLAN-[A-Z0-9]{6})\s+(STEP-[A-Z0-9]{6})\b/)
+    const codes = approvalCodePair(result.body)
     if (codes && !result.approval) {
-      const form = store.db.prepare('SELECT a.message_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.channel_id=? AND m.author_id=? AND m.author_kind=? AND a.plan_code=? AND a.step_code=? ORDER BY m.id DESC LIMIT 1').get(result.channel_id,result.author_id,result.author_kind,codes[1],codes[2])
+      const form = store.db.prepare('SELECT a.message_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.channel_id=? AND m.author_id=? AND m.author_kind=? AND a.plan_code=? AND a.step_code=? ORDER BY m.id DESC LIMIT 1').get(result.channel_id,result.author_id,result.author_kind,...codes)
       if (form) publish('approval',store.message(String(form.message_id),actor(req)))
     }
     return result

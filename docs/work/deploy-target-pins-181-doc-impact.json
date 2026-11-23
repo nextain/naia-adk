@@ -1,0 +1,18 @@
+{
+  "work": "deploy-target-pins-181",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Documents the target declaration, step preimages and postimage checks."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Explains how to validate an applied result, retry from matching inputs, or review recovery from a partial change."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Explains how target preimages, observed postimages and pre-execution approval support different decisions."
+  }
+}

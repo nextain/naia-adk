@@ -181,7 +181,7 @@ export function ApprovalCard({
       )}
       {form.code && (
         <div className="mt-3 flex items-center gap-2">
-          <code data-testid="approval-code" className="px-2 py-1 rounded bg-neutral-950 border border-neutral-800 font-mono text-xs text-neutral-200">
+          <code data-testid="approval-code" className="min-w-0 break-all px-2 py-1 rounded bg-neutral-950 border border-neutral-800 font-mono text-xs text-neutral-200">
             {form.code}
           </code>
         </div>

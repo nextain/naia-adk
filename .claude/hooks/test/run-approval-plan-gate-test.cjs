@@ -15,6 +15,7 @@ const { assessReadiness } = require("../lib/deploy-readiness.js");
 const { classifyProdMutations } = require("../lib/deploy-command-classifier.js");
 
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const ISSUED_APPROVAL_CODE = /\b(?:PLAN|STEP)-[0-9A-F]{64}\b/;
 
 function makeWorkspace(t) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sample-approval-plan-gate-test-"));
@@ -311,7 +312,7 @@ test("3a. 64KB 넘는 승인 양식도 잘리지 않고 JSON 으로 끝까지 �
 	const d = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath });
 	assert.ok(Buffer.byteLength(JSON.stringify(d)) > 65536, "시험 출력이 64KB 를 넘어야 함");
 	assert.equal(d.decision, "block");
-	assert.match(d.reason, /승인 코드:\s*PLAN-[A-Z0-9]{6}/);
+	assert.match(d.reason, /승인 코드:\s*PLAN-[0-9A-F]{64}/);
 });
 
 test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blocked and issues code)", (t) => {
@@ -325,7 +326,7 @@ test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blo
 	assert.ok(d1);
 	assert.equal(d1.decision, "block");
 	assert.match(d1.reason, /전체 계획 승인이 아직 없습니다/);
-	const planCodeMatch = d1.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	const planCodeMatch = d1.reason.match(/승인 코드:\s*(PLAN-[0-9A-F]{64})/);
 	assert.ok(planCodeMatch, "PLAN 승인 코드가 발급되어야 함");
 
 	// 2) PLAN 코드만 입력하고 STEP 코드가 없을 때: 단계 승인 필요로 차단되고 STEP 코드 발급
@@ -334,7 +335,7 @@ test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blo
 	assert.ok(d2);
 	assert.equal(d2.decision, "block");
 	assert.match(d2.reason, /단계 승인 필요/);
-	assert.match(d2.reason, /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.match(d2.reason, /단계 승인 코드:\s*STEP-[0-9A-F]{64}/);
 });
 
 test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 시 통과 및 1회 소진)", async (t) => {
@@ -347,9 +348,9 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
-	assert.match(pre.plan_code, /^PLAN-[A-Z0-9]{6}$/);
+	assert.match(pre.plan_code, /^PLAN-[0-9A-F]{64}$/);
 	const s1Code = pre.steps.find((s) => s.step === "s1")?.code;
-	assert.ok(s1Code && /^STEP-[A-Z0-9]{6}$/.test(s1Code));
+	assert.ok(s1Code && /^STEP-[0-9A-F]{64}$/.test(s1Code));
 
 	// 사람이 대화창에 PLAN 코드와 s1 STEP 코드를 입력
 	appendHumanTurn(transcriptPath, `승인: ${pre.plan_code} ${s1Code}`);
@@ -363,6 +364,120 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	assert.ok(secondAttempt);
 	assert.equal(secondAttempt.decision, "block");
 	assert.match(secondAttempt.reason, /단계 승인 필요/);
+});
+
+test("issued approvals verify only against their live plan, session and exact command scope", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	const { planFile, plan } = createValidPlan(root);
+	const { planSha, manifestSha } = writePassingReviewReceipt(root, planFile);
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const sessionId = "scope-session";
+	const now = Date.now();
+	const request = { root, file: planFile, plan, sha: planSha, manifest: manifestSha, sessionId };
+	const step = plan.scenario[0];
+	const scope = deployPlan.approvalScope(request, step);
+	const issue = () => deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now);
+	const first = await issue();
+	assert.ok(first.ok, first.why);
+	const { containsApprovalCode } = require("../lib/deploy-human-approval.js");
+	assert.ok(containsApprovalCode(`${first.plan_code} ${first.steps[0].code}`, first.steps[0].code));
+	assert.equal(containsApprovalCode(`${first.plan_code}0`, first.plan_code), false);
+	assert.equal(containsApprovalCode(first.plan_code, first.plan_code.slice(0, 11)), false);
+	const file = deployPlan.stateFile(env);
+	const state = JSON.parse(fs.readFileSync(file, "utf8"));
+	const row = state.challenges.find((item) => item.code === first.steps[0].code);
+	assert.ok(deployPlan.matchesIssuedApproval(row, scope));
+	for (const other of [
+		deployPlan.approvalScope(request),
+		deployPlan.approvalScope(request, plan.scenario[1]),
+		deployPlan.approvalScope({ ...request, sessionId: "next-session" }, step),
+		deployPlan.approvalScope({ ...request, sha: sha256("revised plan bytes") }, step),
+		deployPlan.approvalScope({ ...request, manifest: sha256("updated review inputs") }, step),
+		deployPlan.approvalScope({ ...request, file: path.join(root, "other", "gates", deployPlan.PLAN_FILE) }, step),
+		deployPlan.approvalScope({ ...request, root: stateDir }, step),
+		deployPlan.approvalScope(request, { ...step, commands: step.commands.map((cmd) => cmd + " ") }),
+	]) assert.equal(deployPlan.matchesIssuedApproval({ ...row, ...other }, other), false);
+	for (const changed of [
+		{ nonce: (row.nonce[0] === "0" ? "1" : "0") + row.nonce.slice(1) }, { createdAt: new Date(now - 1).toISOString() }, { preapprove: undefined },
+	]) assert.equal(deployPlan.matchesIssuedApproval({ ...row, ...changed }, scope), false);
+
+	assert.deepEqual((await issue()).steps, first.steps);
+	const renewed = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now + deployPlan.PLAN_APPROVAL_TTL_MS);
+	assert.notEqual(renewed.plan_code, first.plan_code);
+	assert.ok(renewed.steps.every((item, index) => item.code !== first.steps[index].code));
+	// An old pending request can be loaded for recovery, but needs a new human reply.
+	state.challenges = [{ kind: "plan", code: "PLAN-ABC123", planSha, sessionId, createdAt: row.createdAt }];
+	fs.writeFileSync(file, JSON.stringify(state));
+	const migrated = await issue();
+	assert.notEqual(migrated.plan_code, first.plan_code);
+	assert.match(migrated.plan_code, /^PLAN-[0-9A-F]{64}$/);
+	assert.equal((await deployPlan.preapproveStepCodes(planFile, root, "unknown", env, now)).ok, false);
+});
+
+test("one Discord decision covers the selected before, apply and restore steps across retries", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	const sessionId = "planned-restore";
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const author = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
+	writeGateConfig(root, { approver: { discordUserId: author } });
+	const step = (id, commands, extra = {}) => ({
+		id, title: `Sample ${id}`, commands, success_check: "Check sample result", on_failure: "Stop and report", ...extra,
+	});
+	const before = step("before", ["printf 'before state'"]);
+	const apply = step("apply", ["printf 'apply  setting'", "printf 'apply setting'"]);
+	const restore = step("restore", ["printf 'restore state'"], { branch: "rollback" });
+	const { planFile, gatesDir, plan } = createValidPlan(root, {
+		scenario: [before, apply, restore], rollback: { method: "Restore the recorded state", duration: "1 minute", step_ids: ["restore"] },
+	});
+	writePassingReviewReceipt(root, planFile);
+	const now = Date.now();
+	const batch = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now);
+	assert.ok(batch.ok, batch.why);
+	assert.ok(batch.report.includes(JSON.stringify(apply.commands[0])));
+	const codes = [batch.plan_code, ...batch.steps.map((entry) => entry.code)];
+	fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({
+		approvals: codes.map((code) => ({ code, channelId: channel, messageId: message })),
+	}));
+	const decide = (command) => deployPlan.evaluate({
+		command, root, env, sessionId, services: plan.services, now, discordToken: "fixture-token",
+		// Each hook invocation retrieves the human reply from the simulated Discord API.
+		fetchImpl: async (url) => {
+			assert.equal(url, `https://discord.com/api/v10/channels/${channel}/messages/${message}`);
+			return { ok: true, json: async () => ({ id: message, channel_id: channel, timestamp: new Date(now).toISOString(), author: { id: author }, content: codes.join(" ") }) };
+		},
+	});
+	const recordSuccess = (id) => {
+		const evidence = path.join(stateDir, `${id}.txt`);
+		fs.writeFileSync(evidence, `Verified sample ${id}\n`);
+		const cli = spawnSync(process.execPath, [SCRIPT_PATH, "step-ok", planFile, id, "--evidence", evidence], { env: { ...process.env, ...env }, encoding: "utf8" });
+		assert.equal(cli.status, 0, cli.stderr);
+	};
+	assert.equal((await decide(before.commands[0])).allow, true);
+	recordSuccess(before.id);
+	for (const [index, command] of apply.commands.entries()) {
+		assert.equal((await decide(command)).allow, true);
+		const state = JSON.parse(fs.readFileSync(deployPlan.stateFile(env), "utf8"));
+		const admitted = state.challenges.find((row) => row.step === apply.id);
+		assert.deepEqual(admitted.executed, apply.commands.slice(0, index + 1).map(sha256));
+		assert.equal(admitted.status === "executed", index + 1 === apply.commands.length);
+	}
+	recordSuccess(apply.id);
+	assert.equal((await decide(restore.commands[0])).allow, true);
+	const retry = await decide(restore.commands[0]);
+	assert.equal(retry.audit.event, "step-approval-requested");
+	assert.ok(!retry.reason.includes(batch.steps.find((entry) => entry.step === restore.id).code));
+});
+
+test("a live approval lock keeps ownership while a slow human confirmation is pending", async (t) => {
+	const { stateDir } = makeWorkspace(t);
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const result = await deployPlan.withStateLock(env, async () => {
+		const old = new Date(Date.now() - 10 * 60 * 1000);
+		fs.utimesSync(`${deployPlan.stateFile(env)}.lock`, old, old);
+		return deployPlan.withStateLock(env, () => "unexpected second holder", 0);
+	});
+	assert.equal(result, null);
+	assert.equal(await deployPlan.withStateLock(env, () => "next holder"), "next holder");
 });
 
 test("5. 계획을 바꾸면 코드 무효 (Modifying the plan after code issuance invalidates code and blocks)", async (t) => {
@@ -448,7 +563,7 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	// preapprove
 	const preRes = spawnSync(process.execPath, [workspaceScript, "preapprove", planFile, "--session", "cli-sess-1"], { cwd: root, env, encoding: "utf8" });
 	assert.equal(preRes.status, 0, preRes.stderr);
-	assert.match(preRes.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
+	assert.match(preRes.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[0-9A-F]{64} s1 STEP-[0-9A-F]{64} r1 STEP-[0-9A-F]{64}/);
 
 	// step-ok
 	const evFile = path.join(stateDir, "s1-ok.txt");
@@ -1182,13 +1297,13 @@ test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
 	const { planFile } = createValidPlan(root, { services: [service], scenario: [{ id: "s1", title: "Restart sample", commands: [command], success_check: "Check status", on_failure: "Report failure" }], rollback: { method: "Restart sample", duration: "1 minute", step_ids: ["s1"] } });
 	writePassingReviewReceipt(root, planFile);
 	const d1 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
-	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[0-9A-F]{64})/);
 	assert.ok(code, JSON.stringify(d1));
 	appendHumanTurn(transcriptPath, `계획 승인합니다 ${code[1]}`);
 	const d2 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
-	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[0-9A-F]{64}/);
 	assert.equal(d2.decision, "block");
-	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[0-9A-F]{64})/)[1];
 	appendHumanTurn(transcriptPath, `단계 승인합니다 ${stepCode}`);
 	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
 
@@ -1667,6 +1782,220 @@ function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command inv
 	};
 	return { root, planDir, gatesDir, script, remote: remotePath, files, plan, services: real, assess, writeOps, bind };
 }
+
+function transitionFixture(t) {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "fixture:settings";
+	writeGateConfig(root, { services: { [service]: { allowCustomCommands: true } } });
+	const f = createValidPlan(root, { services: [service] });
+	const before = "sample setting v1\n", after = "sample setting v2\n";
+	const file = "scripts/setting.conf";
+	const live = path.join(root, file);
+	const pin = {
+		role: "target", path: file, before: sha256(before), after: sha256(after),
+		before_source: "scripts/original.conf", after_source: "scripts/candidate.conf",
+		transitions: { s1: { to: "after", resume: true }, r1: { to: "before", partial_after: "s1", resume: true } },
+	};
+	fs.writeFileSync(live, before);
+	fs.writeFileSync(path.join(root, pin.before_source), before);
+	fs.writeFileSync(path.join(root, pin.after_source), after);
+	fs.writeFileSync(f.scriptAbs, '#!/bin/sh\nset -eu\ncp "$1" "$2"\ncat "$2"\n');
+	f.plan.file_pins = [pin];
+	const argsByStep = {
+		s1: [f.scriptRel, pin.after_source, file],
+		r1: [f.scriptRel, pin.before_source, file],
+	};
+	const scriptSha = sha256(fs.readFileSync(f.scriptAbs));
+	for (const entry of f.plan.scenario) {
+		const args = argsByStep[entry.id];
+		const source = args[1];
+		entry.commands = [["bash", ...args].join(" ")];
+		entry.files = {
+			[f.scriptRel]: scriptSha,
+			[source]: sha256(fs.readFileSync(path.join(root, source))),
+			[file]: entry.id === "s1" ? pin.before : pin.after,
+		};
+	}
+	const step1Cmd = f.plan.scenario[0].commands[0];
+	const rollbackCmd = f.plan.scenario[1].commands[0];
+	const writePlan = () => fs.writeFileSync(f.planFile, JSON.stringify(f.plan, null, 2));
+	writePlan();
+	const sessionId = "sample-target-session";
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const hook = (command, session = sessionId) => runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath, sessionId: session });
+	const cli = (...args) => spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), args[0], f.planFile, ...args.slice(1)], { cwd: root, env, encoding: "utf8" });
+	const evidence = path.join(stateDir, "result.txt");
+	const run = id => {
+		const args = argsByStep[id];
+		assert.equal(hook(["bash", ...args].join(" ")), null);
+		const child = spawnSync("bash", args, { cwd: root, encoding: "utf8" });
+		assert.equal(child.status, 0, child.stderr);
+		fs.writeFileSync(evidence, child.stdout);
+	};
+	return { ...f, step1Cmd, rollbackCmd, root, before, after, live, pin, hook, cli, run, sessionId, transcriptPath, env, evidence, writePlan, approve: text => appendHumanTurn(transcriptPath, text) };
+}
+
+test("target phases use the normal CLI review, human PLAN/STEP, exact preimage and postimage", async t => {
+	const f = transitionFixture(t);
+	assert.match(f.hook(f.step1Cmd).reason, /적대 리뷰/);
+	const receipt = writePassingReviewReceipt(f.root, f.planFile);
+	const prompt = deployPlan.reviewPrompt(f.plan, receipt.planSha, f.root);
+	assert.ok(prompt.includes(f.before) && prompt.includes(f.after));
+	assert.equal(f.cli("check").status, 0);
+	const report = f.cli("report");
+	assert.equal(report.status, 0);
+	assert.ok(report.stdout.includes(`시작 지문 ${f.pin.before} → 완료 지문 ${f.pin.after}`));
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, f.sessionId, f.env);
+	assert.equal(pre.ok, true, pre.why);
+	assert.match(f.hook(f.step1Cmd).reason, /전체 계획 승인/);
+	f.approve(pre.plan_code);
+	assert.match(f.hook(f.step1Cmd).reason, /단계 승인 필요/);
+	f.approve(pre.steps.find(s => s.step === "s1").code);
+	assert.match(f.cli("step-ok", "s1", "--evidence", f.evidence).stderr, /target postimage mismatch/);
+	assert.equal(fs.existsSync(path.join(f.gatesDir, "deploy-steps/s1.json")), false);
+	f.run("s1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+	assert.equal(fs.readFileSync(f.evidence, "utf8"), f.after);
+	assert.equal(f.cli("check").status, 0);
+	assert.equal(deployPlan.reviewPrompt(f.plan, receipt.planSha, f.root), prompt);
+	assert.equal(deployPlan.reviewInputManifest(f.planFile, f.root), receipt.manifestSha);
+	assert.equal(f.cli("step-ok", "s1", "--evidence", f.evidence).status, 0);
+	assert.match(f.hook(f.step1Cmd).reason, /대상 시작 지문 불일치.*복구 계획/);
+	assert.match(f.hook(f.step1Cmd, "different-session").reason, /대상 시작 지문 불일치/);
+	assert.match(f.hook(f.rollbackCmd).reason, /단계 승인 필요/);
+	f.approve(pre.steps.find(s => s.step === "r1").code);
+	assert.match(f.cli("step-ok", "r1", "--evidence", f.evidence).stderr, /target postimage mismatch/);
+	f.run("r1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.before);
+	assert.equal(fs.readFileSync(f.evidence, "utf8"), f.before);
+	assert.equal(f.cli("step-ok", "r1", "--evidence", f.evidence).status, 0);
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	fs.writeFileSync(f.live, "unknown live image");
+	assert.notEqual(f.cli("check").status, 0);
+	assert.match(f.hook(f.step1Cmd).reason, /target sha256 mismatch/);
+	assert.match(f.hook(f.rollbackCmd).reason, /target sha256 mismatch/);
+});
+
+test("an interrupted apply can retry from its original input with fresh STEP approval", async t => {
+	const f = transitionFixture(t);
+	writePassingReviewReceipt(f.root, f.planFile);
+	const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, f.sessionId, f.env);
+	assert.equal(pre.ok, true, pre.why);
+	const first = pre.steps.find(s => s.step === "s1").code;
+	f.approve(pre.plan_code + " " + first);
+	// The host stopped between the pre-tool decision and launching its child.
+	assert.equal(f.hook(f.step1Cmd), null);
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.before);
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	const retry = f.hook(f.step1Cmd);
+	assert.match(retry.reason, /단계 승인 필요/);
+	const next = retry.reason.match(/단계 승인 코드:\s*(STEP-[0-9A-F]{64})(?![A-Za-z0-9_-])/)[1];
+	assert.notEqual(next, first);
+	f.approve(next);
+	f.run("s1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+});
+
+test("a mixed set of registered target images needs a reviewed recovery plan", t => {
+	const f = transitionFixture(t);
+	const other = "scripts/second-setting.conf";
+	fs.writeFileSync(path.join(f.root, other), f.after);
+	f.plan.file_pins.push({ ...f.pin, path: other });
+	f.plan.scenario[0].files[other] = f.pin.before;
+	f.plan.scenario[1].files[other] = f.pin.after;
+	f.writePlan();
+	writePassingReviewReceipt(f.root, f.planFile);
+	const check = f.cli("check");
+	assert.equal(check.status, 0, check.stdout + check.stderr);
+	for (const entry of f.plan.scenario) {
+		const command = entry.commands[0];
+		const binding = verifiedPlanBinding({ plan: f.plan, entry, command, cwd: f.root }, "", "plan", f.plan.services, f.root);
+		assert.equal(binding.ok, false);
+		assert.match(binding.why, /대상 시작 지문 불일치.*복구 계획/);
+		assert.match(f.hook(command).reason, /대상 시작 지문 불일치.*복구 계획/);
+	}
+});
+
+test("dispatch rechecks the input when another approved session finishes during readiness", async t => {
+	const f = transitionFixture(t);
+	writePassingReviewReceipt(f.root, f.planFile);
+	const otherSession = "second-fixture-session";
+	for (const session of [f.sessionId, otherSession]) {
+		const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, session, f.env);
+		assert.equal(pre.ok, true, pre.why);
+		f.approve(pre.plan_code + " " + pre.steps.find(s => s.step === "s1").code);
+	}
+	const result = await deployPlan.evaluate({
+		command: f.step1Cmd, services: f.plan.services, root: f.root, cwd: f.root,
+		sessionId: otherSession, transcriptPath: f.transcriptPath, env: f.env,
+		readiness(binding) {
+			const ready = assessReadiness(f.plan.services, { root: f.root, command: f.step1Cmd, cwd: f.root, planBinding: binding });
+			assert.equal(ready.ok, true, ready.problems.join(" / "));
+			f.run("s1");
+			return ready;
+		},
+	});
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+	assert.equal(result.allow, false);
+	assert.match(result.reason, /대상 시작 지문 불일치.*복구 계획/);
+});
+
+test("target bindings pin distinct phase hashes even without recovery options", t => {
+	const f = pinnedScriptFixture(t);
+	const before = fs.readFileSync(f.remote), after = Buffer.from("replacement setting\n");
+	const beforeSource = path.join(f.planDir, "before-source"), afterSource = path.join(f.planDir, "after-source");
+	fs.writeFileSync(beforeSource, before);
+	fs.writeFileSync(afterSource, after);
+	f.plan.file_pins = [{ path: f.remote, role: "target", before: sha256(before), after: sha256(after), before_source: beforeSource, after_source: afterSource }];
+	f.plan.scenario[1].files[f.remote] = sha256(after);
+	assert.equal(f.bind("s1", "plan").ok, true);
+	assert.equal(f.bind("r1", "plan").ok, false);
+	fs.writeFileSync(f.remote, after);
+	assert.equal(f.bind("s1", "plan").ok, false);
+	assert.equal(f.bind("r1", "plan").ok, true);
+	fs.writeFileSync(f.remote, "third");
+	assert.equal(f.bind("r1", "plan").ok, false);
+	fs.writeFileSync(f.remote, after);
+	fs.writeFileSync(afterSource, "tampered");
+	assert.equal(f.bind("r1", "plan").ok, false);
+});
+
+test("unchanged inputs keep one manifest entry per normalized path and all step digests agree", t => {
+	const f = transitionFixture(t);
+	f.plan.scenario[1].files["./" + f.scriptRel] = f.plan.scenario[0].files[f.scriptRel];
+	f.writePlan();
+	const inspect = () => deployPlan.reviewInputEntries(f.planFile, f.root);
+	const entries = inspect();
+	assert.deepEqual(entries.problems, []);
+	assert.equal(entries.entries.filter(e => path.normalize(e.file) === f.scriptRel).length, 1);
+	f.plan.scenario[0].files[f.scriptRel] = "0".repeat(64);
+	f.writePlan();
+	assert.match(inspect().problems.join("\n"), /conflicting immutable pin/);
+});
+
+test("target snapshots and transition declarations fail closed", t => {
+	const f = transitionFixture(t);
+	const validate = () => deployPlan.pinnedFileProblems(f.plan, f.root);
+	const relative = f.pin.before_source;
+	f.pin.before_source = f.pin.path;
+	assert.match(validate().join("\n"), /independent/);
+	const alias = path.join(f.root, "scripts/alias");
+	fs.linkSync(f.live, alias);
+	f.pin.before_source = alias;
+	assert.match(validate().join("\n"), /independent/);
+	f.pin.before_source = relative;
+	const link = path.join(f.root, "scripts/link");
+	fs.symlinkSync(f.live, link);
+	f.pin.path = link;
+	assert.match(validate().join("\n"), /symlink/);
+	f.pin.path = "scripts/setting.conf";
+	f.pin.transitions.r1.partial_after = "r1";
+	assert.match(validate().join("\n"), /invalid partial rollback/);
+	f.pin.transitions.r1.partial_after = "s1";
+	f.plan.scenario[1].files[f.pin.path] = f.pin.before;
+	assert.match(validate().join("\n"), /exact preimage/);
+});
 
 test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", (t) => {
 	const f = pinnedScriptFixture(t);
@@ -2400,11 +2729,11 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	const dPlanAsk = runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" });
 	assert.equal(dPlanAsk?.decision, "block");
 	assert.match(dPlanAsk.reason, /PLAN-/);
-	appendHumanTurn(fNoRo.transcriptPath, `승인 ${dPlanAsk.reason.match(/PLAN-[A-Z0-9]{6}/)[0]}`);
+	appendHumanTurn(fNoRo.transcriptPath, `승인 ${dPlanAsk.reason.match(/PLAN-[0-9A-F]{64}/)[0]}`);
 	const dStepAsk = runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" });
 	assert.equal(dStepAsk?.decision, "block");
 	assert.match(dStepAsk.reason, /STEP-/);
-	appendHumanTurn(fNoRo.transcriptPath, `단계 승인 ${dStepAsk.reason.match(/STEP-[A-Z0-9]{6}/)[0]}`);
+	appendHumanTurn(fNoRo.transcriptPath, `단계 승인 ${dStepAsk.reason.match(/STEP-[0-9A-F]{64}/)[0]}`);
 	assert.equal(runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" }), null, "readOnlyScripts 없으면 기존 PLAN/STEP 승인으로 통과");
 });
 
@@ -2549,7 +2878,7 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 
 	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "cross-repo-sess-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(pre.status, 0, `preapprove failed:\n${pre.stdout}\n${pre.stderr}`);
-	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
+	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[0-9A-F]{64} s1 STEP-[0-9A-F]{64} r1 STEP-[0-9A-F]{64}/);
 
 	const evFile = path.join(stateDir, "s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\n");
@@ -3242,9 +3571,9 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	const issueAndApprove = (session) => {
 		for (let i = 0; i < 2; i++) {
 			const ask = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: session });
-			const codeMatch = ask && ask.reason.match(/\b((?:PLAN|STEP)-[A-Z0-9]{6})\b/);
+			const codeMatch = ask && ask.reason.match(ISSUED_APPROVAL_CODE);
 			assert.ok(codeMatch, `승인 코드 요청이 나와야 함(${i}): ${ask && ask.reason}`);
-			appendHumanTurn(transcriptPath, `승인합니다 ${codeMatch[1]}`);
+			appendHumanTurn(transcriptPath, `승인합니다 ${codeMatch[0]}`);
 		}
 	};
 	issueAndApprove(sessApproved);
@@ -3257,10 +3586,10 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	// 새 세션으로 PLAN·STEP 을 다시 발급·승인한 상태에서도 cwd=repoAStrict 이면 더 엄격한 쪽(cwd 정책)으로 막혀야 함
 	const sessStrict = "sess-cross-strict";
 	const askPlanStrict = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: sessStrict });
-	const planCodeStrict = askPlanStrict?.reason.match(/\b(PLAN-[A-Z0-9]{6})\b/);
+	const planCodeStrict = askPlanStrict?.reason.match(/\b(PLAN-[0-9A-F]{64})\b/);
 	if (planCodeStrict) appendHumanTurn(transcriptPath, `승인합니다 ${planCodeStrict[1]}`);
 	const askStepStrict = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: sessStrict });
-	const stepCodeStrict = askStepStrict?.reason.match(/\b(STEP-[A-Z0-9]{6})\b/);
+	const stepCodeStrict = askStepStrict?.reason.match(/\b(STEP-[0-9A-F]{64})\b/);
 	assert.ok(stepCodeStrict, `단계 승인 코드가 발급돼야 함: ${askStepStrict && askStepStrict.reason}`);
 	appendHumanTurn(transcriptPath, `승인합니다 ${stepCodeStrict[1]}`);
 	assert.equal(
@@ -3553,9 +3882,9 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 	writePassingReviewReceipt(repo, planFile);
 	for (let i = 0; i < 2; i++) {
 		const ask = runHook(planCmd, repo, "sess-sudo-approved");
-		const code = ask && ask.reason.match(/\b((?:PLAN|STEP)-[A-Z0-9]{6})\b/);
+		const code = ask && ask.reason.match(ISSUED_APPROVAL_CODE);
 		assert.ok(code, `승인 코드 요청이 나와야 함(${i}): ${ask && ask.reason}`);
-		appendHumanTurn(transcriptPath, `승인합니다 ${code[1]}`);
+		appendHumanTurn(transcriptPath, `승인합니다 ${code[0]}`);
 	}
 	assert.equal(runHook(planCmd, repo, "sess-sudo-approved"), null, "승인된 계획서의 sudo systemctl restart 명령은 통과해야 함");
 	assert.equal(runHook("sudo systemctl restart sample --no-block", repo, "sess-sudo-approved")?.decision, "block", "승인된 명령과 다른 글자가 붙으면 막혀야 함");
@@ -3789,4 +4118,189 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	const newDatedV1 = { ...legacyPlan, version: 1, createdAt: "2026-11-15T05:00:00.000Z" };
 	assert.equal(deployPlan.requiresArchitectureFit(newDatedV1), true);
 	assert.ok(deployPlan.formProblems(newDatedV1).some((m) => m.includes("architecture_fit")));
+});
+
+function registeredReviewFixture(t, author = "argon") {
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+	gitRun(root, ["init", "-q"]);
+	gitRun(root, ["config", "user.name", "Fixture"]);
+	gitRun(root, ["config", "user.email", "automation@localhost"]);
+	const scriptPath = "scripts/local-status.sh";
+	const script = "#!/bin/sh\nprintf ready\n";
+	const everySite = { path: "scripts/show-version.sh", service: "fixture:local", sha256: sha256("printf version\n") };
+	const primaryOnly = { path: scriptPath, service: "fixture:local", sha256: sha256(script) };
+	fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+	fs.writeFileSync(path.join(root, scriptPath), script);
+	fs.writeFileSync(path.join(root, everySite.path), "printf version\n");
+	writeGateConfig(root, { readOnlyScripts: [primaryOnly, everySite] });
+	const { planFile, gatesDir } = createValidPlan(root, {
+		author_model: author, services: ["fixture:local"],
+		scenario: [
+			{ id: "s1", title: "Print readiness", commands: ["printf ready"], files: { [scriptPath]: primaryOnly.sha256, [everySite.path]: everySite.sha256 }, success_check: "Read the local fixture output", on_failure: "Use the local rollback check" },
+			{ id: "r1", branch: "rollback", title: "Print previous status", commands: ["printf previous"], success_check: "Read previous local status", on_failure: "Keep the local fixture stopped" },
+		],
+	});
+	gitRun(root, ["add", "."]);
+	gitRun(root, ["commit", "-qm", "Local plan fixture"]);
+	const ids = ["primary", "secondary"];
+	for (const id of [...ids, "replacement"]) {
+		const site = path.join(tmp, id);
+		const directory = path.join(site, ".claude", "deploy");
+		fs.mkdirSync(directory, { recursive: true });
+		fs.writeFileSync(path.join(directory, "config.json"), JSON.stringify({
+			review_models: { muse: { model: `fixture-${id === "replacement" ? "secondary" : id}`, runner: "muse", effort: "high" } },
+		}));
+		writeGateConfig(site, { readOnlyScripts: id === "primary" ? [everySite, primaryOnly] : [everySite] });
+		gitRun(site, ["init", "-q"]);
+		gitRun(site, ["add", "."]);
+		gitRun(site, ["-c", "user.name=Fixture", "-c", "user.email=automation@localhost", "commit", "-qm", "Local gate policy"]);
+	}
+	const reviewer = path.join(tmp, "fixture-reviewer.cjs");
+	const criteria = deployPlan.CRITERIA.map(([id]) => id);
+	fs.writeFileSync(reviewer, `#!${process.execPath}
+const fs = require("node:fs");
+const prompt = fs.readFileSync(process.argv[process.argv.indexOf("--prompt-file") + 1], "utf8");
+const id = /^Review gate: ([a-z]+)\\./m.exec(prompt)?.[1];
+if (!id) process.exit(2);
+const reject = id === process.env.FIXTURE_REJECT;
+const criteria = ${JSON.stringify(criteria)};
+console.log(["판정: " + (reject ? "FAIL" : "PASS"), ...criteria.map((name, i) => name + ": " + (reject && i === 0 ? "FAIL" : "PASS")), "참고 지적: 0", "남은 지적: " + (reject ? 1 : 0)].join("\\n"));
+`, { mode: 0o700 });
+	const wrapper = path.join(tmp, "registered-review.mjs");
+	const cli = require("node:url").pathToFileURL(SCRIPT_PATH).href;
+	const pins = require.resolve("../lib/gate-config-pin.js");
+	fs.writeFileSync(wrapper, `import { runApprovedApprovalPlan } from ${JSON.stringify(cli)};
+import { createRequire } from "node:module";
+import path from "node:path";
+const pin = createRequire(import.meta.url)(${JSON.stringify(pins)});
+const root = ${JSON.stringify(root)}, site = ${JSON.stringify(tmp)};
+const ids = ${JSON.stringify(ids)};
+const profiles = ids.map(id => {
+	const directory = path.join(site, id === "secondary" && process.env.FIXTURE_REPLACEMENT ? "replacement" : id);
+	if (process.env.FIXTURE_STRICT === "both" || process.env.FIXTURE_STRICT === id) return { id, root: directory, policy: "strict-defaults" };
+	const code = pin.approvalCode(pin.snapshotGateConfig(directory).hash);
+	const approverId = "1".repeat(18), channelId = "2".repeat(18), messageId = "3".repeat(18);
+	return { id, root: directory, approverId, token: "local-only", refs: [{ code, channelId, messageId }],
+		fetchImpl: async () => ({ ok: true, json: async () => ({ id: messageId, channel_id: channelId, author: { id: approverId }, content: id === process.env.FIXTURE_UNVERIFIED ? "pending" : code }) }) };
+});
+const options = { root, reviewProfiles: profiles };
+const engine = createRequire(import.meta.url)(${JSON.stringify(require.resolve("../lib/deploy-plan.js"))});
+if (process.argv[2] === "fixture-read-only") {
+	console.log(JSON.stringify(await engine.withGateConfig(options, () => engine.reviewedReadOnlyScripts(${JSON.stringify(gatesDir)}, root))));
+} else if (process.argv[2] === "fixture-admission") {
+	const decision = await engine.withGateConfig(options, () => engine.evaluate({
+		root, cwd: root, env: process.env, services: ["fixture:local"], command: "printf ready",
+		sessionId: "local-fixture", transcriptPath: ${JSON.stringify(transcriptPath)},
+		...(process.env.FIXTURE_READ_ONLY ? { readiness: () => ({ ok: true, readOnlyNoCode: true }) } : {}),
+	}));
+	console.log(JSON.stringify({ allow: decision.allow, event: decision.audit.event }));
+} else await runApprovedApprovalPlan(options, process.argv.slice(2));
+`);
+	const run = (args, env = {}) => spawnSync(process.execPath, [wrapper, ...args], {
+		cwd: root, timeout: 30000, encoding: "utf8",
+		env: { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, APPROVAL_PLAN_MUSE_BIN: reviewer, ...env },
+	});
+	return { tmp, root, gatesDir, planFile, ids, run, scriptPath, everySite, transcriptPath, review: ["review", planFile, "--author", author] };
+}
+
+test("registered gates independently review one plan through review, check, report and preapprove", (t) => {
+	const { root, gatesDir, planFile, ids, run, scriptPath, everySite, transcriptPath, review } = registeredReviewFixture(t);
+	const unverified = run(review, { FIXTURE_UNVERIFIED: "secondary" });
+	assert.notEqual(unverified.status, 0);
+	assert.equal(fs.existsSync(path.join(gatesDir, "reviews")), false);
+	const prompts = run(["review-prompt", planFile]);
+	assert.equal(prompts.status, 0, prompts.stderr);
+	for (const id of ids) assert.match(prompts.stdout, new RegExp(`Review gate: ${id}\\.`));
+	const rejected = run(review, { FIXTURE_REJECT: "secondary" });
+	assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+	assert.match(rejected.stdout + rejected.stderr, /secondary/);
+	assert.equal(run(["check", planFile]).status, 1);
+	const pendingReads = run(["fixture-read-only"]);
+	assert.equal(pendingReads.status, 0, pendingReads.stderr);
+	assert.deepEqual(JSON.parse(pendingReads.stdout), []);
+	const read = id => JSON.parse(fs.readFileSync(path.join(gatesDir, "reviews", id, deployPlan.REVIEW_FILE)));
+	assert.deepEqual(ids.map(id => read(id).reviewers[0].model), ["fixture-primary", "fixture-secondary"]);
+	const accepted = run(review);
+	assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+	const records = ids.map(read);
+	assert.deepEqual(records.map(record => record.review_profile.id), ids);
+	assert.deepEqual(records.map(record => record.read_only_scripts.map(row => row.path)), [[scriptPath, everySite.path], [everySite.path]]);
+	const exceptions = run(["fixture-read-only"]);
+	assert.equal(exceptions.status, 0, exceptions.stderr);
+	assert.deepEqual(JSON.parse(exceptions.stdout), [{ ...everySite, script_sha256: everySite.sha256 }]);
+	assert.equal(deployPlan.isPlanReviewRecordPath(path.join(gatesDir, "reviews", "primary", deployPlan.REVIEW_FILE), root), true);
+	assert.notEqual(records[0].prompt_sha256, records[1].prompt_sha256);
+	assert.notEqual(records[0].reviewers[0].receipt.input_manifest_sha256, records[1].reviewers[0].receipt.input_manifest_sha256);
+	for (const id of ids) assert.equal(fs.existsSync(path.join(gatesDir, "reviews", id, "deploy-plan-review-findings.md")), true);
+	assert.equal(fs.existsSync(path.join(gatesDir, deployPlan.REVIEW_FILE)), false);
+	for (const args of [["check", planFile], ["report", planFile], ["preapprove", planFile, "--session", "local-fixture"]]) {
+		const accepted = run(args);
+		assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+		const changed = run(args, { FIXTURE_REPLACEMENT: "1" });
+		assert.equal(changed.status, 1, changed.stdout + changed.stderr);
+	}
+	const issued = run(["preapprove", planFile, "--session", "local-fixture"]);
+	const codes = issued.stdout.match(/\b(?:PLAN|STEP)-[0-9A-F]{64}\b/g);
+	assert.equal(codes.length, 3);
+	const admit = env => {
+		const result = run(["fixture-admission"], env);
+		assert.equal(result.status, 0, result.stderr);
+		return JSON.parse(result.stdout);
+	};
+	assert.equal(admit({}).allow, false, "human consent is still required");
+	fs.appendFileSync(transcriptPath, JSON.stringify({ type: "user", timestamp: new Date().toISOString(),
+		message: { role: "user", content: [{ type: "text", text: codes.join(" ") }] } }) + "\n");
+	assert.equal(admit({ FIXTURE_REPLACEMENT: "1" }).allow, false);
+	assert.equal(admit({}).allow, true);
+});
+
+test("explicit strict review registrations use code-fixed independent reviews and grant no read-only exceptions", t => {
+	const { tmp, planFile, gatesDir, ids, run, review } = registeredReviewFixture(t, "codex");
+	const seconds = path.join(tmp, "secondary", ".claude", "deploy", "config.json");
+	fs.renameSync(seconds, seconds + ".unused");
+	const mixed = { FIXTURE_STRICT: "secondary" }, both = { FIXTURE_STRICT: "both" };
+	const receipt = id => JSON.parse(fs.readFileSync(path.join(gatesDir, "reviews", id, deployPlan.REVIEW_FILE)));
+	const succeeds = (args, env) => {
+		const result = run(args, env);
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		return result.stdout;
+	};
+	const prompts = succeeds(["review-prompt", planFile], mixed);
+	assert.equal(prompts.match(/Review gate:/g).length, 2);
+	assert.equal(prompts.match(/Review policy: strict-defaults/g).length, 1);
+	succeeds(review, mixed);
+	assert.equal(receipt("primary").reviewers[0].model, "fixture-primary");
+	assert.equal(receipt("secondary").reviewers[0].model, deployPlan.REVIEW_MODELS.muse.model);
+	assert.deepEqual(receipt("secondary").read_only_scripts, []);
+	succeeds(["check", planFile], mixed);
+	assert.deepEqual(JSON.parse(succeeds(["fixture-read-only"], mixed)), []);
+	assert.equal(run(["check", planFile], both).status, 1, "changing the trusted registration requires fresh reviews");
+	succeeds(review, both);
+	const records = ids.map(receipt);
+	assert.deepEqual(records.map(row => row.review_profile.policy), ["strict-defaults", "strict-defaults"]);
+	assert.ok(records.every(row => row.reviewers[0].model === deployPlan.REVIEW_MODELS.muse.model && !row.read_only_scripts.length));
+	assert.notEqual(records[0].prompt_sha256, records[1].prompt_sha256);
+	assert.notEqual(records[0].reviewers[0].receipt.input_manifest_sha256, records[1].reviewers[0].receipt.input_manifest_sha256);
+	succeeds(["check", planFile], both);
+	assert.deepEqual(JSON.parse(succeeds(["fixture-admission"], { ...both, FIXTURE_READ_ONLY: "1" })), { allow: false, event: "plan-approval-requested" });
+	fs.writeFileSync(seconds, "{}\n");
+	for (const args of [["check", planFile], ["report", planFile], ["preapprove", planFile, "--session", "fixture"]]) {
+		assert.equal(run(args, both).status, 1, "an observed site policy change invalidates persisted evidence");
+	}
+});
+
+test("a registered policy must be explicit and stable throughout a strict review", async t => {
+	const { tmp, root } = makeWorkspace(t);
+	const site = path.join(tmp, "site");
+	fs.mkdirSync(site);
+	const registered = (policy, fn) => deployPlan.withGateConfig({ root, reviewProfiles: [{ id: "secondary", root: site, policy }] }, fn);
+	for (const policy of [undefined, "approved-config", "unknown"]) {
+		await assert.rejects(registered(policy, () => "unexpected success"));
+	}
+	await registered("strict-defaults", () => {
+		assert.deepEqual(deployPlan.registeredReviewProfileIds(root), ["secondary"]);
+		fs.mkdirSync(path.join(site, "config"));
+		fs.writeFileSync(path.join(site, "config", "deploy-gate.json"), "{}\n");
+		assert.throws(() => deployPlan.registeredReviewProfileIds(root), /policy changed/);
+	});
 });

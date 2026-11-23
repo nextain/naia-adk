@@ -1,5 +1,6 @@
 // 나이아 메신저 화면의 모양·규칙(화면 없이 시험하는 부분).
 // 서버 약속: packages/server/src/routes/portal-messenger.ts 의 REST·SSE 모양만 믿는다.
+import { approvalCodePair } from "@naia-adk/core/approval-codes.mjs"
 
 export const MESSENGER_API = "/api/portal/messenger"
 
@@ -475,7 +476,7 @@ export function parseApprovalForm(body: string, approval?: Approval | null): App
   // 서버와 같이 첫 "3. 문서:" 줄 하나만 본다(뒷줄이 앞줄 주소를 대신 통과시키지 못하게).
   const docLine = body.match(/3\.\s*문서:[^\r\n]*/)?.[0] ?? ""
   const docUrl = docLine.match(/^3\.\s*문서:\s*(https?:\/\/\S+|\/d\/\S+)/)?.[1] ?? null
-  const fromBody = body.match(/PLAN-[A-Z0-9]{6}\s+STEP-[A-Z0-9]{6}/)?.[0] ?? null
+  const fromBody = approvalCodePair(body)?.join(" ") ?? null
   const code = approval?.plan_code && approval?.step_code ? `${approval.plan_code} ${approval.step_code}` : fromBody
   return { title, summary, docUrl, code }
 }

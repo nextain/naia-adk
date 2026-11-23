@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fchmodSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { approvalCodePair } from '@naia-adk/core/approval-codes.mjs';
 import { messengerRoleIds } from './messenger-roles.js'
 
 export interface MessengerAuthor { id: string; kind: 'human' | 'agent' }
@@ -173,14 +174,14 @@ export class MessengerStore {
     if (replyTo && (!parent || parent.channel_id !== channelId)) fail('Invalid reply target');
     const id = ulid(this.now());
     this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,NULL)').run(id,channelId,author.id,author.kind,body,replyTo ?? null,parent ? parent.thread_root_id ?? parent.id : null,this.now());
-    const codes = body.match(/\b(PLAN-[A-Z0-9]{6})\s+(STEP-[A-Z0-9]{6})\b/);
+    const codes = approvalCodePair(body);
     if (codes) {
       let target = channelId === APPROVAL_CHANNEL && isApprovalForm(body) ? id : undefined;
       if (!target && channelId === APPROVAL_CHANNEL) {
         const previous = this.db.prepare('SELECT id,body,author_id,author_kind FROM messages WHERE channel_id=? AND id<? ORDER BY id DESC LIMIT 1').get(channelId,id);
         if (previous && previous.author_id === author.id && previous.author_kind === author.kind && isApprovalForm(String(previous.body))) target = String(previous.id);
       }
-      if (target) this.db.prepare('INSERT OR IGNORE INTO approvals(message_id,plan_code,step_code) VALUES (?,?,?)').run(target,codes[1],codes[2]);
+      if (target) this.db.prepare('INSERT OR IGNORE INTO approvals(message_id,plan_code,step_code) VALUES (?,?,?)').run(target,...codes);
     }
     return this.message(id,author)!;
   }

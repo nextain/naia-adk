@@ -63,6 +63,32 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
+### 교체할 파일의 단계별 지문
+
+계획이 파일 하나를 교체하고 다시 복구할 때는 `file_pins`에 실제 경로, 원본과 후보의 SHA-256, 각각의 보존본 경로를 적습니다. `file_pins.targets` 배열도 같은 형식으로 읽습니다. 두 보존본은 실제 대상과 별개인 일반 파일이어야 합니다. 관문은 원본과 후보 본문을 리뷰어에게 보여주며, 실행할 때마다 두 보존본과 현재 파일을 대조합니다. 아래의 지문 자리에는 실제 64자리 SHA-256을 적습니다.
+
+```json
+{
+  "file_pins": [{
+    "role": "target",
+    "path": "service/settings.conf",
+    "before": "<original-sha256>",
+    "after": "<candidate-sha256>",
+    "before_source": "release/original.conf",
+    "after_source": "release/candidate.conf",
+    "transitions": {
+      "s1": { "to": "after" },
+      "r1": { "to": "before" }
+    }
+  }]
+}
+```
+
+- `s1.files["service/settings.conf"]`에는 원본 지문, `r1.files["service/settings.conf"]`에는 후보 지문을 적습니다. 일반 입력과 실행 대본도 해당 단계의 `files`에 계속 고정합니다. `transitions`를 생략한 단계는 `files`의 지문에서만 실행됩니다.
+- `to`는 이 단계가 성공한 뒤 실제 파일에서 확인할 지문입니다. `step-ok`는 이 지문을 대조한 후 증거를 기록합니다. 제3의 지문이나 보존본 손상은 계획 검수와 실행을 차단합니다.
+- 관문은 준비 검사 때와 실행을 허용하기 직전에 모든 대상의 현재 지문을 그 단계의 `files`와 대조합니다. 중단 후에도 대상이 모두 시작 지문이면 새 단계 승인을 받아 같은 명령을 재시도할 수 있습니다. 복구 단계는 모든 대상이 그 단계의 시작 지문일 때 자체 승인을 받아 실행합니다. 기존 계획의 `resume`과 `partial_after` 선언에도 같은 기준을 적용합니다.
+- 이미 완료 지문인 대상은 실제 단계 결과와 성공 조건을 확인합니다. 일부 대상만 변경되어 추가 조치가 필요하면 대상별 현재 지문을 시작 조건으로 적은 복구 계획을 검수받습니다. 실행 전 훅의 허용 기록은 명령을 실행해도 된다는 결정입니다.
+
 ### 여러 절 고정 대본 돌리기
 대본(예: `sudo bash <대본 절대 경로> <단계id>`)을 계획 단계 `commands` 에 그대로 적고, 대본과 대본이 원격에 올리는 본문까지 `files` 에 `{경로: sha256}` 로 고정합니다. 이런 대본은 **ops 로 받지 않습니다.** 대본 본문(변수·eval·here-doc·원격 본문·kubectl 등)이 판을 바꾸는지 관문 분류기가 다 읽을 수 없기 때문입니다. `kind: "ops"` 준비 기록(`deploy.json`)으로 `bash /…` 대본을 부르면 "계획 고정 대본은 ops 로 받지 않음" 으로 막힙니다(`config/deploy-gate.json` 에서 그 서비스에 `allowCustomCommands` 를 명시해 `PLAN`/`STEP` 사람 승인을 받거나, git 커밋된 `readOnlyScripts` 에 `{sha256, path, service}` 가 등록된 **정확히 2토큰** `bash <등록 경로>`/`sh <등록 경로>` 또는 허용 옵션만 쓰는 `az vm run-command invoke ... --scripts @<등록 경로>` 단일 읽기 대본을 적대 리뷰 PASS 뒤에 돌리는 경우만 예외; `sudo bash ...` 나 `bash <대본> <인자>` 3토큰 이상은 `readOnlyScripts` 무코드 대상이 아님).
 고정 대본은 준비 기록 없이 계획 승인으로 돌립니다. 적대 리뷰·PLAN·STEP 승인을 받은 계획의 명령 바이트와 `files` 지문이 실행 때와 같으면 받고, 대본이나 고정 파일이 1바이트라도 바뀌면 `고정 파일 sha256 불일치` 로 막습니다. `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)은 그대로 따로 요구하며, 계획 경로·지문은 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 같은 서비스로 12시간 안의 `deploy.json` 이 있으면 그 기록의 kind 로 판정하므로, ops 기록을 남겨 두면 대본이 막힙니다. 설정에 `requireReadiness: true` 가 있으면 계획 승인 경로를 쓸 수 없습니다.
@@ -117,6 +143,47 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 - 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기·확정 `review_models`(리뷰어별 `model`·`effort`·`runner`) 입력 목록 해시(`input_manifest_sha256`), 건너뛴 리뷰어(`skipped`)의 모델·강도, 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
+### Independent reviews for registered gates
+
+An installation can require several gates to review the same plan. Register each gate in the trusted installation wrapper that supplies its existing configuration approval. The plan and its CLI arguments cannot choose the required gates. Both the CLI wrapper and the admission hook must use the same registration.
+
+```js
+// The installation supplies canonical absolute roots and its existing approval inputs.
+// Each approval contains approverId, refs and token for that site's approved config.
+const options = {
+  root: planRoot,
+  reviewProfiles: [
+    { ...primaryApproval, id: "primary", root: primarySiteRoot },
+    { ...secondaryApproval, id: "secondary", root: secondarySiteRoot },
+  ],
+};
+
+// In the installed approval-plan CLI
+await runApprovedApprovalPlan(options, process.argv.slice(2));
+
+// In the installed admission hook
+const decision = await withGateConfig(options, () => evaluate(context));
+```
+
+The registration must contain at least one gate. Use a distinct existing site root and a distinct ID for each entry. An ID starts with a lowercase ASCII letter and permits up to 63 further lowercase letters, digits, underscores or hyphens. By default, each site's `.claude/deploy/config.json` requires its own verified approval. Its `review_models` and `planReview` select that gate's reviewers. A site with `readOnlyScripts` in `config/deploy-gate.json` must match its committed policy bytes. A reviewed read-only exception requires the same pinned file, digest and service in the plan repository and every registered gate. The gate computes that intersection from passing receipts.
+
+An installation that assigns the built-in strict policy to a site registers `{ id: "secondary", root: secondarySiteRoot, policy: "strict-defaults" }` in its trusted CLI and admission wrappers. That site runs the code-defined reviewer order with its own prompt and receipts. It contributes an empty list of command exceptions, so ordinary steps still require human PLAN and STEP consent. The strict profile accepts an absent config and ignores site overrides. It observes the presence and bytes of both site-policy files. A file change or change of registered policy requires fresh review. Entries with an omitted policy or an explicit `approved-config` still require verified configuration. The plan and CLI arguments cannot select a policy.
+
+Run the installation's usual CLI once per operation. This example uses an installation wrapper named `site-approval-plan.mjs`.
+
+```sh
+plan=.agents/progress/example/gates/deploy-plan.json
+node site-approval-plan.mjs review-prompt "$plan"
+node site-approval-plan.mjs review "$plan" --author muse
+node site-approval-plan.mjs check "$plan"
+node site-approval-plan.mjs report "$plan"
+node site-approval-plan.mjs preapprove "$plan" --session example-session
+```
+
+One `review` runs each configured gate. The receipt, reviewer output and findings for `primary` go under `gates/reviews/primary/`. Each other gate has its own sibling directory. The optional `--out` accepts a filename in each gate's directory. A receipt binds the gate ID, canonical site and plan locations, approved policy, allowlist, reviewed inputs and reviewer evidence. The report identifies the gate for each reviewer. Checking, reporting a pass, issuing approval codes and admission require a current passing receipt for every registered gate. The usual human approval for the plan and its steps still applies.
+
+Omitting `reviewProfiles` preserves the single-root CLI and its flat `gates/deploy-plan-review.json` receipt. Registering gates requires a review under each profile. Existing executor-byte pins still apply when upgrading the CLI or the gate. Open plans whose pinned executor bytes change need a fresh review.
+
 ### 2.1 리뷰 중 저장소 쓰기 잠금 (`plan-review.lock` + `plan-review-write-guard`)
 
 적대 리뷰가 도는 동안 다른 세션(3층 역할 세션, 2층 일꾼, 서브에이전트, 저장소 직접 세션)이 같은 인스턴스 저장소 안 파일을 고치면 입력 매니페스트·작업 트리 스냅샷이 어긋나 리뷰가 무효가 되거나 PASS 직후 관문이 막힙니다. 이를 글 규칙이 아니라 장치로 막습니다(상세: `docs/guides/plan-review-write-guard.md`).
@@ -130,15 +197,17 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 
 ## 3. 승인 코드 발급 (`preapprove`)
 
-적대 리뷰를 통과한 계획서에 대해 전체 계획 코드(`PLAN-xxxxxx`)와 각 단계 코드(`STEP-xxxxxx`)를 발급받습니다.
+적대 리뷰를 통과한 계획서에 대해 전체 계획 코드(`PLAN-…`)와 각 단계 코드(`STEP-…`)를 발급받습니다.
 
 ```bash
 node .agents/scripts/approval-plan.mjs preapprove .agents/progress/<작업ID>/gates/deploy-plan.json --session <세션ID>
 ```
 
-- 이 명령은 보고문과 함께 `PLAN-xxxxxx` 및 단계별 `STEP-xxxxxx` 코드를 출력합니다.
+- 이 명령은 보고문과 함께 `PLAN-…` 및 단계별 `STEP-…` 코드를 출력합니다.
+- 사람은 접두사와 그 뒤의 64자리 값을 함께 복사해 답합니다. 코드는 저장소와 계획서 경로, 계획서 원본 및 검수 입력 목록의 SHA-256, 실행 세션, 전체 계획 또는 해당 단계의 명령 전문, 발급 시각과 이번 발급의 난수에 묶입니다. 보고문은 명령을 JSON 문자열로 표시하므로 따옴표 안의 공백과 줄바꿈도 확인할 수 있습니다.
+- `PLAN`과 사전발급한 `STEP`은 발급 시각부터 12시간, 실행할 때 따로 발급한 `STEP`은 2시간 동안 유효합니다. 같은 발급 방식으로 다시 요청하면 미사용 명령의 유효한 코드를 계속 쓸 수 있습니다. 이미 사용한 명령을 재시도하려면 새 단계 코드를 승인받습니다. 이전 여섯 자리 코드를 쓰던 열린 계획은 관문 실행기 변경으로 다시 검수하고 새 코드를 발급받습니다. 이전 기록만 남은 단계는 실제 운영 상태를 확인한 뒤 다음 조치를 결정하십시오.
 - 코드가 발급되었다고 해서 승인된 것이 아닙니다. 승인자(사람)가 직접 그 코드를 입력해야만 효력이 생깁니다.
-- 단계마다 따로 승인받으려면 `preapprove` 없이 바로 보고문(`node .agents/scripts/approval-plan.mjs report <계획서>`)을 올리고, 첫 실행 시도 때 관문이 발급하는 `PLAN-xxxxxx` / `STEP-xxxxxx` 코드를 순서대로 입력받을 수도 있습니다.
+- 단계마다 따로 승인받으려면 `preapprove` 없이 바로 보고문(`node .agents/scripts/approval-plan.mjs report <계획서>`)을 올리고, 첫 실행 시도 때 관문이 발급하는 `PLAN-…` / `STEP-…` 코드를 순서대로 입력받을 수도 있습니다.
 
 ---
 
@@ -152,7 +221,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 
 - **승인자에게 실행할 명령이나 스크립트를 복사·붙여넣기하게 넘기지 마십시오.**
 - 승인자는 보고문을 검토한 뒤 두 가지 방법 중 하나로 승인합니다:
-  1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-xxxxxx`와 허용할 단계의 `STEP-xxxxxx` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
+  1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-…`와 허용할 단계의 `STEP-…` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
   2. **디스코드 본인 메시지**: 승인자 본인이 디스코드에 코드를 남기고, `gates/deploy-approval-discord.json`에 채널·메시지 ID를 기록하면 관문이 디스코드 REST API로 직접 작성자 ID(`approver.discordUserId`)와 시각을 대조합니다.
 
 ---
@@ -168,8 +237,8 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
    - 고정 파일(`files`) 및 명령이 참조하는 모든 파일의 **현재 디스크 SHA-256 일치**
    - 적대 리뷰 영수증(`deploy-plan-review.json`)과 입력 매니페스트 해시 일치
    - 인스턴스 서비스 준비 상태(`config/deploy-gate.json` 및 `gates/deploy.json`)
-   - 사람의 `PLAN-xxxxxx` 및 해당 단계 `STEP-xxxxxx` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치, 와일드카드 금지)의 `readOnlyScripts`에 `{sha256, path, service}`가 리뷰 당시 영수증과 동일하게 묶여 있으며 대본 파일이 심볼릭 링크 없이 git 추적·HEAD 일치하고 명령이 허용된 정확한 꼴(`az vm run-command invoke ... --scripts @<등록 경로>` 또는 2토큰 `bash`/`sh <등록 경로>`)인 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
-2. **단계 성공 확인 기록 (`step-ok`)**: 다음 본 단계(`s2`)로 넘어가기 전에 반드시 앞 단계(`s1`)의 모든 명령이 실제로 실행(`status === "executed"`)되었고 성공 확인 출력 파일이 `step-ok`로 기록되어 있어야 합니다(`s1`을 실행하지 않고 `step-ok`만 먼저 부른 뒤 `s2`를 실행하는 단계 건너뛰기는 차단됩니다).
+   - 사람의 `PLAN-…` 및 해당 단계 `STEP-…` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치, 와일드카드 금지)의 `readOnlyScripts`에 `{sha256, path, service}`가 리뷰 당시 영수증과 동일하게 묶여 있으며 대본 파일이 심볼릭 링크 없이 git 추적·HEAD 일치하고 명령이 허용된 정확한 꼴(`az vm run-command invoke ... --scripts @<등록 경로>` 또는 2토큰 `bash`/`sh <등록 경로>`)인 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
+2. **단계 성공 확인 기록 (`step-ok`)**: 다음 본 단계(`s2`)를 시작하려면 관문이 앞 단계(`s1`)의 각 명령을 통과시킨 기록과 성공 확인 출력 파일이 필요합니다. 관문은 명령 원문별 SHA-256과 해당 단계의 사람 승인, 또는 그 명령의 읽기 전용 예외를 다시 확인합니다. 명령을 통과시킨 기록은 로컬 상태에 있으므로 이 파일의 소진 기록을 보존해야 합니다. 운영 결과는 실제 성공 확인 출력을 `step-ok`로 기록합니다.
    ```bash
    node .agents/scripts/approval-plan.mjs step-ok .agents/progress/<작업ID>/gates/deploy-plan.json s1 --evidence /tmp/s1-check.txt
    ```

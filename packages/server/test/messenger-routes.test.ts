@@ -57,14 +57,16 @@ describe('messenger REST',()=>{
  })
  it('requires human approval, rejects plain messages and creates human code post',async()=>{
   const {app,headers,agent,url,post}=await fixture()
-  const form='1. 제목: [배포] 조치\n2. 요약: 시험\n3. 문서: https://dashboard.example.com/d/test\n4. 승인 코드\nPLAN-ABC123 STEP-DEF456'
+  const codes=`PLAN-${'FEDC'.repeat(16)} STEP-${'9876'.repeat(16)}`
+  const form='1. 제목: [배포] 조치\n2. 요약: 시험\n3. 문서: https://dashboard.example.com/d/test\n4. 승인 코드'
   const message=(await post(form,agent as any)).json();expect(message.author_kind).toBe('agent')
+  await post(codes,agent as any)
   expect((await app.inject({method:'POST',url:url+'/approvals/'+message.id,headers:agent,payload:{decision:'approve'}})).statusCode).toBe(403)
   expect((await app.inject({method:'POST',url:url+'/approvals/'+message.id,headers,payload:{decision:'approve'}})).json().approval.status).toBe('approved')
   const plain=(await post('ordinary')).json()
   expect((await app.inject({method:'POST',url:url+'/approvals/'+plain.id,headers,payload:{decision:'approve'}})).statusCode).toBe(400)
   const list=(await app.inject({url:url+'/channels/'+encodeURIComponent('업무-요청')+'/messages',headers})).json().messages
-  expect(list.find((m:any)=>m.body==='PLAN-ABC123 STEP-DEF456').author_kind).toBe('human')
+  expect(list.find((m:any)=>m.body===codes && m.author_kind==='human').author_id).toBe('test-human')
  })
  it('rejects anonymous and invalid agent identities even with human header',async()=>{
   const {app,url,headers}=await fixture()
