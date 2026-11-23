@@ -59,3 +59,25 @@ test('intent retries a transient role mutex at most three times before startup p
   f.deps.store=async()=>{const store=await base();return {...store,lock:async fn=>++attempts<3?null:fn()};};
   assert.equal((await f.call('intent',['--launcher-pid','20'])).code,0);assert.equal(attempts,3);
 });
+
+test('prepare records exact planned argv and launches only one bounded metadata observer',async t=>{
+  const f=await fixture(t),calls=[];
+  f.deps.observer=async options=>calls.push(options);
+  const result=await capture(()=>main(['prepare','--config',f.config,'--role','writer','--launcher-pid','20','--',...f.argv],
+    f.deps,()=>assert.fail('planned argv must not consume the TUI stdin')));
+  assert.equal(result.code,0);assert.equal(result.result.reason,'launch_observer_started');assert.equal(calls.length,1);
+  assert.deepEqual(calls[0],{role:'writer',profile:f.profile,config:f.config,launchId:'launch-one',timeoutMs:30000});
+  assert.ok(!JSON.stringify(result).includes('exact private prompt'));
+  assert.ok(!JSON.stringify(calls).includes('exact private prompt'));
+});
+
+test('prepare invalid argv never starts an observer and observer launch failure never reports startup readiness',async t=>{
+  const f=await fixture(t);let calls=0;
+  f.deps.observer=async()=>{calls++;throw new Error('private request must not be logged');};
+  const args=['prepare','--config',f.config,'--role','writer','--launcher-pid','20','--'];
+  const invalid=await capture(()=>main([...args,'codex','resume','wrong-thread'],f.deps));
+  assert.equal(invalid.code,75);assert.equal(calls,0);
+  const failed=await capture(()=>main([...args,...f.argv],f.deps));
+  assert.equal(failed.code,75);assert.equal(failed.result.reason,'registration_observer_unavailable');assert.equal(calls,1);
+  assert.ok(!JSON.stringify(failed).includes('private'));
+});
