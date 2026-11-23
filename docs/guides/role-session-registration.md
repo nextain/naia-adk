@@ -48,6 +48,25 @@ the explicit resume UUID and existing model settings. Preserve the literal exec
 line used by static prompt checks. Do not use a last-session picker or rewrite
 model/effort flags in this adapter.
 
+A launcher that must preserve its TUI stdin or cannot use shell pipelines can
+instead call `prepare` with the exact planned argv after `--`:
+
+```sh
+node /installed/adk/scripts/role-session-registration.mjs prepare \
+  --config /private/role/input.json --role writer --launcher-pid "$$" \
+  -- codex --remote unix:///private/role/app-server.sock resume "$REGISTERED_THREAD"
+# The caller then performs its existing literal exec with those same arguments.
+```
+
+`prepare` records the same intent and launches only this CLI's bounded thirty-second
+metadata watcher with detached stdin and a private `watch-LAUNCH_ID.json` log.
+It neither consumes the caller's stdin nor executes the supplied native argv.
+It starts no TUI, model or daemon. Exit0 means the observer process started, not
+that a lease has already been published; verify the lease after normal startup.
+An invalid intent or observer launch failure returns75 before the caller exec.
+The instance's existing prompt checker must explicitly recognize this trusted
+metadata command and the value-taking `--remote` option before installation.
+
 ```sh
 node /installed/adk/scripts/role-session-registration.mjs intent \
   --config /private/role/input.json --role writer --launcher-pid "$LAUNCHER_PID"

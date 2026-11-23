@@ -37,6 +37,13 @@ explicitly resume the expected thread, and its UID/cwd/start identity, exact
 argv digest and the configured native session metadata must agree. Planned and
 observed argv are metadata only; prompt bodies are never written to the lease.
 
+The optional `prepare` CLI packages the existing intent and bounded observer for
+launchers whose static prompt checker cannot permit shell pipes/background jobs.
+Planned argv follows `--`; the helper does not read TUI stdin or execute that
+argv. It starts only its own thirty-second metadata watcher, with a private log,
+then the caller retains its original literal native exec. Helper success means
+the observer started; lease publication remains a separate observed result.
+
 The frontend and native owner are separate identities. An instance declares
 either an embedded backend or an explicit private Unix endpoint. In embedded
 mode the frontend must hold the exact configured root rollout. In endpoint mode
@@ -74,6 +81,8 @@ contract does not implicitly authorize reading private registration files.
 | Scenario | Required result |
 | --- | --- |
 | Existing script execs the native CLI in place | Same launch PID/start plus explicit resume thread registers |
+| Launcher uses metadata prepare without shell pipelines | TUI stdin is untouched, exact planned argv is recorded, and one bounded observer registers the later normal exec |
+| Intent or observer startup fails | Caller receives75 before its native exec; no model or daemon is started |
 | Node entrypoint spawns native child | Nearest native Codex under that launcher registers, not Node or a subagent |
 | Daemon owns the role thread outside the frontend ancestry | Frontend and owner leases bind through explicit endpoint, listener inode, UID and exact root rollout |
 | Another same-UID server exposes another saved thread | Wrong endpoint or root rollout/loaded-thread evidence rejects registration |

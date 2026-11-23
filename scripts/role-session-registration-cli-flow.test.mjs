@@ -16,3 +16,8 @@ test('actual common CLI preserves an unknown attempt and accepts late native ACK
   await fs.appendFile(f.native,JSON.stringify({type:'response_item',payload:{role:'user',content:[{type:'input_text',text:f.text}]}})+'\n');
   assert.equal(f.verify().status,'accepted');assert.equal(await f.count(),1);
 });
+
+for(const mode of ['execve','node-child','daemon'])test(`model-free prepare automatically publishes normal startup lease: ${mode}`,async t=>{
+  const f=await fixture(t,mode,{prepare:true,ownerRpc:mode==='daemon'});
+  assert.equal(f.send().code,0);assert.equal(f.verify().status,'accepted');assert.equal(await f.count(),1);
+});
