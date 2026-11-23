@@ -25,12 +25,32 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch immutable policy preservation baseline
+        run: |
+          policy_baseline=995405a67fa07bdf376f71fb631e2028a776d85b
+          git fetch --no-tags --depth=1 origin "$policy_baseline"
+          git cat-file -e "$policy_baseline^{commit}"
+          git cat-file -e "$policy_baseline:.agents/hooks/policies/bash.js"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile=false
+      - name: Install fixed registered Node runtime
+        run: |
+          registered_node_source="$(node -p 'process.execPath')"
+          node -e 'const fs=require("node:fs");const [major,minor]=process.versions.node.split(".").map(Number);if(major!==22||minor<15)throw Error("Registered gates require Node22.15+");const fd=fs.openSync(process.execPath,"r");try{const b=Buffer.alloc(4);fs.readSync(fd,b,0,4,0);if(!b.equals(Buffer.from([127,69,76,70])))throw Error("Native ELF Node required")}finally{fs.closeSync(fd)}'
+          registered_node_sha="$(sha256sum "$registered_node_source" | cut -d ' ' -f 1)"
+          registered_node_version="$("$registered_node_source" --version)"
+          if [ "$registered_node_source" != /usr/bin/node ]; then
+            sudo install -o root -g root -m 0755 -- "$registered_node_source" /usr/bin/node
+          fi
+          test ! -L /usr/bin/node
+          test "$(stat -c '%u:%g:%a' /usr/bin/node)" = '0:0:755'
+          test "$(sha256sum /usr/bin/node | cut -d ' ' -f 1)" = "$registered_node_sha"
+          test "$(/usr/bin/node --version)" = "$registered_node_version"
+          printf 'Registered Node: %s sha256=%s source=%s\n' "$registered_node_version" "$registered_node_sha" "$registered_node_source"
       - run: pnpm test
       - name: Install Linux sandbox runtime
         run: |
@@ -70,10 +90,8 @@ jobs:
           NODE
       - name: Native harness, session isolation, and request-contract gates
         run: pnpm test:harness-native
-      - name: Approval plan deploy gate
-        run: node .claude/hooks/test/run-approval-plan-gate-test.cjs
-      - name: Plan reviewer rotation gate
-        run: node .claude/hooks/test/run-plan-reviewer-rotation-test.cjs
+      - name: Approval plan deploy gate and registered executor
+        run: pnpm test:registered-gate
       - name: Naia account document translation adapter
         run: python .agents/skills/translate-doc/tests/test_naia_translate.py
       - name: Natural writing skill linter tests

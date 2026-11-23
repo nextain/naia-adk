@@ -1,0 +1,23 @@
+"use strict";
+const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),crypto=require("node:crypto"),{spawnSync}=require("node:child_process");
+const ROOT=path.resolve(__dirname,"../../.."),plan=require("../lib/deploy-plan.js"),{createValidPlan,writeGateConfig}=require("./approval-plan-fixtures.cjs"),sha=b=>crypto.createHash("sha256").update(b).digest("hex");
+function fixture(t){
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"registered-gate-v3-"));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));const engine=path.join(tmp,"engine"),instance=path.join(tmp,"instance"),global=path.join(tmp,"global-policy");for(const p of[engine,instance,global])fs.mkdirSync(p);
+ const files=[...new Set([...plan.REVIEW_EXECUTOR_FILES,".claude/hooks/_claude-bash-guard.js",".claude/hooks/deploy-guard.js",".claude/hooks/lib/hook-watchdog.js"])];
+ for(const file of files){const dest=path.join(engine,file);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(ROOT,file),dest);}
+ const git=(cwd,args)=>{const r=spawnSync("/usr/bin/git",["-C",cwd,...args],{encoding:"utf8"});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
+ git(engine,["init","-q"]);git(engine,["add","."]);git(engine,["-c","user.name=Fixture","-c","user.email=fixture@localhost","commit","-qm","Disposable registered runtime"]);git(instance,["init","-q"]);
+ writeGateConfig(instance,{services:{"azure:containerapp:sample-web-prod":{requireDeployGate:false,allowOps:true,allowRollback:true,allowCustomCommands:true,allowedCommands:["^bash scripts/rollout.sh prod$","^az containerapp revision activate -n sample-web-prod -g sample-rg --revision sample-web-prod--prev$"],requiredFiles:[]}}});const {planFile,plan:document}=createValidPlan(instance);document.author_model="codex";fs.writeFileSync(planFile,JSON.stringify(document));
+ const profiles=[{id:"scope-one",scope:"global",root:global,policy:"strict-defaults",expectedPolicySha256:sha(JSON.stringify(["gate-review/strict-defaults/v1",[[".claude/deploy/config.json",null]]])),stateDir:path.join(tmp,"state-global")},{id:"scope-two",scope:"project",root:instance,policy:"strict-defaults",expectedPolicySha256:sha(JSON.stringify(["gate-review/strict-defaults/v1",[[".claude/deploy/config.json",null]]])),stateDir:path.join(tmp,"state-project")}];
+ const data={schema:"registered-gate/v2",planRoot:instance,engine:{root:engine,commit:git(engine,["rev-parse","HEAD"]),files:files.map(file=>({file,sha256:sha(fs.readFileSync(path.join(engine,file)))}))},instance:{files:[{file:"config/deploy-gate.json",sha256:sha(fs.readFileSync(path.join(instance,"config/deploy-gate.json")))}]},profiles,approverId:"865850174651498506",providers:Object.fromEntries(["muse","argon","codex"].map(id=>[id,{file:"/usr/bin/true",sha256:sha(fs.readFileSync("/usr/bin/true"))}]))};
+ const record=path.join(instance,".claude/deploy/registered-gate.json");fs.mkdirSync(path.dirname(record),{recursive:true});const save=()=>{fs.writeFileSync(record,JSON.stringify(data));return sha(fs.readFileSync(record));};let digest=save();
+ const invoke=(op="hook",args=[],payload={},env={},profile="scope-one")=>spawnSync(process.execPath,[path.join(engine,".agents/scripts/approval-plan.mjs"),op,"--registration",record,"--sha256",digest,"--profile",profile,...args],{cwd:instance,env:{...process.env,...env},input:JSON.stringify({cwd:instance,session_id:"registered-fixture",tool_name:"Bash",tool_input:{command:document.scenario[0].commands[0]},...payload}),encoding:"utf8",timeout:15000});
+ return{tmp,engine,instance,global,record,data,profiles,planFile,document,invoke,save:()=>digest=save(),digest:()=>digest};
+}
+function nativeReviewer(f, suffix=""){
+ const file=path.join(f.tmp,"reviewer"),log=path.join(f.tmp,"reviewer.log"),pass="판정: PASS\n"+plan.CRITERIA.map(([id])=>`${id}: PASS — disposable native test provider`).join("\n")+"\n참고 지적: 0\n남은 지적: 0\n"+suffix;
+ const code='#include <stdio.h>\n#include <stdlib.h>\nint main(int argc,char**argv){FILE*f=fopen('+JSON.stringify(log)+',"a");if(f){fprintf(f,"%s|%s|%s\\n",getenv("LD_PRELOAD")?getenv("LD_PRELOAD"):"",getenv("APPROVAL_PLAN_MUSE_BIN")?getenv("APPROVAL_PLAN_MUSE_BIN"):"",argv[0]);fclose(f);}fprintf(stdout,"판정: PASS\\nEXECUTABLE: %s\\n",argv[0]);fputs('+JSON.stringify(pass.split("\n").slice(1).join("\n"))+',stdout);return 0;}';
+ const r=spawnSync("/usr/bin/cc",["-x","c","-","-O0","-o",file],{input:code,encoding:"utf8"});assert.equal(r.status,0,r.stderr);f.data.providers=Object.fromEntries(["muse","argon","codex"].map(id=>[id,{file,sha256:sha(fs.readFileSync(file))}]));f.save();return{file,log};
+}
+
+module.exports={fixture,nativeReviewer,plan,fs,path,sha,spawnSync};

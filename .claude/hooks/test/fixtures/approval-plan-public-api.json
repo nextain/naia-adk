@@ -1,0 +1,367 @@
+{
+  "baseline": "e67f00727fbde5602c46235133eb83ee39487837",
+  "shape": {
+    "targetPins": {"kind": "function", "arity": 2},
+    "verifyTargetPreconditions": {"kind": "function", "arity": 3},
+    "verifyTargetResults": {"kind": "function", "arity": 3},
+    "readPlanSnapshot": {"kind": "function", "arity": 1},
+    "approvalScope": {"kind": "function", "arity": 1},
+    "matchesIssuedApproval": {"kind": "function", "arity": 2},
+    "withStateLock": {"kind": "function", "arity": 2},
+    "withGateConfig": {"kind": "function", "arity": 2},
+    "selectedReviewProblems": {"kind": "function", "arity": 3},
+    "reviewedReadOnlyScripts": {"kind": "function", "arity": 2},
+    "registeredReviewProfileIds": {"kind": "function", "arity": 1},
+    "withReviewProfile": {"kind": "function", "arity": 3},
+    "reviewProfileBinding": {"kind": "function", "arity": 2},
+    "reviewRecordDirectory": {"kind": "function", "arity": 1},
+    "reviewModelsFor": {"kind": "function", "arity": 0},
+    "resolveReviewModels": {"kind": "function", "arity": 1},
+    "orderedReviewersForConfig": {"kind": "function", "arity": 2},
+    "selfReview": {"kind": "function", "arity": 3},
+    "validateReviewModelEntry": {"kind": "function", "arity": 2},
+    "canonicalReviewModels": {"kind": "function", "arity": 1},
+    "REVIEW_MODEL_POLICY": {
+      "kind": "object",
+      "value": {
+        "efforts": [
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "runners": [
+          "agy",
+          "muse",
+          "codex",
+          "claude"
+        ]
+      }
+    },
+    "evaluate": {"kind": "function", "arity": 1},
+    "formProblems": {"kind": "function", "arity": 1},
+    "formWarnings": {"kind": "function", "arity": 1},
+    "requiresArchitectureFit": {"kind": "function", "arity": 1},
+    "ARCHITECTURE_FIT_CUTOFF": {
+      "kind": "string",
+      "value": "2026-11-15T04:30:00Z"
+    },
+    "architectureFitProblems": {"kind": "function", "arity": 1},
+    "isNarrowServerOrFileOnly": {"kind": "function", "arity": 1},
+    "isTemplatePlaceholder": {"kind": "function", "arity": 1},
+    "reviewProblems": {"kind": "function", "arity": 3},
+    "riskAcceptanceProblems": {"kind": "function", "arity": 1},
+    "riskAcceptanceActive": {"kind": "function", "arity": 1},
+    "reviewerIdsFor": {"kind": "function", "arity": 1},
+    "rotationOrder": {"kind": "function", "arity": 1},
+    "orderedReviewers": {"kind": "function", "arity": 1},
+    "isLimitFailure": {"kind": "function", "arity": 2},
+    "isRotationRecord": {"kind": "function", "arity": 1},
+    "LEGACY_REVIEW_CUTOFF": {
+      "kind": "string",
+      "value": "2026-11-10T10:00:00Z"
+    },
+    "plansForCommand": {"kind": "function", "arity": 2},
+    "plansCarryingCommand": {"kind": "function", "arity": 3},
+    "discordConfirms": {"kind": "function", "arity": 1},
+    "incidentVerdict": {"kind": "function", "arity": 3},
+    "renderReport": {"kind": "function", "arity": 3},
+    "reviewPrompt": {"kind": "function", "arity": 3},
+    "pinnedFileProblems": {"kind": "function", "arity": 2},
+    "referencedFiles": {"kind": "function", "arity": 2},
+    "resultFile": {"kind": "function", "arity": 2},
+    "reviewTrailer": {"kind": "function", "arity": 1},
+    "renderMergedFindings": {"kind": "function", "arity": 2},
+    "reviewInputManifest": {"kind": "function", "arity": 2},
+    "reviewInputEntries": {"kind": "function", "arity": 2},
+    "resolveRepoRoot": {"kind": "function", "arity": 1},
+    "preapproveStepCodes": {"kind": "function", "arity": 3},
+    "stepCodeTtlMs": {"kind": "function", "arity": 2},
+    "normalizeRepoRelPath": {"kind": "function", "arity": 1},
+    "validateReadOnlyScriptsConfig": {"kind": "function", "arity": 1},
+    "verifyRepoFileGitClean": {"kind": "function", "arity": 1},
+    "canonicalReadOnlyBinding": {"kind": "function", "arity": 1},
+    "validateReadOnlyBindingRecords": {"kind": "function", "arity": 1},
+    "planReadOnlyScriptsBinding": {"kind": "function", "arity": 2},
+    "REVIEW_MODELS": {
+      "kind": "object",
+      "value": {
+        "sol": {
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        "muse": {
+          "model": "muse-spark-1.3",
+          "effort": "xhigh"
+        },
+        "argon": {
+          "model": "gemini-4-argon-medium",
+          "effort": "medium"
+        },
+        "codex": {
+          "model": "gpt-6.1-terra",
+          "effort": "high"
+        }
+      }
+    },
+    "ROTATION": {
+      "kind": "object",
+      "value": [
+        "argon",
+        "codex",
+        "muse",
+        "claude"
+      ]
+    },
+    "AUTHOR_MODELS": {
+      "kind": "object",
+      "value": [
+        "sol",
+        "muse",
+        "argon",
+        "codex",
+        "claude"
+      ]
+    },
+    "LIMIT_RE": {
+      "kind": "object",
+      "value": "/rate.?limit|quota|usage limit|\\b429\\b|RESOURCE_EXHAUSTED|\\bexhausted\\b/i"
+    },
+    "CRITERIA": {
+      "kind": "object",
+      "value": [
+        [
+          "correctness",
+          "정확성: 명령이 의도대로 그 대상만 바꾸는가"
+        ],
+        [
+          "disconnect",
+          "끊김: 터미널·세션이 끊겨도 작업 상태 확인, 명시 runID로 재접속 확인, 보존된 이전 판으로 사람이 수동 복귀하는 경로가 있는가. 자동 복구 장치는 요구하지 않는다"
+        ],
+        [
+          "rerun",
+          "재실행·중복: 계획서에 적은 재실행 안전(잠금, 실행마다 고유 폴더, 가장 최근 폴더 자동 선택 없음)이 명령·스크립트 실제 동작과 맞고, 중복 실행으로 남는 위험이 숨겨지지 않았는가. 새 잠금·감시 장치는 요구하지 않는다"
+        ],
+        [
+          "rollback",
+          "되돌리기: 사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간이 적혀 있고, 그 명령이 실제로 보존된 이전 판으로 돌아가면 충족한다. 경로가 없거나 틀리면(이전 판이 남지 않음, 명령이 다른 것을 바꿈 등) FAIL. 자동 되돌리기·추가 백업 사본은 요구하지 않는다"
+        ],
+        [
+          "irreversible",
+          "되돌릴 수 없는 변경·데이터가 빠짐없이 적혔는가"
+        ],
+        [
+          "security",
+          "보안·비밀 노출이 없는가"
+        ],
+        [
+          "impact",
+          "운영 영향(중단 시간·사용자 영향)이 정확한가"
+        ],
+        [
+          "honesty",
+          "양식 정직성: 위험을 축소하거나 숨기지 않았는가"
+        ],
+        [
+          "incident_safety",
+          "장애 시 선조치(incident.actions)가 있으면 그것이 상황을 더 나쁘게 만들 수 없는가. 비어 있으면([]) 위반이 아니다(선조치를 새로 요구하지 않는다)"
+        ],
+        [
+          "architecture_fit",
+          "상위 구조·최초 요구 적합성: architecture_fit(original_request, parent_structure, acceptance_rationale)이 최초 요구 원문, 붙는 플랫폼·ADK·제품 구조(단일 서버·파일명 나열 아님), 수용 근거와 실제 맞고 일시 땜빵이 아닌가"
+        ]
+      ]
+    },
+    "CRITERIA_TEXT": {
+      "kind": "object",
+      "value": {
+        "correctness": "정확성: 명령이 의도대로 그 대상만 바꾸는가",
+        "disconnect": "끊김: 터미널·세션이 끊겨도 작업 상태 확인, 명시 runID로 재접속 확인, 보존된 이전 판으로 사람이 수동 복귀하는 경로가 있는가. 자동 복구 장치는 요구하지 않는다",
+        "rerun": "재실행·중복: 계획서에 적은 재실행 안전(잠금, 실행마다 고유 폴더, 가장 최근 폴더 자동 선택 없음)이 명령·스크립트 실제 동작과 맞고, 중복 실행으로 남는 위험이 숨겨지지 않았는가. 새 잠금·감시 장치는 요구하지 않는다",
+        "rollback": "되돌리기: 사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간이 적혀 있고, 그 명령이 실제로 보존된 이전 판으로 돌아가면 충족한다. 경로가 없거나 틀리면(이전 판이 남지 않음, 명령이 다른 것을 바꿈 등) FAIL. 자동 되돌리기·추가 백업 사본은 요구하지 않는다",
+        "irreversible": "되돌릴 수 없는 변경·데이터가 빠짐없이 적혔는가",
+        "security": "보안·비밀 노출이 없는가",
+        "impact": "운영 영향(중단 시간·사용자 영향)이 정확한가",
+        "honesty": "양식 정직성: 위험을 축소하거나 숨기지 않았는가",
+        "incident_safety": "장애 시 선조치(incident.actions)가 있으면 그것이 상황을 더 나쁘게 만들 수 없는가. 비어 있으면([]) 위반이 아니다(선조치를 새로 요구하지 않는다)",
+        "architecture_fit": "상위 구조·최초 요구 적합성: architecture_fit(original_request, parent_structure, acceptance_rationale)이 최초 요구 원문, 붙는 플랫폼·ADK·제품 구조(단일 서버·파일명 나열 아님), 수용 근거와 실제 맞고 일시 땜빵이 아닌가"
+      }
+    },
+    "TEMPLATE": {
+      "kind": "object",
+      "value": {
+        "schema": "deploy-plan/v1",
+        "version": 2,
+        "author_model": "<muse>",
+        "planId": "<짧은 이름, 예: app-web-20261016>",
+        "createdAt": "<ISO 시각>",
+        "services": [
+          "<deploy-guard 가 알려 준 운영 서비스 키, 예: azure:containerapp:my-app-prod>"
+        ],
+        "what_why": "<무엇을 왜 배포하나 한두 줄>",
+        "architecture_fit": {
+          "original_request": "<누가 무엇을 바랐는지 최초 요구 원문 요지 (최소 10자)>",
+          "parent_structure": "<붙는 플랫폼·ADK 업스트림·제품 상위 구조, 예: naia-adk 승인 계획 게이트 및 공통 배포 계층>",
+          "acceptance_rationale": "<이 상위 구조가 기존 확장 또는 새 공통 층으로 이 변경을 받아들이는 이유, 일시 땜빵이 아닌 근거>"
+        },
+        "changes": [
+          "<바뀌는 것 하나씩: 코드 판, 설정, 방화벽 규칙 등>"
+        ],
+        "scenario": [
+          {
+            "id": "s1",
+            "title": "<단계 이름>",
+            "commands": [
+              "<실행할 명령 전문. 이 글자 그대로 실행해야 통과>"
+            ],
+            "success_check": "<이 단계 성공 확인 방법과 기대값>",
+            "on_failure": "<실패 시 갈림길: 예) r1 로 되돌리고 보고>"
+          },
+          {
+            "id": "r1",
+            "branch": "rollback",
+            "title": "<되돌리기>",
+            "commands": [
+              "<되돌리기 명령>"
+            ],
+            "success_check": "<되돌리기 확인>",
+            "on_failure": "<되돌리기 실패 시: 운영 안전 상태와 보고>"
+          }
+        ],
+        "risks": {
+          "items": [
+            "<위험>"
+          ],
+          "worst_case": "<최악의 경우>"
+        },
+        "irreversible": [
+          "<되돌릴 수 없는 것. 없으면 \"없음: 이유\">"
+        ],
+        "disconnect_safety": "<끊김 시 작업 상태 확인 방법, 명시 runID 재접속 확인, 보존된 이전 판으로 사람이 수동 복귀하는 경로. 자동 복구 장치 불필요>",
+        "rerun_safety": {
+          "lock": "<중복 실행 거절 잠금>",
+          "run_dir": "<실행마다 고유 폴더, 앞 기록 안 덮음>",
+          "no_latest_pick": "<가장 최근 폴더 자동 선택 안 함, 실행 id 를 명시>"
+        },
+        "success_verification": "<전체 성공 확인 방법>",
+        "rollback": {
+          "method": "<되돌리기 방법>",
+          "duration": "<소요 시간>",
+          "step_ids": [
+            "r1"
+          ]
+        },
+        "residual_risks": [
+          "<남은 위험: 승인자가 책임지는 것>"
+        ],
+        "incident": {
+          "criteria": [
+            "<장애 판단 기준: 확인 실패, 5xx 급증 등 수치>"
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "commands": [
+                "<장애 시 승인 없이 실행할 되돌리기·완화 명령>"
+              ],
+              "why_safe": "<상황을 더 나쁘게 만들 수 없는 이유>"
+            }
+          ]
+        }
+      }
+    },
+    "PLAN_FILE": {
+      "kind": "string",
+      "value": "deploy-plan.json"
+    },
+    "REVIEW_FILE": {
+      "kind": "string",
+      "value": "deploy-plan-review.json"
+    },
+    "DISCORD_FILE": {
+      "kind": "string",
+      "value": "deploy-approval-discord.json"
+    },
+    "PREAPPROVE_STEP_TTL_MS": {
+      "kind": "number",
+      "value": 43200000
+    },
+    "PLAN_APPROVAL_TTL_MS": {
+      "kind": "number",
+      "value": 43200000
+    },
+    "STEP_CODE_TTL_MS": {
+      "kind": "number",
+      "value": 7200000
+    },
+    "stateFile": {"kind": "function", "arity": 1},
+    "PLAN_REVIEW_LOCK_REL": {
+      "kind": "string",
+      "value": ".agents/state/plan-review.lock"
+    },
+    "PLAN_REVIEW_LOCK_SCHEMA": {
+      "kind": "string",
+      "value": "plan-review-lock/v1"
+    },
+    "PLAN_REVIEW_LOCK_DEFAULT_TTL_MS": {
+      "kind": "number",
+      "value": 3600000
+    },
+    "planReviewLockPath": {"kind": "function", "arity": 1},
+    "isPidAlive": {"kind": "function", "arity": 1},
+    "isPidInLineage": {"kind": "function", "arity": 2},
+    "inspectPlanReviewLock": {"kind": "function", "arity": 1},
+    "acquirePlanReviewLock": {"kind": "function", "arity": 1},
+    "releasePlanReviewLock": {"kind": "function", "arity": 1},
+    "isPlanReviewRecordPath": {"kind": "function", "arity": 2}
+  },
+  "scopeAnchor": "/tmp",
+  "legacyScopes": [
+    {
+      "scope": {
+        "kind": "plan",
+        "plan": "scope-golden/gates/deploy-plan.json",
+        "planSha": "2222222222222222222222222222222222222222222222222222222222222222",
+        "sessionId": "legacy-characterization",
+        "step": null,
+        "scopeSha": "e208bbd145ab9722e36426a7bf895dc0bc94f3afd11bbaa2f4ff1ca2f490152a"
+      },
+      "row": {
+        "kind": "plan",
+        "plan": "scope-golden/gates/deploy-plan.json",
+        "planSha": "2222222222222222222222222222222222222222222222222222222222222222",
+        "sessionId": "legacy-characterization",
+        "step": null,
+        "scopeSha": "e208bbd145ab9722e36426a7bf895dc0bc94f3afd11bbaa2f4ff1ca2f490152a",
+        "nonce": "44444444444444444444444444444444",
+        "createdAt": "2026-11-23T00:00:00.000Z",
+        "preapprove": true,
+        "executed": [],
+        "code": "PLAN-AFA47E99C5752209C53D90CA95C0789BF5B5C159BF13851D10D9BF797C230A4E"
+      }
+    },
+    {
+      "scope": {
+        "kind": "step",
+        "plan": "scope-golden/gates/deploy-plan.json",
+        "planSha": "2222222222222222222222222222222222222222222222222222222222222222",
+        "sessionId": "legacy-characterization",
+        "step": "s1",
+        "scopeSha": "a06e7f58ba71e260cc43b332a6f6665592d81c6318327cc94727addd014f02da"
+      },
+      "row": {
+        "kind": "step",
+        "plan": "scope-golden/gates/deploy-plan.json",
+        "planSha": "2222222222222222222222222222222222222222222222222222222222222222",
+        "sessionId": "legacy-characterization",
+        "step": "s1",
+        "scopeSha": "a06e7f58ba71e260cc43b332a6f6665592d81c6318327cc94727addd014f02da",
+        "nonce": "44444444444444444444444444444444",
+        "createdAt": "2026-11-23T00:00:00.000Z",
+        "preapprove": true,
+        "executed": [],
+        "code": "STEP-E753D197430C2666C5FB4BAD77D5F0E1557D87F582C73B0A0874AAB323C6C597"
+      }
+    }
+  ]
+}

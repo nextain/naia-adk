@@ -27,13 +27,13 @@ function block(reason) {
  * 자식이면 false 를 돌려 호출한 쪽이 본문을 그대로 돌게 한다.
  * 부모면 자식을 띄워 결과를 그대로 옮기고 true 를 돌린다(호출한 쪽은 본문을 돌리지 않는다).
  */
-function runWithWatchdog({ script, args = [], env = {}, defaultMs = DEFAULT_MS, msEnvVar = "NAIA_DEPLOY_GUARD_WATCHDOG_MS", label = "운영 관문" }) {
-	if (process.env[CHILD_ENV] === "1") return false;
+function runWithWatchdog({ script, args = [], env = {}, defaultMs = DEFAULT_MS, msEnvVar = "NAIA_DEPLOY_GUARD_WATCHDOG_MS", label = "운영 관문", replaceEnvironment = false, childCheck = null }) {
+	if (childCheck ? childCheck() : process.env[CHILD_ENV] === "1") return false;
 	const rawMs = Number(process.env[msEnvVar]);
 	const ms = Number.isFinite(rawMs) && rawMs > 0 ? rawMs : defaultMs;
 	const secLabel = ms % 1000 === 0 ? String(ms / 1000) : (ms / 1000).toFixed(1);
 	const child = spawn(process.execPath, [script, ...args], {
-		env: { ...process.env, ...env, [CHILD_ENV]: "1" },
+		env: { ...(replaceEnvironment ? {} : process.env), ...env, [CHILD_ENV]: "1" },
 		stdio: ["pipe", "pipe", "inherit"],
 	});
 	const out = [];

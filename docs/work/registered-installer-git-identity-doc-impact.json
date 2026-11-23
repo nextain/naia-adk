@@ -1,0 +1,13 @@
+{
+  "issue": "registered-installer-git-identity",
+  "architecture_fit": {
+    "original_request": "Make the registered installer's canonical Git identity independent of inherited executable lookup and Git overrides.",
+    "parent_structure": "The existing typed user-profile installer validates an explicit descriptor before reconciling two settings slots and repeats identity validation before writing.",
+    "acceptance_rationale": "Use the same identity helper at both boundaries, with the POSIX system Git and an explicit child environment; preserve paired rollback and legacy installation."
+  },
+  "repository_docs": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "user_manual": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "validation": ["Three baseline exploit regressions fail, then pass with fixed executable and child environment", "Registered and legacy profile suites: 149 passed, one root-only test skipped", "Actual OS-root registered suite: 36 passed, one ordinary-operator test skipped; mixed-owner rollback passed", "Five focused initial/final environment cases passed"],
+  "operational_changes": "None; fixture settings only. The system Git executable remains a host installation prerequisite."
+}
