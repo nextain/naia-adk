@@ -30,7 +30,7 @@ async function stop(child){
   const exited=once(child,'exit');child.stdin.end('\n');await exited;
 }
 
-export async function roleSessionFlowFixture(t,mode,{ownerRpc=false}={}){
+export async function roleSessionFlowFixture(t,mode,{ownerRpc=false,prepare=false}={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'registration-flow-')),children=[];
   t.after(async()=>{for(const child of children.reverse())await stop(child);await fs.rm(dir,{recursive:true,force:true});});
   const bash=await fs.realpath('/bin/bash'),node=await fs.realpath(process.execPath),native=path.join(dir,'native.jsonl');
@@ -72,9 +72,19 @@ export async function roleSessionFlowFixture(t,mode,{ownerRpc=false}={}){
     profile.active_mentions={app_server:{command:[node,owner,'rpc','--config',config,'--role','writer']}};
     await fs.writeFile(config,JSON.stringify({state_dir:path.join(dir,'consumer'),roles:{writer:profile}}));
   }
-  const intent=cli(registration,['intent','--config',config,'--role','writer','--launcher-pid',String(launcher.pid)],{input:JSON.stringify(nativeArgv)});
+  const intent=cli(registration,[prepare?'prepare':'intent','--config',config,'--role','writer','--launcher-pid',String(launcher.pid),
+    ...(prepare?['--',...nativeArgv]:[])],prepare?{}:{input:JSON.stringify(nativeArgv)});
   assert.equal(intent.code,0);const waiting=ready(launcher);launcher.stdin.write('start\n');await waiting;
-  const observed=cli(registration,['observe','--config',config,'--role','writer','--launch-id',intent.intent.launch_id]);
+  if(prepare){
+    const file=path.join(profile.registration.state_dir,'writer','lease.json'),deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      try{if(JSON.parse(await fs.readFile(file,'utf8')).launch_id===intent.intent.launch_id)break;}
+      catch(error){if(error.code!=='ENOENT')throw error;}
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+  }
+  const observed=cli(registration,prepare?['probe','--config',config,'--role','writer']:
+    ['observe','--config',config,'--role','writer','--launch-id',intent.intent.launch_id]);
   assert.equal(observed.code,0);const lease=observed.lease;
   if(mode==='execve')assert.equal(lease.frontend.pid,launcher.pid);else assert.notEqual(lease.frontend.pid,launcher.pid);
   if(server){assert.equal(lease.owner.pid,server.pid);assert.notEqual(lease.owner.pid,lease.frontend.pid);}

@@ -3,7 +3,7 @@
   "repository_docs": {
     "status": "UPDATED",
     "files": ["docs/guides/role-session-registration.md", "docs/work/role-session-registration.md"],
-    "reason": "Specifies explicit launch registration, separate frontend/server identity, generation publication and private owner-account resolution."
+    "reason": "Specifies explicit launch registration, separate frontend/server identity, generation publication, private owner-account resolution and a metadata-only prepare command for literal-exec launchers."
   },
   "user_manual": {
     "status": "UPDATED",
