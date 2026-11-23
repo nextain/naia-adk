@@ -190,3 +190,25 @@ test('unproved API failure stays uncertain and never repeats pane input', async 
   assert.equal(record.status, 'submitted_unconfirmed'); assert.equal(record.transport_error, 'pane_send_failed');
   assert.equal((await h.call({ canonicalAttempt: true })).reason, 'native_ack_pending'); assert.equal(calls, 1);
 });
+
+test('styled clipped Codex hint uses the same classifier and accepts one existing native ACK', async t => {
+  const h = await harness(t); h.screen = '› \x1b[2m\x1b[48;2;41;41;41mAsk Codex\x1b[0m\n  GPT-6';
+  assert.equal(screenState(h.screen), 'idle');
+  const result = await h.call({ canonicalAttempt: true });
+  assert.equal(result.code, 0); assert.equal(result.native_user_ack.offset, 110); assert.equal(h.count(), 1);
+  assert.equal((await h.call({ canonicalAttempt: true })).code, 0); assert.equal(h.count(), 1);
+});
+
+test('plain clipped human input is preserved and its canonical attempt cannot be reused after styling changes', async t => {
+  const h = await harness(t); h.screen = '› Ask Codex\n  GPT-6'; const original = h.screen;
+  const result = await h.call({ canonicalAttempt: true });
+  assert.equal(result.code, 75); assert.equal(result.reason, 'draft'); assert.equal(h.count(), 0); assert.equal(h.screen, original);
+  h.screen = '› \x1b[2mAsk Codex\x1b[0m\n  GPT-6';
+  assert.equal((await h.call({ canonicalAttempt: true })).reason, 'attempt_terminal'); assert.equal(h.count(), 0);
+  assert.equal((await h.call({ canonicalAttempt: true, key: 'fresh-attempt' })).code, 0); assert.equal(h.count(), 1);
+});
+
+test('native active state takes precedence over a clipped Codex hint', async t => {
+  const h = await harness(t); h.screen = '› \x1b[2mAsk Codex\x1b[0m\n  GPT-6'; h.state.state = 'active';
+  assert.equal((await h.call()).reason, 'screen_busy'); assert.equal(h.count(), 0);
+});
