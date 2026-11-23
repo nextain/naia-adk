@@ -1413,3 +1413,163 @@ test('consumer exit 75 keeps originals pending, clears old failures and keeps th
   status = 0;
   assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
 });
+
+test('separate pump and receiver processes confirm an accepted input once after presentation and restart', t => {
+  const f = setup(t);
+  const adapter = path.join(f.dir, 'interactive.mjs');
+  fs.writeFileSync(adapter, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { createHash } from 'node:crypto';
+    const [mode, dir, role, file] = process.argv.slice(2);
+    const rows = name => fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').trim().split('\\n').filter(Boolean).map(row => JSON.parse(row)) : [];
+    const append = (name, value) => fs.appendFileSync(path.join(dir, name), JSON.stringify(value) + '\\n');
+    if (mode === 'present') {
+      const attempt = JSON.parse(fs.readFileSync(path.join(dir, 'state/submissions', role + '.json'), 'utf8'));
+      const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (process.env.ADK_WAKE_ATTEMPT !== attempt.attempt || sha256 !== process.env.ADK_WAKE_PAYLOAD_SHA256) throw Error('Uncorrelated presentation');
+      const binding = { attempt: attempt.attempt, sha256, role, pane: process.env.ADK_WAKE_PANE };
+      if (fs.existsSync(path.join(dir, 'busy'))) {
+        append('decisions', { ...binding, status: 'rejected', session: 'local-session', receipt: 'before-input' });
+        process.exit(75);
+      }
+      append('presented', { ...binding, status: 'typed' });
+    } else if (mode === 'accept') {
+      const draft = rows('presented').at(-1);
+      append('native-inputs', { ...draft, status: 'accepted', session: 'local-session', receipt: 'input-' + (rows('native-inputs').length + 1) });
+    } else {
+      const receipt = [...rows('native-inputs'), ...rows('decisions')].find(r => r.attempt === process.env.ADK_WAKE_ATTEMPT);
+      console.log(JSON.stringify(receipt ?? rows('presented').at(-1)));
+    }
+  `);
+  f.doc.delivery.command = [process.execPath, adapter, 'present', f.dir, '{role}', '{file}'];
+  f.doc.roles['role-a'].verify_submission = [process.execPath, adapter, 'verify', f.dir, '{role}', '{pane}'];
+  f.write();
+  const script = fileURLToPath(new URL('./role-wake.mjs', import.meta.url));
+  const pump = () => JSON.parse(execFileSync(process.execPath, [script, 'deliver', '--config', f.file, '--role', 'role-a'], { encoding: 'utf8' })).roles['role-a'];
+  const accept = () => execFileSync(process.execPath, [adapter, 'accept', f.dir]);
+  const lines = name => fs.readFileSync(path.join(f.dir, name), 'utf8').trim().split('\n').map(row => JSON.parse(row));
+  pump();
+  f.put('role-a', '001-111111111111111111-gw.md');
+  f.put('role-a', '002-111111111111111111-route-role-a.md');
+  const busy = path.join(f.dir, 'busy');
+  fs.writeFileSync(busy, '');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.equal(fs.existsSync(path.join(f.dir, 'presented')), false);
+  fs.unlinkSync(busy);
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.notEqual(lines('decisions')[0].attempt, lines('presented')[0].attempt);
+  f.put('role-a', '003-111111111111111111-route-role-a.md');
+  f.put('role-a', '004-distinct.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 4, deferred: 2 });
+  assert.equal(lines('presented').length, 1);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'state/delivered-role-a.jsonl'), 'utf8'), '');
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 1, deferred: 1 });
+  const accepted = lines('state/delivered-role-a.jsonl').filter(row => row.status === 'delivered');
+  assert.equal(accepted.length, 2);
+  assert.ok(accepted.every(row => row.submission.receipt === 'input-1' && row.submission.sha256 === lines('presented')[0].sha256));
+  assert.equal(lines('presented').length, 2);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  f.put('role-a', '005-distinct-with-identical-text.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const [, second, third] = lines('presented');
+  assert.equal(second.sha256, third.sha256);
+  assert.notEqual(second.attempt, third.attempt);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(lines('presented').length, 3);
+  assert.equal(fs.existsSync(path.join(f.dir, 'state/submissions/role-a.json')), false);
+});
+
+test('uncertain verified inputs wait through timeouts and mismatched receipts; only terminal rejection permits another presentation', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  const registry = f.load();
+  let mode = 'timeout', presentations = 0, launched;
+  const run = f.deps.run;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver' && args[0] === 'role-a') {
+      presentations++;
+      launched = options.env.ADK_WAKE_ATTEMPT;
+      throw Object.assign(new Error('acknowledgement not yet available'), { status: 75 });
+    }
+    if (bin !== '/opt/verify') return run(bin, args, options);
+    assert.deepEqual(args, ['role-a', 'w1:p1']);
+    assert.equal(options.timeout, 5_000);
+    if (mode === 'timeout') throw Object.assign(new Error('verification deadline'), { code: 'ETIMEDOUT' });
+    if (mode === 'unreadable') return 'not JSON';
+    const env = options.env;
+    const answer = { status: 'accepted', role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'native-event',
+      attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256 };
+    if (mode === 'rejected') { answer.status = 'rejected'; mode = 'timeout'; }
+    else if (mode !== 'accepted') answer[mode] = '';
+    return JSON.stringify(answer);
+  };
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', '001.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const first = launched;
+  for (mode of ['timeout', 'unreadable', 'status', 'attempt', 'sha256', 'role', 'pane', 'session', 'receipt']) {
+    assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+    assert.equal(presentations, 1);
+    assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  }
+  delete f.doc.roles['role-a'].verify_submission;
+  f.write();
+  const disabled = deliver(f.load(), f.deps, { only: 'role-a' }).roles['role-a'];
+  assert.equal(disabled.pending, 1);
+  assert.match(disabled.error, /Restore verify_submission/);
+  assert.equal(presentations, 1);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  mode = 'rejected';
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  assert.equal(presentations, 2);
+  assert.notEqual(launched, first);
+  mode = 'accepted';
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(presentations, 2);
+  assert.equal(pump().delivered, 0);
+});
+
+test('a native acknowledgement survives interrupted ledger writes and clears earlier failure state', t => {
+  const f = setup(t);
+  let registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', 'one.md');
+  f.state.failOn = 'one.md';
+  assert.equal(pump().failed, 1);
+  f.state.failOn = null;
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify'];
+  f.write();
+  registry = f.load();
+  f.state.now += 61_000;
+  const ledger = path.join(registry.stateDir, 'delivered-role-a.jsonl');
+  let submissions = 0, verifications = 0;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver') { submissions++; return ''; }
+    assert.equal(bin, '/opt/verify');
+    verifications++;
+    const env = options.env;
+    // The native session accepted this input. Its delivery ledger then became unavailable.
+    fs.renameSync(ledger, `${ledger}.saved`);
+    fs.mkdirSync(ledger);
+    return JSON.stringify({ status: 'accepted', attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256,
+      role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'input-1' });
+  };
+  assert.equal(pump().aborted, true);
+  fs.rmdirSync(ledger);
+  fs.renameSync(`${ledger}.saved`, ledger);
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(readFailures(registry, registry.roles[0]), {});
+  assert.equal(JSON.parse(fs.readFileSync(ledger, 'utf8')).submission.receipt, 'input-1');
+  assert.equal(pump().delivered, 0);
+  assert.equal(submissions, 1);
+  assert.equal(verifications, 1);
+});
