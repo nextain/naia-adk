@@ -110,7 +110,7 @@ async function setup() {
   return root;
 }
 const edit = (root, fn) => changeLedger(root, "secretary", fn);
-test("overdue open and waiting_human repeat wake rules, 30 minute dedup and independent reasons", async () => {
+test("overdue open and waiting_human preserve one semantic wake until facts change", async () => {
   const root = await setup();
   assert.equal((await watch({ root, config, now })).wakes.length, 0);
   await edit(root, (l) => {
@@ -126,7 +126,7 @@ test("overdue open and waiting_human repeat wake rules, 30 minute dedup and inde
   );
   assert.equal(
     (await watch({ root, config, now: now + 30 * 60000 })).wakes.length,
-    1,
+    0,
   );
   await edit(root, (l) => {
     l.items[0].status = "done";
@@ -135,7 +135,7 @@ test("overdue open and waiting_human repeat wake rules, 30 minute dedup and inde
     (await watch({ root, config, now: now + 60 * 60000 })).wakes.length,
     0,
   );
-  // waiting_human 기한이 지나면 한 번 깨우고 기한을 다음 날로 밀어 하루 한 번만 깨운다.
+  // An unchanged human-wait deadline stays unchanged after its one notice.
   const tWait = now + 90 * 60000;
   await edit(root, (l) => {
     l.items[0].status = "waiting_human";
@@ -149,7 +149,7 @@ test("overdue open and waiting_human repeat wake rules, 30 minute dedup and inde
   const pushed = await readLedger(root, "secretary");
   assert.equal(
     pushed.items[0].due,
-    new Date(tWait + 24 * 3600000).toISOString(),
+    "2026-11-08T11:00:00Z",
   );
   assert.equal(
     (await watch({ root, config, now: tWait + 23 * 3600000 })).wakes.length,
@@ -159,7 +159,7 @@ test("overdue open and waiting_human repeat wake rules, 30 minute dedup and inde
     (await watch({ root, config, now: tWait + 24 * 3600000 + 1 })).wakes.map(
       (w) => w.reason,
     ),
-    ["기한 넘음"],
+    [],
   );
 });
 test("unread worker results acknowledge touch but do not wake done or dropped cards", async () => {
@@ -1819,7 +1819,7 @@ test("answered-elsewhere requires explicit config, ISO timestamp, 7-day expiry, 
   assert.ok(resExplicit.warnings.some((w) => w.includes("msg-bad-fmt")));
 });
 
-test("waiting_human handles cap transition, overdue daily reminders, and edit/same-thread resets", async () => {
+test("waiting_human handles cap transition, semantic deadline and edit/same-thread resets", async () => {
   const root = await setup();
   await edit(root, (l) => {
     l.items[0].status = "done";
@@ -1880,7 +1880,7 @@ test("waiting_human handles cap transition, overdue daily reminders, and edit/sa
   const wh = ledCap.items.find((i) => i.from.msg_id === "th-post");
   assert.equal(wh.status, "waiting_human");
 
-  // waiting_human 기한(+4시간) 전에는 조용하고, 기한 지나면 "기한 넘음"으로 한 번 깨우고 다음 날로 민다 (HIGH #6)
+  // The initial four-hour deadline produces one semantic overdue notice.
   assert.deepEqual(
     (await watch({ root, config: conf, adapter, now: now + 380 * 60000 })).wakes,
     [],
@@ -1907,7 +1907,7 @@ test("waiting_human handles cap transition, overdue daily reminders, and edit/sa
   const ledAfter = await readLedger(root, "secretary");
   assert.equal(ledAfter.items.filter((i) => i.from.msg_id === "th-post").length, 1);
 
-  // 갱신된 기한(+4h)이 지나면 한 번 깨운 뒤 +24h 밀어 하루 한 번만 깨운다
+  // A real follow-up changes the due once; elapsed days do not change it.
   const tOver2 = tOver + 341 * 60000;
   assert.deepEqual(
     (await watch({ root, config: conf, adapter, now: tOver2 })).wakes.map((w) => ({ id: w.id, reason: w.reason })),
@@ -1920,7 +1920,7 @@ test("waiting_human handles cap transition, overdue daily reminders, and edit/sa
   const tOverDay2 = tOver2 + 24 * 3600000 + 1000;
   assert.deepEqual(
     (await watch({ root, config: conf, adapter, now: tOverDay2 })).wakes.map((w) => ({ id: w.id, reason: w.reason })),
-    [{ id: wh.id, reason: "기한 넘음" }],
+    [],
   );
 
   // 24시간을 넘긴 뒤에도 원 글 수정이 들어오면 다시 감지해 깨운다

@@ -18,7 +18,7 @@ async function setup(t) {
   await approveFixture(root, config);
   return root;
 }
-const wakes = root => readdir(path.join(root, '.agents/work/l4/wake')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
+const wakes = root => readdir(path.join(root, '.agents/work/l4/wake')).then(names => names.filter(name => name.endsWith('.md'))).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
 const runFire = (root, options = {}) => fire({ root, role: 'a', id: 'job', due, now, config, ...options });
 const unavailable = async () => { throw Error('fake systemd unavailable'); };
 const runWatch = (root, time = now) => watch({ root, config, now: time, runner: unavailable });
@@ -48,7 +48,7 @@ test('fire deduplicates and writes the normal wake format with delay and permiss
   assert.equal(JSON.parse(await readFile(receiptPath(root, 'a', 'job', due))).status, 'sent');
 });
 
-test('both concurrent fire and watch orders produce one initial wake and preserve 30 minute repeat', async t => {
+test('both concurrent fire and watch orders produce one initial wake and keep unchanged deadlines single', async t => {
   for (const first of ['timer', 'watch']) {
     const root = await setup(t);
     if (first === 'timer') {
@@ -59,8 +59,8 @@ test('both concurrent fire and watch orders produce one initial wake and preserv
       assert.equal(await runFire(root), false);
     }
     assert.equal((await runWatch(root, now + 29 * 60000)).wakes.length, 0);
-    assert.equal((await runWatch(root, now + 30 * 60000)).wakes.length, 1);
-    assert.equal((await wakes(root)).length, 2);
+    assert.equal((await runWatch(root, now + 30 * 60000)).wakes.length, 0);
+    assert.equal((await wakes(root)).length, 1);
   }
   const root = await setup(t);
   await Promise.all([runFire(root), runFire(root), runWatch(root)]);

@@ -761,13 +761,13 @@ test("when the drive pass cannot handle a role the watcher keeps the overdue wak
   const second = await watch({ root, config: invalid, now: now + 31 * MIN });
   assert.equal(second.drive, undefined);
   assert.deepEqual(second.errors, ["drive"]);
-  assert.deepEqual(woken(second), ["writer:draft:기한 넘음", "writer:drive-error:감시 실패"]);
+  assert.deepEqual(woken(second), ["writer:drive-error:감시 실패"]);
   assert.equal((await item(root, "writer", "draft")).drive.run, null);
   // Drive off: the watcher behaves exactly as before.
   const off = structuredClone(config);
   off.drive.enabled = false;
   const third = await watch({ root, config: off, now: now + 62 * MIN });
-  assert.deepEqual([third.errors, woken(third), third.drive], [[], ["writer:draft:기한 넘음"], undefined]);
+  assert.deepEqual([third.errors, woken(third), third.drive], [[], [], undefined]);
 });
 
 test("the due-time timer leaves an instructed item to the drive pass", async () => {

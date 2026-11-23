@@ -1,6 +1,6 @@
 # Semantic ledger reminders
 
-Status: proposed; production start blocked. Base: e4391296 (contains main381 reminder behavior).
+Status: approved implementation boundary; source validation in progress and production start blocked. Base: main38146b7757b1622ecf8088a6d1974cab02625b74.
 
 ## Original request and architecture fit
 
@@ -14,7 +14,7 @@ The isolated main381 reproduction emits 20/6/6/6/15 files at +0/+31/+61/+180/+36
 2. The overdue semantic revision contains card status, due, source channel/message, title and actual result identity. Wall-clock observation, age and last-wake timestamp are not revision fields. `open` and `waiting_human` use this observation. A due/status/result change publishes one version, including a later return to a previous status/version. Existing closed-worker exclusion remains unchanged.
 3. Remove watcher-driven `waiting_human` due advancement. It currently creates a next-day notification solely from elapsed observation time. The original due remains authoritative until an actual command/source update changes it. Keep intake's existing initial human-wait classification and mention limits.
 4. A report revision contains configured channel/period and the last actual report marker (`last_msg_id`, `last_at`). Its owed slot is first-report or `last_at + every_min`; elapsed unperformed slots are not new work. An actual report completion advances the next owed slot once. Do not create a version on each scan or cooldown.
-5. Keep due-timer receipts and lock ordering. Test both timer-disabled and timer-enabled observation. Timer publication already has a due-specific receipt: adopt an existing successful receipt for that exact role/card/due, preserve failed/unknown receipt retry semantics, and ensure a watcher-published deadline cannot be emitted again by `fire`. If this requires changing receipt/outbox ordering beyond the existing helper, return that boundary for review rather than silently adding a second transaction mechanism.
+5. Keep due-timer receipts and lock ordering. Test both timer-disabled and timer-enabled observation. Timer publication already has a due-specific receipt: adopt an existing successful receipt for that exact role/card/due, preserve failed/unknown receipt retry semantics, and ensure a watcher-published deadline cannot be emitted again by `fire`. The reviewed internal watcher callback stages the existing outbox under ledger→receipt locks; `claimed` precedes emission and `sent` follows it. No additional queue or transaction mechanism is introduced. Five interrupted boundary fixtures cover recovery, including a timer publication before its sent receipt.
 6. Legacy adoption uses exact historical pending content or an existing matching producer record, never synthetic consumer/native ACKs. Seed the semantic head and preserve all old filenames/receipts. A legacy record is not authority to swallow a later changed due/result. No ledger/status reset or global pending removal.
 
 Owned source candidates: `scripts/work-ledger/{card-wake,ledger-watch,due-timer}.mjs`, corresponding focused tests, existing ledger guide and per-change doc-impact receipt. No dispatcher behavior change is expected: it already preserves stable event filenames and excludes ledger bodies from Discord-message grouping.

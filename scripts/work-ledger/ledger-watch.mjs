@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile, stat, readdir, unlink, link } from "node:fs
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
-import { cardWakePublisher, escalationReason, ledgerWakeBody, ledgerWakeName, validCardEvent } from "./card-wake.mjs";
+import { cardWakePublisher, escalationReason, ledgerWakeBody, ledgerWakeName, validCardEvent, overdueReason, reportReason } from "./card-wake.mjs";
 import {
   readLedger,
   changeLedger,
@@ -615,40 +615,28 @@ export async function watch({
       for (const item of ledger.items) {
         if (isWorkerItem(item)) continue;
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
-        if (item.status === "open" && Date.parse(item.due) < now && !handled.has(`${role}/${item.id}`)) {
-          const key = JSON.stringify([role, item.id, "기한 넘음", item.due]);
+        if (["open", "waiting_human"].includes(item.status) && Date.parse(item.due) < now && !handled.has(`${role}/${item.id}`)) {
+          const key = JSON.stringify([role, item.id, overdueReason, item.due]);
+          const observe = async (latest, receipt) => {
+            const latestDetails = `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}`;
+            await cardWakes.observe({ role, item: latest, reason: overdueReason, legacyDetails: latestDetails,
+              details: latest.result ? `${latestDetails}\n카드 결과: ${latest.result}` : latestDetails,
+              revision: [latest.status, latest.title, latest.due, latest.from.channel, latest.from.msg_id, latest.worker?.result ?? null, latest.result ?? null],
+              evidenceAt: Math.max(Date.parse(latest.checked_at) || 0, Date.parse(latest.updated_at) || 0),
+              legacyKey: JSON.stringify([role, latest.id, overdueReason, latest.due]),
+              publishedAt: receipt?.status === "sent" && receipt.role === role && receipt.id === latest.id && receipt.due === latest.due ? receipt.at : undefined });
+          };
           let failedReceipt = false;
           try { failedReceipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")).status === "failed"; }
           catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
-          if (config.due_timer?.enabled === true || failedReceipt) {
-            const emitted = await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key],
-              emit: (latest, status) => wake(role, latest.id, status === "failed" ? "정한 시각" : "기한 넘음", latest.title,
-                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`, key, status === "failed") });
-            if (emitted) state.sent[JSON.stringify([role, item.id, "기한 넘음"])] = now;
+          if (item.status === "open" && (config.due_timer?.enabled === true || failedReceipt)) {
+            await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key], observe,
+              emit: async () => {} });
           } else {
-            // A timer may have fired just before the feature was disabled.
-            // Honor that receipt without starting any systemd operation.
-            try {
-              const receipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8"));
-              if (receipt && typeof receipt === "object" && receipt.status === "sent" && receipt.role === role && receipt.id === item.id &&
-                  receipt.due === item.due && Number.isFinite(receipt.at) && receipt.at <= now) {
-                const legacyKey = JSON.stringify([role, item.id, "기한 넘음"]);
-                state.sent[legacyKey] = Math.max(state.sent[legacyKey] ?? 0, receipt.at);
-                state.sent[key] = Math.max(state.sent[key] ?? 0, receipt.at);
-              }
-            } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
-            if (await wake(role, item.id, "기한 넘음", item.title, details)) state.sent[key] = now;
-          }
-        } else if (item.status === "waiting_human" && Date.parse(item.due) < now) {
-          if (await wake(role, item.id, "기한 넘음", item.title, details)) {
-            const nextDue = new Date(now + DAY_MS).toISOString();
-            ledger = await changeLedger(root, role, (l) => {
-              const target = l.items.find(
-                (i) => i.id === item.id && i.status === "waiting_human",
-              );
-              if (!target || target.due !== item.due) return;
-              target.due = nextDue;
-            });
+            let receipt;
+            try { receipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")); }
+            catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+            await observe(item, receipt);
           }
         } else if (item.status === "escalated_human") {
           const legacyDetails = `${details}\n메모: ${item.note || "(없음)"}`;
@@ -693,13 +681,11 @@ export async function watch({
         (report.last_at === null ||
           now - Date.parse(report.last_at) >= report.every_min * 60000)
       )
-        await wake(
-          role,
-          "report",
-          "정기 보고 시각",
-          `${report.every_min}분 정기 보고`,
-          `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
-        );
+        await cardWakes.observe({ role, item: { id: "report", title: `${report.every_min}분 정기 보고` }, reason: reportReason,
+          details: `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
+          revision: [report.channel, report.every_min, report.last_msg_id, report.last_at],
+          evidenceAt: Date.parse(report.last_at) || 0,
+          legacyKey: JSON.stringify([role, "report", reportReason]) });
       const intake = intakeSettings(config, roleConfig);
       if (intake.enabled === true) intakeRoles.push(role);
       networkChecks.push(async () => {
@@ -1351,6 +1337,10 @@ export async function watch({
       }
       });
     }
+    // Deadline notices must be visible before any network request can stall.
+    // Commit the same semantic heads before flushing their existing outbox.
+    await atomicJson(stateFile, state);
+    await cardWakes.flush(true);
     for (const check of networkChecks) await check();
     for (const role of intakeRoles) {
       try {

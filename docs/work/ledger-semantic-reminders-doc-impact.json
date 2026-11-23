@@ -1,0 +1,13 @@
+{
+  "issue": "ledger-semantic-reminders",
+  "requirements": ["REQ-WAKE-001 (candidate; existing wake workflow)"],
+  "architecture_fit": {
+    "original_request": "Stop repeated unchanged overdue, human-wait and unperformed-report inputs while retaining meaningful revisions and original evidence.",
+    "parent_structure": "Existing shared ledger observation, card-event staged outbox, due-timer receipts and dispatcher delivery receipts.",
+    "acceptance_rationale": "Extend the existing semantic event publisher to these reasons and retain the existing locks and recovery states. No additional queue, ACK mechanism or host configuration is introduced."
+  },
+  "repository_docs": { "status": "UPDATED", "path": "docs/common/work-ledger.md" },
+  "user_manual": { "status": "UPDATED", "path": "docs/common/work-ledger.md" },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/work/ledger-semantic-reminders-20261123.md" },
+  "validation_scope": "Model-free pending/consumed deadline/report matrix; changed facts and legacy migration; five interrupted publication boundaries; enabled/disabled timer order; existing closed-worker and local-before-network invariants. Production remains unchanged until separately accepted."
+}

@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
 import { ledgerPath } from './work-ledger/ledger.mjs';
-import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
+import { writeLedgerWake, watch as ledgerWatch } from './work-ledger/ledger-watch.mjs';
+import { dueWake, receiptPath } from './work-ledger/due-timer.mjs';
 import { cardWakePublisher, escalationReason } from './work-ledger/card-wake.mjs';
 import { formatStalledCardWake } from './lib/stalled-cards.mjs';
 
@@ -1951,4 +1952,43 @@ test('semantic overdue upgrade adopts matching legacy pending and delivered fact
   fs.writeFileSync(path.join(path.dirname(ledgerPath(f.root,'role-a')),'watch-state.json'),JSON.stringify({version:1,sent}));
   assert.deepEqual(flow.scan(61),[]);assert.equal(pump().delivered,0);assert.deepEqual(fs.readFileSync(path.join(registry.stateDir,'delivered-role-a.jsonl')),before);
   card.due='2026-01-08T00:00:00Z';flow.save();assert.equal(flow.scan(62).length,1);assert.equal(pump().delivered,1);
+});
+
+test('semantic deadline recovery keeps one durable original across receipt/state/flush crash boundaries', async t => {
+  for (const boundary of ['before-observe','after-receipt','after-state','after-flush','timer-after-publish']) {
+    const f = setup(t), card = ledgerRow('due-card',{due:'2026-01-09T00:00:00Z'}), flow = ledgerWatcher(f,[card]);
+    const stateFile = path.join(path.dirname(ledgerPath(f.root,'role-a')),'watch-state.json');
+    const state = {version:1,sent:{},card_events:{}}, wakes=[];
+    const publisher = cardWakePublisher({root:f.root,wakeDir:flow.inbox,state,wakes,oldWakeFiles:[]});
+    const details=`출처: ${card.from.channel}/${card.from.msg_id}\n기한: ${card.due}\n결과: (없음)`;
+    const observe=async()=>{
+      if(boundary==='before-observe')throw Error('simulated crash');
+      await publisher.observe({role:'role-a',item:card,reason:'기한 넘음',details,
+        revision:[card.status,card.title,card.due,card.from.channel,card.from.msg_id,null,null],
+        legacyKey:JSON.stringify(['role-a',card.id,'기한 넘음',card.due])});
+      assert.equal(fs.readdirSync(path.join(flow.inbox,'.ledger-card-outbox')).length,1);
+    };
+    const emit=async()=>{
+      assert.equal(JSON.parse(fs.readFileSync(receiptPath(f.root,'role-a',card.id,card.due))).status,'claimed');
+      if(boundary==='after-flush'){
+        fs.writeFileSync(stateFile,JSON.stringify(state));await publisher.flush(true);throw Error('simulated crash');
+      }
+      if(boundary==='timer-after-publish'){
+        await writeLedgerWake(flow.inbox,{stamp:new Date(NOW).toISOString().replace(/\D/g,''),role:'role-a',id:card.id,reason:'정한 시각',title:card.title,details});
+        throw Error('simulated crash');
+      }
+    };
+    const options={root:f.root,role:'role-a',id:card.id,due:card.due,now:NOW,source:boundary==='timer-after-publish'?'timer':'watch',emit,...(boundary==='timer-after-publish'?{}:{observe})};
+    if(['before-observe','after-flush','timer-after-publish'].includes(boundary)) await assert.rejects(dueWake(options),/simulated crash/);
+    else { assert.equal(await dueWake(options),true); if(boundary==='after-state')fs.writeFileSync(stateFile,JSON.stringify(state)); }
+    if(boundary==='before-observe')assert.equal(fs.existsSync(receiptPath(f.root,'role-a',card.id,card.due)),false);
+    const runner=async()=>{throw Error('system operation forbidden')};
+    const config={roles:[{role:'role-a',channels:[]}],due_timer:{enabled:true}};
+    for(const minutes of [1,31,61]){
+      const result=await ledgerWatch({root:f.root,config,runner,now:NOW+minutes*60000});assert.deepEqual(result.errors,[]);
+      assert.equal(flow.pending().length,1,boundary);
+    }
+    assert.equal(JSON.parse(fs.readFileSync(receiptPath(f.root,'role-a',card.id,card.due))).status,'sent');
+    assert.equal(fs.existsSync(path.join(flow.inbox,'.ledger-card-outbox'))?fs.readdirSync(path.join(flow.inbox,'.ledger-card-outbox')).length:0,0);
+  }
 });

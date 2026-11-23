@@ -7,6 +7,9 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 const isDigest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 export const escalationReason = "사람에게 올림";
 export const workerResultReason = "일꾼 끝, 결과 안 읽음";
+export const overdueReason = "기한 넘음";
+export const reportReason = "정기 보고 시각";
+const eventReasons = [escalationReason, workerResultReason, overdueReason, reportReason];
 
 export function ledgerWakeName({ stamp, role, id, reason }, nonce = "") {
   const route = `-route-${role}.md`;
@@ -44,7 +47,7 @@ export function isCardEventWakeName(name) {
 
 export function isCardEventWakeBody(body) {
   const [first, card] = body.split("\n", 2);
-  return [escalationReason, workerResultReason].some(reason => first.startsWith(`[장부] ${reason}: `)) &&
+  return eventReasons.some(reason => first.startsWith(`[장부] ${reason}: `)) &&
     /^작업카드: [A-Za-z0-9][A-Za-z0-9_-]*$/.test(card);
 }
 
@@ -53,7 +56,7 @@ export function validCardEvent(key, value) {
     const [role, id, reason] = JSON.parse(key);
     return typeof role === "string" && typeof id === "string" &&
       /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(role) && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) &&
-      [escalationReason, workerResultReason].includes(reason) && key === JSON.stringify([role, id, reason]) &&
+      eventReasons.includes(reason) && key === JSON.stringify([role, id, reason]) &&
       isDigest(value?.event) && (value.signature === null || isDigest(value.signature)) &&
       (value.ordinal === undefined || (Number.isSafeInteger(value.ordinal) && value.ordinal > 0)) &&
       eventWakeName(role, id, value.event, value.ordinal) !== null &&
@@ -81,19 +84,20 @@ export function cardWakePublisher({ root, wakeDir, state, oldWakeFiles, wakes })
   }
   const legacy = new Map();
   for (const name of oldWakeFiles) {
-    const old = /^(\d{17})-ledger-(.+)$/.exec(name);
+    const old = /^(\d{17})(?:-[a-f0-9]{8})?-ledger-(.+)$/.exec(name);
     if (!old) continue;
     if (!legacy.has(old[2])) legacy.set(old[2], []);
     legacy.get(old[2]).push(name);
   }
 
-  async function alreadyPublished(notice, key, legacyBody, evidenceAt) {
+  async function alreadyPublished(notice, key, legacyBody, evidenceAt, legacyKey, publishedAt) {
     const tail = `${notice.id}-route-${notice.role}.md`;
     const candidates = legacy.get(tail) ?? [];
     for (const name of [...candidates].sort().reverse()) {
       let body;
       try { body = await readFile(path.join(wakeDir, name), "utf8"); }
       catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (notice.reason === overdueReason) body = body.replace(/^\[장부\] 정한 시각:/, `[장부] ${overdueReason}:`).replace(/\n늦음 [^\n]*\n?$/, "\n");
       if (!body.startsWith(`[장부] ${notice.reason}: `)) continue;
       const stamp = name.slice(0, 17);
       return body === legacyBody && (!evidenceAt || stamp >= new Date(evidenceAt).toISOString().replace(/\D/g, ""));
@@ -101,10 +105,11 @@ export function cardWakePublisher({ root, wakeDir, state, oldWakeFiles, wakes })
     // The original consumer may already have archived the file. Its producer
     // recorded this exact card/reason when writing it. Newer source evidence
     // starts a new version even within the old cooldown.
-    return Number.isFinite(state.sent[key]) && evidenceAt <= state.sent[key];
+    const sent = state.sent[legacyKey ?? key];
+    return (Number.isFinite(sent) && evidenceAt <= sent) || (Number.isFinite(publishedAt) && evidenceAt <= publishedAt);
   }
 
-  async function observe({ role, item, reason, details, legacyDetails = details, revision, evidenceAt = 0, artifact }) {
+  async function observe({ role, item, reason, details, legacyDetails = details, revision, evidenceAt = 0, artifact, legacyKey, publishedAt }) {
     const id = item.id;
     const key = JSON.stringify([role, id, reason]);
     active.add(key);
@@ -123,7 +128,7 @@ export function cardWakePublisher({ root, wakeDir, state, oldWakeFiles, wakes })
       eventWakeName(role, id, event, ordinal);
       ordinals.set(role, ordinal);
     }
-    if (previous || !await alreadyPublished(notice, key, ledgerWakeBody({ ...notice, details: legacyDetails }), evidenceAt)) {
+    if (previous || !await alreadyPublished(notice, key, ledgerWakeBody({ ...notice, details: legacyDetails }), evidenceAt, legacyKey, publishedAt)) {
       await mkdir(outbox, { recursive: true, mode: 0o700 });
       await writeFile(path.join(outbox, event), body, { mode: 0o600 });
     }
