@@ -28,3 +28,9 @@ Owned source candidates: `scripts/work-ledger/{card-wake,ledger-watch,due-timer}
 - UC5 Existing behavior: escalation67 once, closed-worker739 zero, changed worker-result once, future waiting-human dates remain future, auto-drive=false starts zero workers. Existing enabled timer tests and legacy sender compatibility remain green.
 
 Run RED focused fixtures first, implement narrowly, then repeat the exact copied-ledger/consumer matrix. Fresh independent review gets one fixed source SHA; required public CI runs before merge. Live watcher/source/config/start remain unchanged until the parent accepts source evidence and deployment preimages. The previous start bundle is NOT_READY_DUPLICATE_SOURCE.
+
+## Validation-driven module separation
+
+The functional source was fixed before extraction. The size preflight required splitting already-large touched files without raising limits or adding waivers. `ledger-watch.mjs` retains role observation, locks, state commits and outbox flush order. Per-round messenger orchestration, cached retry reads, addressing, human questions and state validation now have separate cohesive modules. Their original helper bodies are preserved; per-round mutable data remains scoped to one watcher call. No process-global service locator is introduced.
+
+The original dispatcher test file is unchanged from the base. Its new deadline integration has a separate default-test entry. Large existing drive/ledger suites import their unchanged scenarios and fixtures; test names/counts and model-free publication observations are compared before and after extraction. The default test command now includes the full ledger suite explicitly.
