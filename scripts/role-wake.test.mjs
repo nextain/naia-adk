@@ -1008,6 +1008,9 @@ test('open-card watch reports a role omitted from a valid partial observer and a
   assert.equal(reduced.status, 1);
   assert.deepEqual(reduced.findings.map(item => [item.code, item.role, item.cards]),
     [['open-card-unwatched', owner, ['first', 'second']]]);
+  const legacyWatch = watch(f.load(), f.deps, { repair: true });
+  assert.equal(legacyWatch.openCardWatches, undefined);
+  assert.ok(!legacyWatch.findings.some(item => item.code.startsWith('open-card-')));
 
   const scoped = path.join(f.dir, 'card-watch.json');
   const delegate = { role: owner, card: 'first', workspace: f.root, ledgerFile: file, wakeDir: path.join(f.root, 'wake', owner) };
@@ -1135,6 +1138,51 @@ test('open-card watch CLI checks one registered watcher, metadata paths and an u
     return true;
   });
 });
+
+for (const kind of ['ledger-watch', 'card-watch']) {
+  test(`periodic open-card watch with ${kind} reports uncovered cards and notifies once per role`, t => {
+    const f = setup(t, { notify: { command: ['/opt/notify', '{text}'], repeat_seconds: 600 } });
+    f.doc.wake_root = '.agents/work/l4/wake';
+    const wakeDir = path.join(f.root, f.doc.wake_root);
+    fs.mkdirSync(path.join(wakeDir, 'role-b'), { recursive: true });
+    const ledgerFile = ledgerPath(f.root, 'role-a');
+    writeWorkLedger(ledgerFile, 'role-a', [ledgerRow('first')]);
+    writeWorkLedger(ledgerPath(f.root, 'role-b'), 'role-b', [ledgerRow('second'), ledgerRow('third')]);
+    const config = path.join(f.dir, 'active-watcher.json');
+    const active = kind === 'ledger-watch' ? { roles: [{ role: 'role-a' }] }
+      : { role: 'role-a', card: 'first', workspace: f.root, ledgerFile, wakeDir };
+    fs.writeFileSync(config, JSON.stringify(active));
+    f.doc.role_views = [{ kind, path: config }];
+    f.write();
+    deliver(f.load(), f.deps);
+    const periodic = (...flags) => {
+      let report;
+      const status = main(['watch', '--config', f.file, '--json', ...flags], {}, f.deps, text => { report = JSON.parse(text); });
+      assert.equal(status, 1);
+      return report;
+    };
+    const plain = periodic();
+    const gaps = report => report.findings.filter(item => item.code === 'open-card-unwatched');
+    assert.deepEqual(gaps(plain).map(({ role, cards }) => [role, cards]), [['role-b', ['second', 'third']]]);
+    assert.equal(plain.openCardWatches.configured, 1);
+    assert.equal(plain.openCardWatches.open, 3);
+    assert.deepEqual(plain.actions, []);
+    assert.deepEqual(f.state.runs, []);
+
+    f.state.now += 400_000;
+    const repaired = periodic('--repair');
+    assert.deepEqual(gaps(repaired), gaps(plain));
+    assert.deepEqual(repaired.actions.map(action => action.action), ['deliver', 'notify']);
+    assert.equal(repaired.actions[1].count, 1);
+    f.state.now += 60_000;
+    const repeat = periodic('--repair');
+    assert.deepEqual(gaps(repeat), gaps(plain));
+    assert.deepEqual(repeat.actions, []);
+    const notices = f.state.runs.filter(([command]) => command === '/opt/notify');
+    assert.equal(notices.length, 1);
+    assert.match(notices[0][1], /^\[role-wake\] open-card-unwatched role-b: 2 open card[^\n]+$/);
+  });
+}
 
 test('watch --repair restarts a stopped delivery run and notifies once per period', t => {
   const f = setup(t, { notify: { command: ['/opt/notify', '{text}'], repeat_seconds: 600 } });

@@ -138,6 +138,11 @@ config. Missing matches list the card IDs. Unreadable owner ledgers and
 invalid registered inputs are error findings. A successful match verifies
 configuration. Confirm actual receipt with a wake from the running installation.
 
+Registering a `ledger-watch` or `card-watch` view also enables the open-card
+check on each scheduled `watch` run. It groups uncovered cards into one finding
+per owner. With `--repair` and `notify.command` configured, that finding
+follows the existing `repeat_seconds` interval.
+
 ### Include work in a delivered wake
 
 With `delivery.workHeader` enabled and a ledger configured for the role,
@@ -226,7 +231,7 @@ check raises `dm-backup-stale` when a room has no recent catch-up, and
 |---|---|
 | `validate` | Load and check the registry. |
 | `check [--json]` | Read-only. Exit 1 on any error finding. |
-| `watch --repair` | `check`, then run `deliver` once if the delivery heartbeat is stale, then send error findings through `notify.command` once per `repeat_seconds`. |
+| `watch [--repair]` | Report periodic checks. With `--repair`, run `deliver` once if its heartbeat is stale, then send error findings through `notify.command` once per `repeat_seconds`. |
 | `board` | Print the role-session table for a status page. |
 | `deliver [--role id]` | Run one delivery pass. Install exactly one periodic runner. |
 | `sweep [--apply]` | Dry by default. Moves delivered files older than `retention.delivered_days` to `archive_dir/<role>/<yyyymmdd>/`. |

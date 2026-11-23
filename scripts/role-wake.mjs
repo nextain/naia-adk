@@ -16,7 +16,8 @@ import { cardWatchRole, inspectOpenCardWatches } from './lib/open-card-watch.mjs
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
 const INTERPRETERS = new Set(['node', 'python3', 'python']);
-const CARD_WATCH_VIEWS = new Set(['ledger-watch', 'card-watch', 'session-health']);
+const DEDICATED_CARD_WATCH_VIEWS = new Set(['ledger-watch', 'card-watch']);
+const CARD_WATCH_VIEWS = new Set([...DEDICATED_CARD_WATCH_VIEWS, 'session-health']);
 const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'bot-mention-wake', ...CARD_WATCH_VIEWS]);
 const DEFAULTS = { heartbeatMaxAge: 300, maxPerRun: 50, lagSeconds: 600, retryMaxSeconds: 300, deliveredDays: 3, maxBoxFiles: 500, repeatSeconds: 3600, dmBackupMaxAge: 900 };
 // A role whose session is down fails every file; stop that role for the run after this many in a row.
@@ -855,7 +856,7 @@ function inspectViews(registry, { checkOpenCards = false, now } = {}) {
       if (row.dmUsers !== undefined && role.dmUsers.some(user => !row.dmUsers.includes(user))) diffs.push('dm_users');
       if (diffs.length) findings.push({ level: 'error', code: 'role-view-drift', role: row.id, detail: `${view.kind} ${view.path}: ${diffs.join(', ')} differ` });
     }
-    const expected = scoped ?? (['ledger-watch', 'card-watch'].includes(view.kind) ? [] : byId.keys());
+    const expected = scoped ?? (DEDICATED_CARD_WATCH_VIEWS.has(view.kind) ? [] : byId.keys());
     for (const id of expected) {
       if (byId.has(id) && !seen.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role is missing` });
     }
@@ -962,12 +963,13 @@ export function inspect(registry, deps = defaultDeps(), options) {
 // here once, so a dead timer does not strand every role. Pane restart and the
 // in-session wait nudge stay with the pane liveness tool.
 export function watch(registry, deps = defaultDeps(), { repair = false } = {}) {
-  let report = inspect(registry, deps);
+  const options = { checkOpenCards: registry.roleViews.some(view => DEDICATED_CARD_WATCH_VIEWS.has(view.kind)) };
+  let report = inspect(registry, deps, options);
   const actions = [];
   if (repair && report.findings.some(finding => finding.code === 'delivery-stale')) {
     const result = deliver(registry, deps);
     actions.push({ action: 'deliver', result });
-    report = inspect(registry, deps);
+    report = inspect(registry, deps, options);
   }
   const errors = report.findings.filter(finding => finding.level === 'error');
   if (repair && registry.notify && errors.length) {
