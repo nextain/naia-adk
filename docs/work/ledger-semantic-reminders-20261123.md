@@ -34,3 +34,25 @@ Run RED focused fixtures first, implement narrowly, then repeat the exact copied
 The functional source was fixed before extraction. The size preflight required splitting already-large touched files without raising limits or adding waivers. `ledger-watch.mjs` retains role observation, locks, state commits and outbox flush order. Per-round messenger orchestration, cached retry reads, addressing, human questions and state validation now have separate cohesive modules. Their original helper bodies are preserved; per-round mutable data remains scoped to one watcher call. No process-global service locator is introduced.
 
 The original dispatcher test file is unchanged from the base. Its new deadline integration has a separate default-test entry. Large existing drive/ledger suites import their unchanged scenarios and fixtures; test names/counts and model-free publication observations are compared before and after extraction. The default test command now includes the full ledger suite explicitly.
+
+### Extracted file responsibilities
+
+| File | Existing responsibility preserved |
+| --- | --- |
+| `scripts/work-ledger/ledger-watch-state.mjs` | State normalization, role settings and waiting-human upsert |
+| `scripts/work-ledger/ledger-watch-messenger.mjs` | Per-round messenger and intake orchestration |
+| `scripts/work-ledger/ledger-watch-reads.mjs` | Shared read cache, rate-limit budget and channel failures |
+| `scripts/work-ledger/ledger-watch-addressing.mjs` | Existing author/mention/reply and message-time interpretation |
+| `scripts/work-ledger/ledger-watch-questions.mjs` | Existing human-question observation and its receipts |
+| `scripts/work-ledger/drive-test-fixture.mjs` | Drive fake worker, setup, clock and fixture cleanup |
+| `scripts/work-ledger/drive-execution.cases.mjs` | Existing drive execution scenarios |
+| `scripts/work-ledger/drive-recovery.cases.mjs` | Existing drive retry/recovery and watcher integration scenarios |
+| `scripts/work-ledger/ledger-test-fixture.mjs` | Ledger setup, fixed clock and temporary-file cleanup |
+| `scripts/work-ledger/ledger-records.cases.mjs` | Existing header, card, publication and report records |
+| `scripts/work-ledger/ledger-reports.cases.mjs` | Existing report settings and messenger adapter checks |
+| `scripts/work-ledger/ledger-messenger.cases.mjs` | Existing edited/relayed message cases |
+| `scripts/work-ledger/ledger-observation.cases.mjs` | Existing role routing and reply observation cases |
+| `scripts/work-ledger/ledger-human-wait.cases.mjs` | Existing human-wait, thread and normalization cases |
+| `scripts/work-ledger/ledger-instructions.cases.mjs` | Existing state recovery and instruction settings cases |
+| `scripts/work-ledger/ledger-human-limits.cases.mjs` | Existing instruction deferral/drop and ledger-owner boundaries |
+| `scripts/work-ledger/semantic-reminders.test.mjs` | New unchanged-fact, revision, legacy migration and interrupted-publication acceptance |
