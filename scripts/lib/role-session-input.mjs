@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { acquireLock } from '../role-wake.mjs';
+import { acquireLock, validatePendingSubmission } from '../role-wake.mjs';
+import { verifiedActiveMention } from './active-mention.mjs';
 
 export const payloadHash = text => createHash('sha256').update(text).digest('hex');
 const tools = new Set(['codex', 'muse', 'claude', 'agy', 'opencode']);
@@ -76,13 +78,41 @@ async function readAttempt(file) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
+// Before receiver records included a pane, the dispatcher recorded it on the
+// same attempt. Consult that original entry only for already-presented input.
+async function originalPaneMatches(record, stateDir, profile) {
+  if (Object.hasOwn(record, 'pane_id') ||
+      !['submitting', 'submitted_unconfirmed', 'accepted'].includes(record.status) ||
+      !record.native_file_id || !Number.isSafeInteger(record.native_after_offset) || record.native_after_offset < 0 ||
+      !/^[a-f0-9]{64}$/.test(record.payload_hash) || !/^[a-f0-9]{64}$/.test(record.transport_sha256)) return false;
+  const directory = profile.active_mentions?.dispatcher_state_dir ?? stateDir;
+  if (typeof directory !== 'string' || !path.isAbsolute(directory)) return false;
+  const file = path.join(directory, 'submissions', record.role + '.json');
+  let handle;
+  try {
+    if (await fs.realpath(file) !== file) return false;
+    handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const [stat, parent, root] = await Promise.all([handle.stat(), fs.stat(path.dirname(file)), fs.stat(directory)]);
+    if (!stat.isFile() || !parent.isDirectory() || !root.isDirectory() ||
+        ((stat.mode | parent.mode | root.mode) & 0o022) || stat.uid !== parent.uid || stat.uid !== root.uid) return false;
+    const entry = validatePendingSubmission(JSON.parse(await handle.readFile('utf8')), record.role);
+    // Standalone card notices may retain a source message without being grouped by it.
+    return entry.pane === profile.pane_id && entry.attempt === record.source_key && entry.sha256 === record.transport_sha256 &&
+      (!entry.messageId || !record.source_message_id || entry.messageId === record.source_message_id);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function lockRole(stateDir, role) {
   if (!/^[a-zA-Z0-9_-]+$/.test(role)) throw new Error('invalid role');
   return acquireLock({ stateDir: path.join(stateDir, 'role-input', role) });
 }
 
 export async function deliverInput({ role, key, text, sourceMessageId = null, sourceSha256 = null,
-  transportSha256 = null, canonicalAttempt = false, profile, stateDir, ackTimeoutMs = 5000, pollMs = 200 }, deps) {
+  transportSha256 = null, canonicalAttempt = false, activeMention = null, profile, stateDir, ackTimeoutMs = 5000, pollMs = 200 }, deps) {
   const release = await lockRole(stateDir, role);
   if (!release) return { code: 75, reason: 'receiver_locked' };
   try {
@@ -92,9 +122,9 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
     const terminalNotSubmitted = before?.canonical_attempt === true && before.status === 'not_submitted';
     const immutable = fixedPayload || terminalNotSubmitted;
     const hash = immutable ? before.payload_hash : payloadHash(text);
-    const record = { ...before, role, source_key: key, source_message_id: sourceMessageId,
+    const record = { ...before, role, source_key: key, source_message_id: immutable ? before.source_message_id : sourceMessageId,
       status: immutable ? before.status : 'not_submitted',
-      canonical_attempt: before?.canonical_attempt ?? canonicalAttempt,
+      canonical_attempt: immutable ? before.canonical_attempt : before?.canonical_attempt ?? canonicalAttempt,
       pane_id: immutable ? before.pane_id : profile.pane_id,
       thread_id: immutable ? before.thread_id : profile.session?.thread_id ?? null,
       source_sha256: immutable ? before.source_sha256 : sourceSha256 ?? before?.source_sha256 ?? null,
@@ -107,7 +137,7 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
       return { schema_version: 1, code, role, source_key: key, source_sha256: record.source_sha256,
         payload_sha256: record.payload_hash, thread_id: record.thread_id ?? profile.session?.thread_id ?? null,
         status: code === 0 ? 'accepted' : code === 1 ? 'failed' : ['submitting', 'submitted_unconfirmed'].includes(record.status) ? 'uncertain' : 'deferred',
-        reason, first_at: record.first_at, last_at: record.last_at,
+        reason, ...(record.active_transport && { active_transport: record.active_transport }), first_at: record.first_at, last_at: record.last_at,
         native_user_ack: record.native_evidence ?? null, attempt_path: file };
     };
     if (terminalNotSubmitted) return finish(75, 'attempt_terminal');
@@ -123,7 +153,8 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
       try { return await deps.native(profile.session, hash, agent, query); }
       catch (error) { return { error: error.code ?? 'native_read_failed' }; }
     };
-    const query = () => record.native_cursor ? { cursor: record.native_cursor, file_id: record.native_file_id } : {};
+    const query = () => ({ ...(record.native_cursor && { cursor: record.native_cursor, file_id: record.native_file_id }),
+      ...(record.active_turn_id && { expected_turn_id: record.active_turn_id }) });
     const native = await readNative(query());
     const invalid = validateBinding(profile.session, agent, native);
     if (invalid) return finish(75, invalid, { native_error: native.error ?? null });
@@ -131,28 +162,55 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
     if (fixedPayload && record.native_file_id !== native.file_id) return finish(75, 'native_rotated');
     if (record.status === 'accepted') return finish(0, 'submitted_ack');
     const acknowledge = snapshot => snapshot.ack && snapshot.ack.offset >= record.native_after_offset &&
-      snapshot.ack.thread_id === profile.session.thread_id && snapshot.ack.payload_sha256 === hash;
+      snapshot.ack.thread_id === profile.session.thread_id && snapshot.ack.payload_sha256 === hash &&
+      (!record.active_turn_id || snapshot.ack.turn_id === record.active_turn_id);
     if (fixedPayload && acknowledge(native)) return finish(0, 'submitted_ack', { status: 'accepted', native_evidence: native.ack });
     if (fixedPayload) {
       record.native_cursor = native.next_cursor ?? record.native_cursor;
       return finish(75, 'native_ack_pending');
     }
-    if (native.state !== 'idle') return finish(75, native.state === 'active' ? 'screen_busy' : 'native_state_unknown');
-    const screen = screenState(inspected.screen);
-    if (screen !== 'idle') return finish(75, screen === 'busy' ? 'screen_busy' : screen);
+    let activeTurn = null;
+    if (canonicalAttempt && verifiedActiveMention(activeMention, role, profile, key, text, transportSha256) && native.state !== 'idle' && typeof deps.steer === 'function') {
+      activeTurn = native.turn_id ?? null;
+      if (!activeTurn && deps.activeTurn) {
+        try { activeTurn = await deps.activeTurn(profile); } catch { /* Long rollouts may lack a recent turn boundary. */ }
+      }
+    }
+    const steering = Boolean(activeTurn);
+    if (!steering) {
+      if (native.state !== 'idle') return finish(75, native.state === 'active' ? 'screen_busy' : 'native_state_unknown');
+      const screen = screenState(inspected.screen);
+      if (screen !== 'idle') return finish(75, screen === 'busy' ? 'screen_busy' : screen);
+    } else {
+      record.active_turn_id = activeTurn;
+      record.source_message_id = activeMention.message;
+      record.gateway_wake_sha256 = activeMention.wake_sha256;
+    }
     record.status = 'submitting';
     record.thread_id = native.thread_id;
     record.native_file_id = native.file_id;
     record.native_after_offset = native.byte_size;
     record.native_cursor = { offset: native.byte_size };
-    if (deps.transportApi) record.transport_api = deps.transportApi;
+    if (steering) record.transport_api = 'codex.turn/steer';
+    else if (deps.transportApi) record.transport_api = deps.transportApi;
     await finish(75, 'native_ack_pending');
-    try { await deps.submit(profile, text); }
-    catch (error) {
+    try {
+      if (steering) {
+        const receipt = await deps.steer(profile, record.active_turn_id, text);
+        await finish(75, 'native_ack_pending', { status: 'submitted_unconfirmed', active_transport: receipt });
+      } else {
+        await deps.submit(profile, text);
+      }
+    } catch (error) {
       const evidence = { transport_error: error.transportCode ?? error.code ?? 'unconfirmed',
         ...(Number.isInteger(error.status) && { transport_exit_status: error.status }) };
-      if (error.code === 'ENOENT' || error.beforeInput === true) return finish(1,
-        error.code === 'ENOENT' ? 'transport_unavailable' : 'transport_rejected', { ...evidence, status: 'not_submitted' });
+      if (steering && error.notSubmitted === true) {
+        return finish(75, 'active_not_submitted', { ...evidence, status: 'not_submitted' });
+      }
+      if (!steering && (error.code === 'ENOENT' || error.beforeInput === true)) {
+        return finish(1, error.code === 'ENOENT' ? 'transport_unavailable' : 'transport_rejected',
+          { ...evidence, status: 'not_submitted' });
+      }
       return finish(75, 'native_ack_pending', { ...evidence, status: 'submitted_unconfirmed' });
     }
     const deadline = deps.now() + ackTimeoutMs;
@@ -184,7 +242,12 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     const rejected = () => ({ ...projection, status: 'rejected', reason: 'not_submitted', receipt: `not-submitted:${payloadHash(key)}`, code: 0 });
     if (!before) return { ...projection, reason: 'attempt_unrecorded', code: 75 };
     if (!transportSha256 || before.transport_sha256 !== transportSha256) return { ...projection, reason: 'transport_payload_changed', code: 75 };
-    if (before.role !== role || before.source_key !== key || before.pane_id !== profile.pane_id || before.thread_id !== profile.session?.thread_id) {
+    if (before.role !== role || before.source_key !== key || before.thread_id !== profile.session?.thread_id) {
+      return { ...projection, reason: 'attempt_binding_mismatch', code: 75 };
+    }
+    const legacy = before.pane_id === undefined;
+    const paneMatches = legacy ? await originalPaneMatches(before, stateDir, profile) : before.pane_id === profile.pane_id;
+    if (!paneMatches) {
       return { ...projection, reason: 'attempt_binding_mismatch', code: 75 };
     }
     if (before.status === 'not_submitted') return before.canonical_attempt === true ? rejected()
@@ -193,8 +256,11 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     const inspected = await deps.inspect(profile);
     const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
     if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
+    const turn = before.active_turn_id ? { expected_turn_id: before.active_turn_id } : {};
+    const cursor = legacy ? { offset: before.native_after_offset } : before.native_cursor;
+    const cachedReceipt = !legacy && before.status === 'accepted';
     let native = await deps.native(profile.session, before.payload_hash, agent,
-      { cursor: before.native_cursor, file_id: before.native_file_id });
+      { cursor, file_id: before.native_file_id, ...turn });
     const check = snapshot => validateBinding(profile.session, agent, snapshot) ??
       (snapshot.file_id !== before.native_file_id ? 'native_rotated' : null);
     let invalid = check(native);
@@ -203,23 +269,24 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     // this first snapshot's EOF, one bounded window at a time. New appends wait
     // for the next verification; a partial line never advances the cursor.
     const end = native.byte_size;
-    while (before.status !== 'accepted' && !native.ack && native.next_cursor?.offset < end) {
+    while (!cachedReceipt && !native.ack && native.next_cursor?.offset < end) {
       const offset = native.next_cursor.offset;
       const next = await deps.native(profile.session, before.payload_hash, agent,
-        { cursor: { offset }, file_id: before.native_file_id, end_offset: end });
+        { cursor: { offset }, file_id: before.native_file_id, end_offset: end, ...turn });
       invalid = check(next);
       if (invalid) return { ...projection, reason: invalid, code: 75 };
       native = next;
       if (!native.ack && !(native.next_cursor?.offset > offset)) break;
     }
-    const ack = before.status === 'accepted' ? before.native_evidence : native.ack;
-    if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash) {
-      return { ...projection, reason: 'native_ack_pending', code: 75 };
+    const ack = cachedReceipt ? before.native_evidence : native.ack;
+    if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash ||
+        (before.active_turn_id && ack.turn_id !== before.active_turn_id)) {
+      return { ...projection, reason: before.active_transport ? 'steer_waiting_native' : 'native_ack_pending', code: 75 };
     }
     return { ...projection, status: 'accepted', code: 0, reason: 'submitted_ack',
       receipt: `codex-jsonl:${ack.thread_id}:${ack.offset}:${before.payload_hash}`, evidence: {
       source_sha256: before.source_sha256, payload_sha256: before.payload_hash,
-      first_at: before.first_at, native_user_ack: ack,
+      first_at: before.first_at, native_user_ack: ack, ...(before.active_turn_id && { gateway_wake_sha256: before.gateway_wake_sha256, active_turn_id: before.active_turn_id }),
     } };
   } finally { await release(); }
 }

@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { deliverInput, payloadHash, verifyInput, resolveAgentProcess, validateBinding, screenState } from './lib/role-session-input.mjs';
 import { createHash } from 'node:crypto';
+import { activeDispatch } from './lib/active-mention.mjs';
+import { steerActiveTurn } from './lib/codex-active-turn.mjs';
 
 const entry = fileURLToPath(import.meta.url);
 
@@ -64,14 +66,17 @@ export async function nativeSnapshot(session, hash, query = {}) {
       try { item = JSON.parse(raw); } catch { continue; }
       const value = item.payload;
       if (item.type === 'event_msg') {
-        if (value?.type === 'task_started') result.state = 'active';
+        if (value?.type === 'task_started') { result.state = 'active'; result.turn_id = value.turn_id ?? null; }
         if (['task_complete', 'turn_aborted', 'task_failed'].includes(value?.type)) result.state = 'idle';
       }
-      if (item.type === 'response_item' && value?.role === 'user') {
+      const activeUser = query.expected_turn_id && item.type === 'event_msg' && value?.type === 'item_completed' &&
+        value.thread_id === result.thread_id && value.turn_id === query.expected_turn_id && value.item?.type === 'UserMessage' && value.item.id;
+      if (activeUser || (!query.expected_turn_id && item.type === 'response_item' && value?.role === 'user')) {
+        const value = activeUser ? item.payload.item : item.payload;
         const text = typeof value.content === 'string' ? value.content : (value.content ?? [])
           .filter(part => ['input_text', 'text'].includes(part.type)).map(part => part.text ?? '').join('\n');
         if (payloadHash(text) === hash) result.ack = { thread_id: result.thread_id, offset: itemOffset,
-          at: item.timestamp ?? null, payload_sha256: hash };
+          at: item.timestamp ?? null, payload_sha256: hash, ...(activeUser && { turn_id: query.expected_turn_id, item_id: value.id }) };
       }
     }
   } catch (error) { result.error = error.code ?? 'native_read_failed'; }
@@ -128,6 +133,8 @@ export function hostDependencies({ paneBin = 'herdr', run = (bin, args, options 
         return JSON.parse(run(bin, args, { input: JSON.stringify({ session, hash, query }), timeout: 10_000 }));
       } catch (error) { return { error: error.code ?? 'native_read_failed' }; }
     },
+    activeTurn: profile => steerActiveTurn(profile, null),
+    steer: steerActiveTurn,
     async submit(profile, text) {
       // Existing-session identity was checked independently of Herdr's agent
       // registration. One literal argument becomes one pane.send_input RPC:
@@ -174,8 +181,10 @@ export async function main(argv = process.argv.slice(2), dependencies, env = pro
   if (!key) throw new Error('attempt key is required');
   const bytes = verify ? null : await fs.readFile(file);
   const transportSha256 = env.ADK_WAKE_PAYLOAD_SHA256 ?? (bytes && createHash('sha256').update(bytes).digest('hex'));
+  const text = bytes?.toString('utf8');
+  const activeMention = !verify && env.ADK_WAKE_ATTEMPT && activeDispatch(registry, role, resolved, key, text, transportSha256, value('--source-file'));
   const result = verify ? await verifyInput({ role, key, transportSha256, profile: resolved, stateDir }, deps)
-    : await deliverInput({ role, key, transportSha256, canonicalAttempt: Boolean(env.ADK_WAKE_ATTEMPT), text: bytes.toString('utf8'),
+    : await deliverInput({ role, key, transportSha256, canonicalAttempt: Boolean(env.ADK_WAKE_ATTEMPT), text, activeMention,
       sourceSha256: value('--source-sha256'), sourceMessageId: value('--source-message-id'), profile: resolved, stateDir,
     }, deps);
   process.stdout.write(JSON.stringify({ role, ...result }) + '\n');

@@ -38,6 +38,9 @@
     "check:context-translation": "python scripts/i18n/translate-ctx.py --check",
     "test:natural-writing": "node --test .agents/skills/natural-writing/tests/lint-writing.test.mjs"
   },
+  "dependencies": {
+    "ws": "8.20.0"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.1",
     "concurrently": "^9.2.1",

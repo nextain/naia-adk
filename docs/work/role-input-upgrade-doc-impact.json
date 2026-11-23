@@ -1,0 +1,6 @@
+{
+  "work": "role-input-upgrade",
+  "repository_docs": { "status": "UPDATED", "files": ["docs/guides/role-session-input.md"] },
+  "user_manual": { "status": "UPDATED", "files": ["docs/guides/role-session-input.md"], "detail": "Explains which records to retain when upgrading an installation with pending input." },
+  "reusable_learning": { "status": "UPDATED", "files": ["docs/guides/role-session-input.md"], "detail": "Use the original dispatch pane and a matching native user record beyond the saved offset to reconcile older receipts." }
+}

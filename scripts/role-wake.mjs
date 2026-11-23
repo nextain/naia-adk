@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
+import { activeMentionPolicy, readGatewayMention } from './lib/active-mention.mjs';
 import { isCardEventWakeBody, isCardEventWakeName } from './work-ledger/card-wake.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
@@ -20,6 +21,7 @@ const FAIL_STREAK = 3;
 // One run is bounded by max_per_run and the command timeouts; a lock older than this has no running owner.
 const LOCK_UNVERIFIED_MAX_MS = 30 * 60_000;
 const SNOWFLAKE = /^\d{17,20}$/;
+const wakeDigest = body => createHash('sha256').update(body).digest('hex');
 const ROLE_ID = /^[a-zA-Z0-9_-]+$/;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const fail = message => { throw new Error(message); };
@@ -110,8 +112,10 @@ export function loadRegistry(file) {
     const ledger = role.ledger === undefined ? null : typeof role.ledger === 'string' && role.ledger.trim() ? path.resolve(root, role.ledger) : fail(`role ${id}: ledger must be a path`);
     const verifySubmission = role.verify_submission ?? null;
     if (role.verify_submission !== undefined && (!delivery || !Array.isArray(verifySubmission) || !verifySubmission.length || !verifySubmission.every(part => typeof part === 'string' && part))) fail(`role ${id}: verify_submission requires delivery and a command array`);
+    const activeMentions = role.active_mentions === undefined ? null : activeMentionPolicy(role.active_mentions);
+    if (activeMentions && (!verifySubmission || !delivery?.priorityUserIds.length || !SNOWFLAKE.test(role.bot_id ?? ''))) fail(`role ${id}: active_mentions requires bot_id, priority_user_ids and verify_submission`);
     const routedWakeDir = wakeDir !== wakeRoot && routeIds.length > 1 && !extraBoxes.some(box => box.dir === wakeRoot) ? wakeRoot : null;
-    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait, ledger, routeIds, routedWakeDir, verifySubmission };
+    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait, ledger, routeIds, routedWakeDir, verifySubmission, activeMentions };
   });
   const paneBin = doc.pane?.bin;
   if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
@@ -254,7 +258,11 @@ export function readLedger(registry, role) {
       // were stored. Baseline rows were never handed to a consumer.
       if (entry.status === 'delivered' && entry.message_id !== null) {
         const id = entry.message_id ?? messageIdOf(path.basename(entry.file), null);
-        if (id) names.add(`message:${id}`);
+        if (id) {
+          names.add(`message:${id}`);
+          if (/^[a-f0-9]{64}$/.test(entry.submission?.source_wake_sha256)) names.add(`presented-message:${id}:${entry.submission.source_wake_sha256}`);
+          if (entry.submission?.gateway_only === true && /^[a-f0-9]{64}$/.test(entry.submission.gateway_wake_sha256)) names.add(`gateway-message:${id}:${entry.submission.gateway_wake_sha256}`);
+        }
       }
     } catch { /* a torn last line is retried */ }
   }
@@ -360,6 +368,7 @@ function handOver(registry, role, entry, deps, prepareSubmission) {
   let body;
   const readBody = () => {
     if (body) return body;
+    if (entry.raw) return (body = entry.raw);
     if (entry.body !== undefined) return (body = Buffer.from(entry.body));
     if (!entry.box?.via) return (body = fs.readFileSync(entry.file));
     const [reader, ...prefix] = entry.box.via;
@@ -376,7 +385,7 @@ function handOver(registry, role, entry, deps, prepareSubmission) {
       fs.mkdirSync(path.dirname(spooled), { recursive: true, mode: 0o700 });
       fs.writeFileSync(spooled, payload, { mode: 0o600 });
       file = spooled;
-      if (prepareSubmission) env = prepareSubmission(payload);
+      if (prepareSubmission) env = prepareSubmission(payload, original);
     }
     const [command, ...args] = registry.delivery.command.map(part => part.replaceAll('{role}', role.id).replaceAll('{file}', file));
     deps.run(command, args, { timeout: 60_000, ...(env && { env }) });
@@ -401,11 +410,15 @@ function submissionEnv(submission) {
 function readSubmission(file, role) {
   let value;
   try { value = readJson(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (value?.role !== role.id || typeof value.pane !== 'string' || !value.pane ||
+  return validatePendingSubmission(value, role.id);
+}
+
+export function validatePendingSubmission(value, roleId) {
+  if (value?.role !== roleId || typeof value.pane !== 'string' || !value.pane ||
       typeof value.attempt !== 'string' || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(value.attempt) ||
       typeof value.sha256 !== 'string' || !/^[\da-f]{64}$/.test(value.sha256) ||
       !Array.isArray(value.keys) || !value.keys.length || !value.keys.every(key => typeof key === 'string' && key) ||
-      !(value.messageId === null || SNOWFLAKE.test(value.messageId))) throw new Error(`Invalid pending submission for ${role.id}`);
+      !(value.messageId === null || SNOWFLAKE.test(value.messageId))) throw new Error(`Invalid pending submission for ${roleId}`);
   return value;
 }
 
@@ -442,14 +455,18 @@ export function messageIdOf(name, body) {
   if (fromName) return fromName[1];
   return typeof body === 'string' ? wakeSource(body, null).msgId ?? null : null;
 }
-function readWakeBody(entry, deps) {
-  if (entry.body !== undefined) return entry.body;
-  if (entry.box?.via) {
-    const [command, ...prefix] = entry.box.via;
-    entry.body = deps.run(command, [...prefix, 'cat', entry.file]).toString('utf8');
-  } else {
-    entry.body = fs.readFileSync(entry.file, 'utf8');
+function readWakeBytes(entry, deps) {
+  if (!entry.raw) {
+    if (entry.box?.via) {
+      const [command, ...prefix] = entry.box.via;
+      entry.raw = Buffer.from(deps.run(command, [...prefix, 'cat', entry.file], { encoding: 'buffer' }));
+    } else entry.raw = fs.readFileSync(entry.file);
   }
+  return entry.raw;
+}
+
+function readWakeBody(entry, deps) {
+  if (entry.body === undefined) entry.body = readWakeBytes(entry, deps).toString('utf8');
   return entry.body;
 }
 
@@ -485,10 +502,10 @@ export function mergeBodies(id, bodies) {
 }
 function deliverRole(registry, role, deps, now, at) {
   const { entries, errors, unreadable } = boxEntries(role, deps);
-  const append = (keys, status, messageId, submission) => {
+  const append = (keys, status, messageId, submission, extra = {}) => {
     if (!keys.length) return;
     const rows = keys.map(file => ({ file, at, status,
-      ...(messageId === undefined ? {} : { message_id: messageId }), ...(submission && { submission }),
+      ...(messageId === undefined ? {} : { message_id: messageId }), ...(submission && { submission }), ...extra,
     }));
     const text = rows.map(row => `${JSON.stringify(row)}\n`).join('');
     fs.appendFileSync(ledgerFile(registry, role), text, { mode: 0o600 });
@@ -536,6 +553,39 @@ function deliverRole(registry, role, deps, now, at) {
   // Message receipts survive separate pump runs and late copies from another
   // relay, even after retention has archived the delivered originals.
   const messageMark = id => `message:${id}`;
+  const gatewayDigests = new Map(), presentedDigests = new Map();
+  for (const key of seen) {
+    const match = /^(gateway|presented)-message:(\d{17,20}):([a-f0-9]{64})$/.exec(key);
+    if (match) (match[1] === 'gateway' ? gatewayDigests : presentedDigests).set(match[2], match[3]);
+  }
+  const originFor = id => readGatewayMention(role.activeMentions, role.id, role.botId, registry.delivery.priorityUserIds, id);
+  const closeCopies = () => {
+    let closed = 0;
+    for (const entry of entries) {
+      if (seen.has(entry.key)) continue;
+      const id = messageKeyId(entry);
+      if (!id || !seen.has(messageMark(id))) continue;
+      const acceptedDigest = gatewayDigests.get(id) ?? presentedDigests.get(id);
+      const knownOrigin = gatewayDigests.get(id) ?? originFor(id)?.wake_sha256;
+      let status = 'duplicate', extra = {};
+      if (knownOrigin || acceptedDigest) {
+        let body;
+        try { body = readWakeBytes(entry, deps); } catch { continue; }
+        const digest = wakeDigest(body);
+        extra = { source_sha256: digest, gateway_wake_sha256: knownOrigin ?? null, accepted_source_sha256: acceptedDigest ?? null, related_receipt: messageMark(id) };
+        if (digest !== acceptedDigest) {
+          status = 'conflicting-copy';
+          const archive = path.join('conflicting-copies', role.id, `${id}-${digest}.md`);
+          atomic(path.join(registry.stateDir, archive), body);
+          extra.source_archive = archive;
+        }
+      }
+      append([entry.key], status, id, null, extra);
+      seen.add(entry.key);
+      closed++;
+    }
+    return closed;
+  };
   const priorityFile = path.join(registry.stateDir, `priority-${role.id}.json`);
   let priorityStreak = 0;
   if (registry.delivery.priorityUserIds.length) {
@@ -555,7 +605,12 @@ function deliverRole(registry, role, deps, now, at) {
   const acceptSubmission = (submission, evidence, alreadySaved = false) => {
     // Keep the receiver's evidence until every original has its delivery receipt.
     if (!alreadySaved) atomic(submissionFile, JSON.stringify({ ...submission, confirmed: evidence }));
-    const recorded = acknowledge(submission.keys, submission.messageId, evidence);
+    const gateway = submission.gateway_only === true && submission.gateway_wake_sha256;
+    const recorded = acknowledge(submission.keys, submission.messageId, { ...evidence,
+      ...(submission.source_wake_sha256 && { source_wake_sha256: submission.source_wake_sha256 }),
+      ...(gateway && { gateway_only: true, gateway_wake_sha256: gateway }) });
+    if (submission.source_wake_sha256) presentedDigests.set(submission.messageId, submission.source_wake_sha256);
+    if (gateway) gatewayDigests.set(submission.messageId, gateway);
     // While this attempt is unresolved the role cannot present another input.
     // Reapply its absolute count on recovery if receipt bookkeeping was interrupted.
     if (registry.delivery.priorityUserIds.length && Number.isSafeInteger(submission.priorityStreakAfter) && submission.priorityStreakAfter >= 0) {
@@ -582,13 +637,7 @@ function deliverRole(registry, role, deps, now, at) {
       if (acceptSubmission(pendingSubmission, evidence, Boolean(confirmed))) recovered = 1;
     } else fs.unlinkSync(submissionFile);
   }
-  for (const entry of entries.filter(entry => !seen.has(entry.key))) {
-    const id = messageKeyId(entry);
-    if (id && seen.has(messageMark(id))) {
-      append([entry.key], 'duplicate');
-      seen.add(entry.key);
-    }
-  }
+  closeCopies();
   const fresh = entries.filter(entry => !seen.has(entry.key));
   const failures = Object.fromEntries(Object.entries(before).filter(([key]) => fresh.some(entry => entry.key === key)));
   // New files first, then retries, fewest failures first: a file that keeps
@@ -610,7 +659,8 @@ function deliverRole(registry, role, deps, now, at) {
   }
   if (registry.delivery.priorityUserIds.length) {
     for (const group of groups) {
-      group.priorityId = group.members.map(member => priorityMessage(registry, role, member, deps)).find(Boolean) ?? null;
+      group.origin = group.id && originFor(group.id);
+      group.priorityId = group.origin?.message ?? group.members.map(member => priorityMessage(registry, role, member, deps)).find(Boolean) ?? null;
     }
     groups.sort((left, right) => {
       if (!left.priorityId) return right.priorityId ? 1 : 0;
@@ -624,6 +674,17 @@ function deliverRole(registry, role, deps, now, at) {
   };
   const handovers = [];
   for (const group of groups) {
+    const origin = group.origin;
+    if (origin) {
+      // Only bytes attested by the Gateway may stand for this Discord message.
+      // Other copies stay pending until the authoritative submission is acknowledged.
+      const matches = group.members.filter(member => {
+        try { return wakeDigest(readWakeBytes(member, deps)) === origin.wake_sha256; } catch { return false; }
+      });
+      const original = matches.find(member => member.name.endsWith(`-${group.id}-gw.md`)) ?? matches[0];
+      if (original) handovers.push({ members: [original], entry: original, messageId: group.id, priorityId: group.priorityId, origin });
+      continue;
+    }
     if (group.id === null || group.members.length < 2) {
       for (const member of group.members) handovers.push({ members: [member], entry: member, messageId: group.id, priorityId: group.priorityId });
       continue;
@@ -656,10 +717,13 @@ function deliverRole(registry, role, deps, now, at) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         mergedFile = path.join(dir, `${handover.members[0].name.replace(/[/\\]/g, '_')}.merged.md`);
         fs.writeFileSync(mergedFile, handover.body, { mode: 0o600 });
-        entry = { ...handover.members[0], file: mergedFile, box: null, body: handover.body, sourceBody: handover.sourceBody };
+        entry = { ...handover.members[0], file: mergedFile, box: null, raw: null, body: handover.body, sourceBody: handover.sourceBody };
       }
-      const prepare = role.verifySubmission && (payload => {
+      const prepare = role.verifySubmission && ((payload, original) => {
+        const gateway = handover.origin && wakeDigest(original) === handover.origin.wake_sha256;
         const attempt = { role: role.id, pane: role.paneId, attempt: randomUUID(), sha256: createHash('sha256').update(payload).digest('hex'),
+          ...(role.activeMentions && handover.messageId && { source_wake_sha256: wakeDigest(original) }),
+          ...(gateway && { gateway_only: true, gateway_wake_sha256: handover.origin.wake_sha256 }),
           keys, messageId: handover.messageId ?? null, at,
           ...(registry.delivery.priorityUserIds.length && { priorityStreakAfter: handover.priorityId ? priorityStreak + 1 : 0 }) };
         atomic(submissionFile, JSON.stringify(attempt));
@@ -702,6 +766,8 @@ function deliverRole(registry, role, deps, now, at) {
       streak += 1;
     }
   }
+  filesDone += closeCopies();
+  for (const key of Object.keys(failures)) if (seen.has(key)) delete failures[key];
   if (JSON.stringify(failures) !== JSON.stringify(before)) atomic(failureFile(registry, role), JSON.stringify(failures));
   return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...(deferred ? { deferred } : {}), ...error, ...busy };
 }

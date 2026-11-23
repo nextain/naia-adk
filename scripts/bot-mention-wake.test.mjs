@@ -331,3 +331,21 @@ test('ack config defaults on with the eyes emoji and rejects a malformed one', t
   fs.writeFileSync(file, JSON.stringify({ ack: { enabled: false, emoji: '✅' }, roles: [role] })); assert.equal(loadConfig(file, env)[0].ack.enabled, false);
   fs.writeFileSync(file, JSON.stringify({ ack: { emoji: 'a/b' }, roles: [role] })); assert.throws(() => loadConfig(file, env));
 });
+
+test('Gateway records an explicit human guild mention independently of the wake box', async t => {
+  const origins = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-origin-'));
+  t.after(() => fs.rmSync(origins, { recursive: true, force: true }));
+  const f = setup(t, { activeMentionOriginDir: origins });
+  const incoming = f.message('25', { content: `Please review this <@${bot}>` });
+  await f.dispatch('MESSAGE_CREATE', incoming);
+  const record = JSON.parse(fs.readFileSync(path.join(origins, 'assistant', incoming.id + '.json')));
+  const wake = fs.readFileSync(path.join(f.dir, f.files()[0]));
+  const { createHash } = await import('node:crypto');
+  assert.equal(record.wake_sha256, createHash('sha256').update(wake).digest('hex'));
+  assert.deepEqual([record.role, record.bot, record.author, record.channel, record.guild], ['assistant', bot, other, channel, guild]);
+  for (const [suffix, patch] of [['26', { author: { id: other, bot: true } }], ['27', { webhook_id: other }],
+    ['28', { guild_id: undefined }], ['29', { mentions: [] }], ['30', { content: 'implicit reply only' }]]) {
+    await f.dispatch('MESSAGE_CREATE', { ...incoming, ...patch, id: f.message(suffix).id });
+  }
+  assert.deepEqual(fs.readdirSync(path.join(origins, 'assistant')), [incoming.id + '.json']);
+});

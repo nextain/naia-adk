@@ -1,0 +1,18 @@
+{
+  "work": "active-channel-mention",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-input.md"],
+    "reason": "Specifies the credentialed Gateway origin, dispatcher binding, active turn and native evidence."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-input.md"],
+    "reason": "Shows how an installation opts into protected existing Codex endpoints for explicit cross-channel requests."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-input.md"],
+    "reason": "Distinguishes queue priority, a native same-turn acknowledgement and a conflicting relay retained under its original message identity."
+  }
+}
