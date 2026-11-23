@@ -1,0 +1,17 @@
+{
+  "work": "role-session-input",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-input.md", "docs/work/role-session-input.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-session-input.md"],
+    "detail": "Documents per-instance session binding, formatter boundary, canonical dispatcher attempt, native receipt verification, bounded probes, and Codex-only support."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/work/role-session-input.md"],
+    "detail": "Maps busy and draft protection, wrapper discovery, uncertain submission reconciliation and native acknowledgement to the existing wake completion contract."
+  }
+}
