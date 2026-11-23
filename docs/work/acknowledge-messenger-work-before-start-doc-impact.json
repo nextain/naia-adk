@@ -1,0 +1,24 @@
+{
+  "work": "acknowledge-messenger-work-before-start",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-messaging.en.md",
+      ".agents/context/agents-rules.json"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-messaging.md",
+      ".users/context/agents-rules.md"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-messaging.en.md"
+    ],
+    "detail": "The assigned role acknowledges the original before working. The work card remains open until the result is verified."
+  }
+}

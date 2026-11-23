@@ -77,7 +77,7 @@
 - **no_korean_in_agents**: Use concise English for machine-facing .agents/ files by default. Korean is allowed when a user explicitly requests it, when preserving a Korean user-facing trigger/example is necessary, or when localized human-facing text is part of the contract; machine JSON/YAML keys remain stable.
 - **concise_session_output**: Keep AI responses under 3 lines; avoid long Korean preambles.
 - **work_ledger**: Add requests to the ledger before replying: docs/common/work-ledger.md.
-- **agent_messaging**: Mention the other person or agent when requesting and replying: docs/guides/agent-messaging.md.
+- **agent_messaging**: Before starting work assigned on a messenger, reply to the original in the requester’s language, mention them, and state the task and an ETA. Report the result in the same thread and keep unfinished work open. See [messenger guidance](../../docs/guides/agent-messaging.en.md).
 - **document_size_refactoring**: Archive eligible history from oversized documents per docs/guides/doc-size-refactor.md.
 
 ## conventions
