@@ -778,10 +778,112 @@ function directCommandScriptPaths(command, base) {
 	return [...new Set(out)];
 }
 
+// Both reviewed images must remain available independently of the deployed file.
+function readTargetFile(base, name) {
+	const abs = path.resolve(base, name);
+	if (fs.realpathSync(abs) !== abs) throw new Error(`target pin uses a symlink: ${name}`);
+	const fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+	try {
+		const stat = fs.fstatSync(fd, { bigint: true });
+		if (!stat.isFile()) throw new Error(`not a regular target file: ${name}`);
+		const body = fs.readFileSync(fd);
+		const end = fs.lstatSync(abs, { bigint: true });
+		if (fs.realpathSync(abs) !== abs || stat.dev !== end.dev || stat.ino !== end.ino || stat.ctimeNs !== end.ctimeNs) throw new Error(`target file changed while reading: ${name}`);
+		return { body, digest: sha256(body), identity: `${stat.dev}:${stat.ino}` };
+	} finally { fs.closeSync(fd); }
+}
+
+function targetTransitions(pin, plan, base) {
+	const transitions = new Map();
+	if (pin.transitions === undefined) return transitions;
+	if (!pin.transitions || typeof pin.transitions !== "object" || Array.isArray(pin.transitions)) throw new Error(`invalid target transitions: ${pin.path}`);
+	const scenario = Array.isArray(plan.scenario) ? plan.scenario : [];
+	for (const [id, spec] of Object.entries(pin.transitions)) {
+		const step = scenario.find(s => s?.id === id);
+		if (!step || !spec || !["before", "after"].includes(spec.to) ||
+			(spec.resume !== undefined && typeof spec.resume !== "boolean") ||
+			Object.keys(spec).some(k => !["to", "partial_after", "resume"].includes(k))) {
+			throw new Error(`invalid target transition: ${pin.path} / ${id}`);
+		}
+		const from = pin[spec.to === "after" ? "before" : "after"];
+		const targetPath = path.resolve(base, pin.path);
+		const matching = Object.entries(step.files || {}).filter(([file]) => path.resolve(base, file) === targetPath);
+		if (matching.length !== 1 || String(matching[0][1]).toLowerCase() !== from || pin.before === pin.after) throw new Error(`target transition needs its exact preimage in step.files: ${pin.path} / ${id}`);
+		if (spec.partial_after !== undefined) {
+			const forward = scenario.find(s => s?.id === spec.partial_after);
+			if (spec.to !== "before" || step.branch !== "rollback" || !forward || forward.branch === "rollback" ||
+				scenario.indexOf(forward) >= scenario.indexOf(step) || pin.transitions[forward.id]?.to !== "after" ||
+				!Array.isArray(forward.commands) || !forward.commands.length) {
+				throw new Error(`invalid partial rollback source: ${pin.path} / ${id}`);
+			}
+		}
+		transitions.set(id, { to: pin[spec.to] });
+	}
+	return transitions;
+}
+
+function targetDeclarations(plan) {
+	const config = plan?.file_pins;
+	if (config === undefined) return [];
+	let declarations = config;
+	if (config && typeof config === "object" && !Array.isArray(config)) {
+		if ("role" in config || "path" in config) throw new Error("target file_pins must be an array or targets array");
+		declarations = config.targets === undefined ? [] : config.targets;
+	}
+	if (!Array.isArray(declarations)) throw new Error("file_pins targets must be an array");
+	return declarations;
+}
+
+function targetPins(plan, root) {
+	const base = root ? path.resolve(root) : ROOT;
+	const pins = new Map(), liveFiles = new Set(), sources = new Set();
+	for (const item of targetDeclarations(plan)) {
+		if (!item || item.role !== "target" ||
+			![item.path, item.before_source, item.after_source].every(p => typeof p === "string" && p.trim() && !/[\0\r\n]/.test(p)) ||
+			![item.before, item.after].every(h => typeof h === "string" && /^[a-f0-9]{64}$/i.test(h))) {
+			throw new Error("invalid target file_pins entry");
+		}
+		const pin = { ...item, before: item.before.toLowerCase(), after: item.after.toLowerCase() };
+		const abs = path.resolve(base, pin.path);
+		const live = readTargetFile(base, pin.path);
+		if (liveFiles.has(live.identity)) throw new Error(`duplicate target pin: ${pin.path}`);
+		const before = readTargetFile(base, pin.before_source), after = readTargetFile(base, pin.after_source);
+		if (live.digest !== pin.before && live.digest !== pin.after) throw new Error(`target sha256 mismatch: ${pin.path}`);
+		if (before.digest !== pin.before || after.digest !== pin.after) throw new Error(`target source sha256 mismatch: ${pin.path}`);
+		liveFiles.add(live.identity);
+		sources.add(before.identity);
+		sources.add(after.identity);
+		pins.set(abs, { ...pin, current: live.digest, beforeBody: before.body, afterBody: after.body, transitions: targetTransitions(pin, plan, base) });
+	}
+	for (const identity of liveFiles) if (sources.has(identity)) throw new Error("target sources must be independent of all live targets");
+	return pins;
+}
+
+function verifyTargetPreconditions(plan, root, entry) {
+	const targets = targetPins(plan, root);
+	for (const [file, want] of Object.entries(entry.files || {})) {
+		const target = targets.get(path.resolve(root, file));
+		const expected = String(want).toLowerCase();
+		if (target && target.current !== expected) {
+			throw new Error(`${entry.id} 단계의 대상 시작 지문 불일치: ${file} (계획 ${expected}, 현재 ${target.current}). 대상별 현재 상태와 단계 결과를 확인하십시오. 복구하려면 현재 지문과 일치하는 검수된 단계를 사용하십시오. 해당 단계가 없으면 복구 계획을 새로 검수받으십시오.`);
+		}
+	}
+	return targets;
+}
+
+function verifyTargetResults(plan, root, stepId) {
+	for (const target of targetPins(plan, root).values()) {
+		const result = target.transitions.get(stepId);
+		if (result && target.current !== result.to) throw new Error(`target postimage mismatch: ${target.path} / ${stepId}`);
+	}
+}
+
 /** 계획서 소속 저장소 root 기준. 모든 단계와 선조치의 고정 파일을 검사한다. */
 function pinnedFileProblems(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
 	const problems = [];
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [String(e.message)]; }
 	for (const entry of [...(Array.isArray(plan?.scenario) ? plan.scenario : []), ...(Array.isArray(plan?.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry) continue;
 		const pinnedAbs = new Map();
@@ -790,8 +892,11 @@ function pinnedFileProblems(plan, root) {
 			for (const [file, want] of Object.entries(entry.files)) {
 				try {
 					const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(base, file);
-					const actual = sha256(fs.readFileSync(abs));
-					if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || actual !== String(want).toLowerCase()) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
+					const target = targets.get(abs);
+					const actual = target ? target.current : sha256(fs.readFileSync(abs));
+					const expected = String(want).toLowerCase();
+					const matches = target ? expected === target.before || expected === target.after : actual === expected;
+					if (!/^[a-f0-9]{64}$/.test(expected) || !fs.statSync(abs).isFile() || !matches) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
 					else pinnedAbs.set(abs, actual);
 				} catch { problems.push(`${entry.id}: 고정 파일을 읽지 못함: ${file}`); }
 			}
@@ -926,20 +1031,33 @@ function reviewInputEntries(planFile, root, opts = null) {
 			entries.push({ file: "\0read_only_scripts", sha256: sha256(JSON.stringify(canonicalRo)) });
 		}
 	}
-	const pins = [];
+	const immutablePins = new Map();
+	let targets = new Map();
+	try { targets = targetPins(plan, base); } catch (e) { problems.push(String(e.message)); }
 	for (const entry of [...(Array.isArray(plan.scenario) ? plan.scenario : []), ...(Array.isArray(plan.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry || !entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) continue;
-		for (const [f, want] of Object.entries(entry.files)) pins.push([entry.id, f, want]);
+		for (const [file, want] of Object.entries(entry.files)) {
+			const target = targets.get(path.resolve(base, file));
+			const expected = String(want).toLowerCase();
+			if (target) {
+				if (expected !== target.before && expected !== target.after) problems.push(`${entry.id}: target pin mismatch: ${file}`);
+				continue;
+			}
+			const key = path.normalize(file);
+			const previous = immutablePins.get(key);
+			if (previous && previous.expected !== expected) problems.push(`${entry.id}: conflicting immutable pin: ${file}`);
+			immutablePins.set(key, { id: entry.id, file, expected });
+		}
 	}
-	for (const [id, f, want] of [...new Map(pins.map((p) => [path.normalize(p[1]), p])).values()].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
-		if (seen.has(f)) continue;
-		seen.add(f);
-		const abs = path.isAbsolute(f) ? f : path.join(base, f);
-		let actual = null;
-		try { actual = sha256(fs.readFileSync(abs)); } catch { problems.push(`${id}: 고정 파일을 읽지 못함: ${f}`); continue; }
-		if (!/^[a-f0-9]{64}$/i.test(String(want)) || actual !== String(want).toLowerCase()) { problems.push(`${id}: 고정 파일 sha256 불일치: ${f}`); continue; }
-		entries.push({ file: f, sha256: actual });
+	for (const { id, file, expected } of immutablePins.values()) {
+		if (seen.has(file)) continue;
+		seen.add(file);
+		let actual;
+		try { actual = sha256(fs.readFileSync(path.resolve(base, file))); } catch { problems.push(`${id}: 고정 파일을 읽지 못함: ${file}`); continue; }
+		if (actual !== expected) { problems.push(`${id}: 고정 파일 sha256 불일치: ${file}`); continue; }
+		entries.push({ file, sha256: actual });
 	}
+	for (const target of targets.values()) entries.push({ file: target.path, before: target.before, after: target.after });
 	for (const rel of REVIEW_EXECUTOR_FILES) {
 		try { entries.push({ file: rel, sha256: sha256(fs.readFileSync(path.join(ROOT, rel))) }); }
 		catch { problems.push(`실행기를 읽지 못함: ${rel}`); }
@@ -956,12 +1074,20 @@ function reviewInputManifest(planFile, root, opts = null) {
 /** 단계·선조치의 files 에 고정한 파일(감싼 스크립트 등)의 글. 검수자가 명령 바깥 글만 보고 PASS 하지 않게 한다. */
 function pinnedFilesText(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [`대상 파일 검사 실패: ${e.message}. PASS 하지 마십시오`]; }
 	const entries = [...(plan.scenario || []), ...((plan.incident && plan.incident.actions) || [])].filter((x) => x && x.files && typeof x.files === "object");
-	if (!entries.length) return [];
+	if (!entries.length && !targets.size) return [];
 	const L = ["고정 파일(명령이 읽거나 실행하는 파일, 훅이 sha 로 대조):"];
+	for (const target of targets.values()) {
+		for (const [label, digest, body] of [["before", target.before, target.beforeBody], ["after", target.after, target.afterBody]]) {
+			L.push(`- ${target.path} ${label} (sha ${digest}):`, "```", body.length > 200 * 1024 ? `${body.subarray(0, 200 * 1024).toString("utf8")}\n…(200KB 넘어 잘림: 잘린 파일은 FAIL)` : body.toString("utf8"), "```");
+		}
+	}
 	const shown = new Set();
 	for (const x of entries) {
 		for (const [p, want] of Object.entries(x.files)) {
+			if (targets.has(path.resolve(base, p))) continue;
 			const key = `${p}\0${String(want).toLowerCase()}`;
 			if (shown.has(key)) {
 				L.push(`- ${x.id} ${p} (sha ${want}): 위에 같은 sha 로 이미 실음`);
@@ -1477,6 +1603,11 @@ function renderReport(plan, sha, review) {
 		L.push(`  ${s.id}${s.branch ? " (되돌리기 갈림길)" : ""}. ${s.title}`);
 		for (const c of s.commands || []) L.push(`     명령 sha ${commandHash(c).slice(0, 12)}: ${fullCommand(c)}`);
 		for (const [p, h] of Object.entries(s.files || {})) L.push(`     고정 파일 ${p} sha ${String(h).slice(0, 12)}`);
+		for (const pin of targetDeclarations(plan)) {
+			const transition = pin?.transitions?.[s.id];
+			if (!transition) continue;
+			L.push(`     대상 ${pin.path} 시작 지문 ${pin[transition.to === "after" ? "before" : "after"]} → 완료 지문 ${pin[transition.to]}`);
+		}
 		L.push(`     성공 확인: ${s.success_check}`, `     실패 시: ${s.on_failure}`);
 	}
 	L.push(`위험: ${(plan.risks?.items || []).join(" / ")}`, `최악의 경우: ${plan.risks?.worst_case}`);
@@ -1556,8 +1687,12 @@ async function evaluate(ctx) {
 	const { canonicalTargetPath } = require("./deploy-readiness.js");
 	const pinned = new Map();
 	const pinnedCanonical = new Map();
+	let targets;
+	try { targets = verifyTargetPreconditions(f.plan, fileBase, entry); } catch (e) {
+		return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel }, reason: `대상 파일 검사 실패: ${e.message}` };
+	}
 	for (const [p, h] of Object.entries(entry.files || {})) {
-		const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(fileBase, p);
+		const abs = path.resolve(fileBase, p);
 		const low = String(h).toLowerCase();
 		pinned.set(abs, low);
 		pinnedCanonical.set(canonicalTargetPath(abs, fileBase), low);
@@ -1566,6 +1701,7 @@ async function evaluate(ctx) {
 	const unpinned = refs.filter((r) => {
 		const abs = path.resolve(r.path);
 		const can = canonicalTargetPath(abs, ctx.cwd || fileBase);
+		if (targets.has(can)) return abs !== can || pinned.get(abs) !== r.sha;
 		return pinned.get(abs) !== r.sha && pinnedCanonical.get(can) !== r.sha;
 	});
 	// 글자에 나타나지 않는 도움 파일도 전부 실물과 대조한다. 같은 해시의 다른 경로는 대신할 수 없다.
@@ -1609,7 +1745,7 @@ async function evaluate(ctx) {
 			"긴급 되돌리기는 kind rollback, 설정만 바꾸는 명령(환경 변수·복제 수·재시작·리비전 끄기)과 VM·컨테이너 안 조회·진단은 kind ops(reason 한 줄)로 적습니다. 배포 스크립트처럼 코드를 올리는 명령은 ops 가 될 수 없습니다. 승인자에게 붙여 넣을 명령을 넘기지 마십시오.",
 		].join("\n") };
 		facts = (r && r.facts) || [];
-		readOnlyNoCode = !!(r && r.readOnlyNoCode === true);
+		readOnlyNoCode = !!(r && r.readOnlyNoCode === true) && ![...targets.keys()].some(file => pinned.has(file));
 	}
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];
@@ -1629,6 +1765,12 @@ async function evaluate(ctx) {
 async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode = false }) {
 	const state = loadState(env);
 	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
+	function targetInputBlock(entry) {
+		if (f.plan.file_pins === undefined) return null;
+		try { verifyTargetPreconditions(f.plan, ctx.root || ctx.cwd || ROOT, entry); }
+		catch (error) { return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel }, reason: error.message }; }
+		return null;
+	}
 
 	// 전체 계획 승인 (검수 통과한 읽기 전용 고정 ops 대본은 사람 승인 코드 단계를 건너뜀)
 	let planCh = null;
@@ -1666,6 +1808,8 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	if (f.action) {
 		const v = verdictEarly.ok ? verdictEarly : incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now, ctx.root);
 		if (v.ok) {
+			const blocked = targetInputBlock(f.action) || (f.step && targetInputBlock(f.step));
+			if (blocked) return blocked;
 			state.incidents.push({ planSha: f.sha, plan: rel, action: f.action.id, command_sha256: h, at: new Date(now).toISOString(), judge: v.judge });
 			saveState(env, state);
 			return { allow: true, audit: { event: "incident-action-executed", plan: rel, plan_sha256: f.sha, action: f.action.id, judge: v.judge, verdict_file: v.file, approved_by: "plan-approval+independent-incident-verdict" }, notice: `장애 선조치 ${f.action.id} 실행. 실행 직후 gates/deploy-incident-report-*.md 로 보고(무슨 일·한 조치·지금 상태·다음 선택지)하십시오. 보고 전에는 다음 단계 승인을 받을 수 없습니다.` };
@@ -1746,6 +1890,8 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 				...hostNote,
 			].join("\n") };
 		}
+		const blocked = targetInputBlock(f.step);
+		if (blocked) return blocked;
 		if (!stepCh.approvedAt) stepCh.approvedAt = new Date(now).toISOString();
 		stepCh.approvedVia = ok.via;
 	}
@@ -2192,5 +2338,6 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
+	targetPins, verifyTargetPreconditions, verifyTargetResults,
 	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

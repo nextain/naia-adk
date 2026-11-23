@@ -736,6 +736,8 @@ switch (cmd) {
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const step = args[1];
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
+		try { lib.verifyTargetResults(plan, planRoot, step); }
+		catch (error) { die(error.message, 1); }
 		const ev = opt(args, "--evidence");
 		if (!ev || !fs.existsSync(ev)) die("--evidence <성공 확인 출력 파일> 이 필요합니다");
 		const dir = path.join(gatesDir, "deploy-steps");

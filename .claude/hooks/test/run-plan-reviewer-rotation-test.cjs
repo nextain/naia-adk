@@ -158,6 +158,38 @@ function writeRotationReceipt(root, planFile, reviewer, extra = {}) {
 	return { planSha, promptSha, manifestSha };
 }
 
+test("대상 교체 전후 동일한 리뷰 본문과 영수증, 변조는 차단", (t) => {
+	const { root } = makeWorkspace(t);
+	const { planFile, gatesDir, plan } = createValidPlan(root);
+	const live = path.join(root, "scripts/rollout.sh");
+	const before = fs.readFileSync(live);
+	const after = Buffer.from("#!/bin/sh\necho replacement\n");
+	fs.writeFileSync(path.join(root, "scripts/before.sh"), before);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), after);
+	plan.file_pins = { rule: "legacy description", targets: [{ path: "scripts/rollout.sh", role: "target", before: sha256(before), after: sha256(after), before_source: "scripts/before.sh", after_source: "scripts/after.sh" }] };
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	const receipt = writeRotationReceipt(root, planFile, "argon");
+	const prompt = deployPlan.reviewPrompt(plan, receipt.planSha, root);
+	assert.match(prompt, /replacement/);
+	assert.ok(prompt.includes(before.toString()));
+	const check = () => deployPlan.reviewProblems(gatesDir, receipt.planSha, root).ok;
+	assert.equal(check(), true);
+	fs.writeFileSync(live, after);
+	assert.equal(deployPlan.reviewPrompt(plan, receipt.planSha, root), prompt);
+	assert.equal(deployPlan.reviewInputManifest(planFile, root), receipt.manifestSha);
+	assert.equal(check(), true);
+	fs.writeFileSync(live, "third");
+	assert.equal(check(), false);
+	fs.writeFileSync(live, before);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), "tampered");
+	assert.equal(check(), false);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), after);
+	delete plan.file_pins.targets;
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	fs.writeFileSync(live, after);
+	assert.ok(deployPlan.pinnedFileProblems(plan, root).length);
+});
+
 test("차례: 작성자 다음 모델이 먼저, 나머지가 다음", (t) => {
 	const { root } = makeWorkspace(t);
 	assert.deepEqual(deployPlan.rotationOrder("argon"), ["codex", "muse"]);

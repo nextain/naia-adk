@@ -1001,6 +1001,9 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 
 	const files = new Map();
 	const fileHashes = new Map();
+	const { verifyTargetPreconditions } = require("./deploy-plan.js");
+	try { verifyTargetPreconditions(plan, root, entry); }
+	catch (e) { return no(`대상 파일 검사 실패: ${e.message}`); }
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);
 		const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root || cwd || ".", p);
@@ -1016,7 +1019,6 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		files.set(full, body.toString("utf8"));
 		fileHashes.set(full, actualSha);
 	}
-
 	const cfg = loadDeployGateConfig(root);
 	if (cfg) {
 		const { validateReadOnlyScriptsConfig } = require("./deploy-plan.js");
@@ -1093,7 +1095,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const c = clauses[0];
 	const sameServices = (actual) => actual.length === services.length && services.every((s) => actual.includes(s));
 
-	if (kind === "ops") {
+	if (kind === "ops" && ![...targets.keys()].some(file => files.has(file))) {
 		const ro = matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHashes, services, cwd, planBinding });
 		if (ro) return ro.ok ? ro : no(ro.why);
 	}

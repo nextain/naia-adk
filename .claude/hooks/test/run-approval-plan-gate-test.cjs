@@ -1668,6 +1668,220 @@ function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command inv
 	return { root, planDir, gatesDir, script, remote: remotePath, files, plan, services: real, assess, writeOps, bind };
 }
 
+function transitionFixture(t) {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "fixture:settings";
+	writeGateConfig(root, { services: { [service]: { allowCustomCommands: true } } });
+	const f = createValidPlan(root, { services: [service] });
+	const before = "sample setting v1\n", after = "sample setting v2\n";
+	const file = "scripts/setting.conf";
+	const live = path.join(root, file);
+	const pin = {
+		role: "target", path: file, before: sha256(before), after: sha256(after),
+		before_source: "scripts/original.conf", after_source: "scripts/candidate.conf",
+		transitions: { s1: { to: "after", resume: true }, r1: { to: "before", partial_after: "s1", resume: true } },
+	};
+	fs.writeFileSync(live, before);
+	fs.writeFileSync(path.join(root, pin.before_source), before);
+	fs.writeFileSync(path.join(root, pin.after_source), after);
+	fs.writeFileSync(f.scriptAbs, '#!/bin/sh\nset -eu\ncp "$1" "$2"\ncat "$2"\n');
+	f.plan.file_pins = [pin];
+	const argsByStep = {
+		s1: [f.scriptRel, pin.after_source, file],
+		r1: [f.scriptRel, pin.before_source, file],
+	};
+	const scriptSha = sha256(fs.readFileSync(f.scriptAbs));
+	for (const entry of f.plan.scenario) {
+		const args = argsByStep[entry.id];
+		const source = args[1];
+		entry.commands = [["bash", ...args].join(" ")];
+		entry.files = {
+			[f.scriptRel]: scriptSha,
+			[source]: sha256(fs.readFileSync(path.join(root, source))),
+			[file]: entry.id === "s1" ? pin.before : pin.after,
+		};
+	}
+	const step1Cmd = f.plan.scenario[0].commands[0];
+	const rollbackCmd = f.plan.scenario[1].commands[0];
+	const writePlan = () => fs.writeFileSync(f.planFile, JSON.stringify(f.plan, null, 2));
+	writePlan();
+	const sessionId = "sample-target-session";
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const hook = (command, session = sessionId) => runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath, sessionId: session });
+	const cli = (...args) => spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), args[0], f.planFile, ...args.slice(1)], { cwd: root, env, encoding: "utf8" });
+	const evidence = path.join(stateDir, "result.txt");
+	const run = id => {
+		const args = argsByStep[id];
+		assert.equal(hook(["bash", ...args].join(" ")), null);
+		const child = spawnSync("bash", args, { cwd: root, encoding: "utf8" });
+		assert.equal(child.status, 0, child.stderr);
+		fs.writeFileSync(evidence, child.stdout);
+	};
+	return { ...f, step1Cmd, rollbackCmd, root, before, after, live, pin, hook, cli, run, sessionId, transcriptPath, env, evidence, writePlan, approve: text => appendHumanTurn(transcriptPath, text) };
+}
+
+test("target phases use the normal CLI review, human PLAN/STEP, exact preimage and postimage", async t => {
+	const f = transitionFixture(t);
+	assert.match(f.hook(f.step1Cmd).reason, /적대 리뷰/);
+	const receipt = writePassingReviewReceipt(f.root, f.planFile);
+	const prompt = deployPlan.reviewPrompt(f.plan, receipt.planSha, f.root);
+	assert.ok(prompt.includes(f.before) && prompt.includes(f.after));
+	assert.equal(f.cli("check").status, 0);
+	const report = f.cli("report");
+	assert.equal(report.status, 0);
+	assert.ok(report.stdout.includes(`시작 지문 ${f.pin.before} → 완료 지문 ${f.pin.after}`));
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, f.sessionId, f.env);
+	assert.equal(pre.ok, true, pre.why);
+	assert.match(f.hook(f.step1Cmd).reason, /전체 계획 승인/);
+	f.approve(pre.plan_code);
+	assert.match(f.hook(f.step1Cmd).reason, /단계 승인 필요/);
+	f.approve(pre.steps.find(s => s.step === "s1").code);
+	assert.match(f.cli("step-ok", "s1", "--evidence", f.evidence).stderr, /target postimage mismatch/);
+	assert.equal(fs.existsSync(path.join(f.gatesDir, "deploy-steps/s1.json")), false);
+	f.run("s1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+	assert.equal(fs.readFileSync(f.evidence, "utf8"), f.after);
+	assert.equal(f.cli("check").status, 0);
+	assert.equal(deployPlan.reviewPrompt(f.plan, receipt.planSha, f.root), prompt);
+	assert.equal(deployPlan.reviewInputManifest(f.planFile, f.root), receipt.manifestSha);
+	assert.equal(f.cli("step-ok", "s1", "--evidence", f.evidence).status, 0);
+	assert.match(f.hook(f.step1Cmd).reason, /대상 시작 지문 불일치.*복구 계획/);
+	assert.match(f.hook(f.step1Cmd, "different-session").reason, /대상 시작 지문 불일치/);
+	assert.match(f.hook(f.rollbackCmd).reason, /단계 승인 필요/);
+	f.approve(pre.steps.find(s => s.step === "r1").code);
+	assert.match(f.cli("step-ok", "r1", "--evidence", f.evidence).stderr, /target postimage mismatch/);
+	f.run("r1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.before);
+	assert.equal(fs.readFileSync(f.evidence, "utf8"), f.before);
+	assert.equal(f.cli("step-ok", "r1", "--evidence", f.evidence).status, 0);
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	fs.writeFileSync(f.live, "unknown live image");
+	assert.notEqual(f.cli("check").status, 0);
+	assert.match(f.hook(f.step1Cmd).reason, /target sha256 mismatch/);
+	assert.match(f.hook(f.rollbackCmd).reason, /target sha256 mismatch/);
+});
+
+test("an interrupted apply can retry from its original input with fresh STEP approval", async t => {
+	const f = transitionFixture(t);
+	writePassingReviewReceipt(f.root, f.planFile);
+	const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, f.sessionId, f.env);
+	assert.equal(pre.ok, true, pre.why);
+	const first = pre.steps.find(s => s.step === "s1").code;
+	f.approve(pre.plan_code + " " + first);
+	// The host stopped between the pre-tool decision and launching its child.
+	assert.equal(f.hook(f.step1Cmd), null);
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.before);
+	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
+	const retry = f.hook(f.step1Cmd);
+	assert.match(retry.reason, /단계 승인 필요/);
+	const next = retry.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	assert.notEqual(next, first);
+	f.approve(next);
+	f.run("s1");
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+});
+
+test("a mixed set of registered target images needs a reviewed recovery plan", t => {
+	const f = transitionFixture(t);
+	const other = "scripts/second-setting.conf";
+	fs.writeFileSync(path.join(f.root, other), f.after);
+	f.plan.file_pins.push({ ...f.pin, path: other });
+	f.plan.scenario[0].files[other] = f.pin.before;
+	f.plan.scenario[1].files[other] = f.pin.after;
+	f.writePlan();
+	writePassingReviewReceipt(f.root, f.planFile);
+	const check = f.cli("check");
+	assert.equal(check.status, 0, check.stdout + check.stderr);
+	for (const entry of f.plan.scenario) {
+		const command = entry.commands[0];
+		const binding = verifiedPlanBinding({ plan: f.plan, entry, command, cwd: f.root }, "", "plan", f.plan.services, f.root);
+		assert.equal(binding.ok, false);
+		assert.match(binding.why, /대상 시작 지문 불일치.*복구 계획/);
+		assert.match(f.hook(command).reason, /대상 시작 지문 불일치.*복구 계획/);
+	}
+});
+
+test("dispatch rechecks the input when another approved session finishes during readiness", async t => {
+	const f = transitionFixture(t);
+	writePassingReviewReceipt(f.root, f.planFile);
+	const otherSession = "second-fixture-session";
+	for (const session of [f.sessionId, otherSession]) {
+		const pre = await deployPlan.preapproveStepCodes(f.planFile, f.root, session, f.env);
+		assert.equal(pre.ok, true, pre.why);
+		f.approve(pre.plan_code + " " + pre.steps.find(s => s.step === "s1").code);
+	}
+	const result = await deployPlan.evaluate({
+		command: f.step1Cmd, services: f.plan.services, root: f.root, cwd: f.root,
+		sessionId: otherSession, transcriptPath: f.transcriptPath, env: f.env,
+		readiness(binding) {
+			const ready = assessReadiness(f.plan.services, { root: f.root, command: f.step1Cmd, cwd: f.root, planBinding: binding });
+			assert.equal(ready.ok, true, ready.problems.join(" / "));
+			f.run("s1");
+			return ready;
+		},
+	});
+	assert.equal(fs.readFileSync(f.live, "utf8"), f.after);
+	assert.equal(result.allow, false);
+	assert.match(result.reason, /대상 시작 지문 불일치.*복구 계획/);
+});
+
+test("target bindings pin distinct phase hashes even without recovery options", t => {
+	const f = pinnedScriptFixture(t);
+	const before = fs.readFileSync(f.remote), after = Buffer.from("replacement setting\n");
+	const beforeSource = path.join(f.planDir, "before-source"), afterSource = path.join(f.planDir, "after-source");
+	fs.writeFileSync(beforeSource, before);
+	fs.writeFileSync(afterSource, after);
+	f.plan.file_pins = [{ path: f.remote, role: "target", before: sha256(before), after: sha256(after), before_source: beforeSource, after_source: afterSource }];
+	f.plan.scenario[1].files[f.remote] = sha256(after);
+	assert.equal(f.bind("s1", "plan").ok, true);
+	assert.equal(f.bind("r1", "plan").ok, false);
+	fs.writeFileSync(f.remote, after);
+	assert.equal(f.bind("s1", "plan").ok, false);
+	assert.equal(f.bind("r1", "plan").ok, true);
+	fs.writeFileSync(f.remote, "third");
+	assert.equal(f.bind("r1", "plan").ok, false);
+	fs.writeFileSync(f.remote, after);
+	fs.writeFileSync(afterSource, "tampered");
+	assert.equal(f.bind("r1", "plan").ok, false);
+});
+
+test("unchanged inputs keep one manifest entry per normalized path and all step digests agree", t => {
+	const f = transitionFixture(t);
+	f.plan.scenario[1].files["./" + f.scriptRel] = f.plan.scenario[0].files[f.scriptRel];
+	f.writePlan();
+	const inspect = () => deployPlan.reviewInputEntries(f.planFile, f.root);
+	const entries = inspect();
+	assert.deepEqual(entries.problems, []);
+	assert.equal(entries.entries.filter(e => path.normalize(e.file) === f.scriptRel).length, 1);
+	f.plan.scenario[0].files[f.scriptRel] = "0".repeat(64);
+	f.writePlan();
+	assert.match(inspect().problems.join("\n"), /conflicting immutable pin/);
+});
+
+test("target snapshots and transition declarations fail closed", t => {
+	const f = transitionFixture(t);
+	const validate = () => deployPlan.pinnedFileProblems(f.plan, f.root);
+	const relative = f.pin.before_source;
+	f.pin.before_source = f.pin.path;
+	assert.match(validate().join("\n"), /independent/);
+	const alias = path.join(f.root, "scripts/alias");
+	fs.linkSync(f.live, alias);
+	f.pin.before_source = alias;
+	assert.match(validate().join("\n"), /independent/);
+	f.pin.before_source = relative;
+	const link = path.join(f.root, "scripts/link");
+	fs.symlinkSync(f.live, link);
+	f.pin.path = link;
+	assert.match(validate().join("\n"), /symlink/);
+	f.pin.path = "scripts/setting.conf";
+	f.pin.transitions.r1.partial_after = "r1";
+	assert.match(validate().join("\n"), /invalid partial rollback/);
+	f.pin.transitions.r1.partial_after = "s1";
+	f.plan.scenario[1].files[f.pin.path] = f.pin.before;
+	assert.match(validate().join("\n"), /exact preimage/);
+});
+
 test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", (t) => {
 	const f = pinnedScriptFixture(t);
 	assert.deepEqual(f.services, [PIN_SERVICE]);
