@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { nativeSnapshot, hostDependencies, main } from './role-session-input.mjs';
-import { payloadHash } from './lib/role-session-input.mjs';
+import { attemptFile, deliverInput, payloadHash, verifyInput } from './lib/role-session-input.mjs';
 const row = (type, payload) => JSON.stringify({ type, payload }) + '\n';
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'role-native-'));
@@ -21,6 +21,77 @@ test('native new user ACK has byte offset and session/process binding', async t 
   await fs.appendFile(f.file, row('response_item', { role: 'user', content: [{ type: 'input_text', text: 'message' }] }));
   const after = await nativeSnapshot(f.session, payloadHash('message'), { cursor: { offset: first.byte_size }, file_id: first.file_id });
   assert.equal(after.ack.offset, first.byte_size); assert.equal(after.ack.thread_id, 'own-thread'); assert.equal(after.process_start, f.session.process_start);
+});
+
+test('upgrade reconciles a pre-pane receiver attempt only against its original dispatch and native user row', async t => {
+  const f = await fixture(t);
+  const role = 'writer', pane = 'w4:p5', key = '23232323-2323-4232-8232-232323232323';
+  const payload = 'fixture instruction', hash = payloadHash(payload);
+  const entry = row('response_item', { role: 'user', content: [{ type: 'input_text', text: payload }] });
+  await fs.appendFile(f.file, entry);
+  const baseline = await nativeSnapshot(f.session, hash);
+  const file = attemptFile(f.dir, role, key);
+  const dispatchFile = path.join(f.dir, 'submissions', role + '.json');
+  await fs.mkdir(path.dirname(file), { mode: 0o700 });
+  await fs.mkdir(path.dirname(dispatchFile), { mode: 0o700 });
+  // Previous receivers stored the session and native read boundary here.
+  // The pane lived in the dispatcher's separate pending-submission journal.
+  const record = { role, source_key: key, thread_id: f.session.thread_id, source_message_id: null,
+    source_sha256: null, transport_sha256: hash, payload_hash: hash, status: 'submitted_unconfirmed',
+    native_file_id: baseline.file_id, native_after_offset: baseline.byte_size, native_cursor: { offset: baseline.byte_size } };
+  const dispatch = { role, pane, attempt: key, sha256: hash, keys: ['original.md'], messageId: null };
+  const save = (file, value) => fs.writeFile(file, JSON.stringify(value), { mode: 0o600 });
+  const options = { role, key, transportSha256: hash, stateDir: f.dir, profile: { pane_id: pane, session: f.session } };
+  const deps = { inspect: async () => ({ foreground: [{ pid: process.pid, args: 'codex' }], processes: [] }),
+    native: (session, digest, _agent, query) => nativeSnapshot(session, digest, query) };
+  const verify = () => verifyInput(options, deps);
+  await save(file, record);
+  await save(dispatchFile, dispatch);
+  assert.equal((await verify()).status, 'unknown', 'an older occurrence of the same text cannot settle this attempt');
+  const cached = { ...record, status: 'accepted', native_evidence: {
+    offset: baseline.byte_size, thread_id: f.session.thread_id, payload_sha256: hash } };
+  await save(file, cached);
+  assert.equal((await verify()).status, 'unknown', 'legacy cached metadata alone is insufficient');
+  await fs.appendFile(f.file, entry);
+  await save(file, { ...cached, native_cursor: { offset: (await fs.stat(f.file)).size } });
+  assert.equal((await verify()).status, 'accepted', 're-read from the original native boundary even after the cursor advanced');
+  await save(file, record);
+  const accepted = await verify();
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(accepted.evidence.native_user_ack.offset, baseline.byte_size);
+  assert.equal((await verify()).receipt, accepted.receipt);
+  assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), record);
+  // Retrying the already-issued UUID can only observe the first presentation.
+  const retryDeps = { ...deps, now: Date.now, submit: async () => assert.fail('original would be presented twice') };
+  const retry = await deliverInput({ ...options, text: payload, canonicalAttempt: true }, retryDeps);
+  assert.equal(retry.code, 0);
+  assert.equal((await verify()).receipt, accepted.receipt);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(file, 'utf8')), 'canonical_attempt'), false);
+  // Previous upgrade builds had already added this flag when retrying older journals.
+  await save(file, { ...record, canonical_attempt: true, source_message_id: '12345678901234567' });
+  assert.equal((await verify()).receipt, accepted.receipt, 'an independent card may carry its originating Discord ID');
+  await save(dispatchFile, { ...dispatch, messageId: '22345678901234567' });
+  assert.equal((await verify()).status, 'unknown', 'two explicit original IDs must agree');
+  await save(file, record);
+  for (const changes of [{ pane: 'another-pane' }, { role: 'other' }, { attempt: 'other' }, { sha256: '0'.repeat(64) }, { keys: [] }]) {
+    await save(dispatchFile, { ...dispatch, ...changes });
+    assert.equal((await verify()).status, 'unknown');
+  }
+  await fs.unlink(dispatchFile);
+  assert.equal((await verify()).status, 'unknown');
+  const otherState = path.join(f.dir, 'dispatcher');
+  const otherFile = path.join(otherState, 'submissions', role + '.json');
+  await fs.mkdir(path.dirname(otherFile), { recursive: true, mode: 0o700 });
+  await save(otherFile, dispatch);
+  const split = { ...options, profile: { ...options.profile, active_mentions: { dispatcher_state_dir: otherState } } };
+  assert.equal((await verifyInput(split, deps)).receipt, accepted.receipt);
+  await fs.chmod(path.dirname(otherFile), 0o770);
+  assert.equal((await verifyInput(split, deps)).status, 'unknown', 'shared write access cannot establish the original pane');
+  await save(dispatchFile, dispatch);
+  await save(file, { ...record, native_after_offset: undefined });
+  assert.equal((await verify()).status, 'unknown');
+  await save(file, { ...record, pane_id: 'another-pane' });
+  assert.equal((await verify()).status, 'unknown', 'an explicit pane disagreement cannot be migrated');
 });
 
 test('split append preserves incomplete user line and later finds ACK', async t => {
