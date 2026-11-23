@@ -4,34 +4,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { acquireLock, validatePendingSubmission } from '../role-wake.mjs';
 import { verifiedActiveMention } from './active-mention.mjs';
+import { screenState } from './composer-screen.mjs';
+export { screenState };
 
 export const payloadHash = text => createHash('sha256').update(text).digest('hex');
 const tools = new Set(['codex', 'muse', 'claude', 'agy', 'opencode']);
 const wrappers = new Set(['sudo', 'env', 'bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'setsid', 'script', 'stdbuf', 'timeout', 'nice']);
-const ansi = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
-const prompt = /^[ \t]*([❯›➜»>])(?:[ \t]+(.*)|$)/;
-const placeholder = /^(?:type a message|ask anything|ask codex to do anything|\/usage shows this|메시지를 입력하세요)?$/i;
-const footer = /^(?:[─━═]{3,}|GPT[- ]\d|muse[- ·]|claude[- ·]|gemini[- ·]|\[default\]|tab\s+to\s+queue|\?\s+for\s+shortcuts|\d+%\s+context)/i;
-const active = /^[ \t]*(?:#[ \t]*)?(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒✶✳✢✻✽✼◈◇•][ \t]+[^\n]*\(\s*\d+(?:\.\d+)?\s*[smh]\b|(?:thinking|working|running|double\s+checking)(?:[.…]|\s*\()|(?:esc|escape)\s+to\s+(?:cancel|interr\w*))/im;
-
-export function screenState(screen) {
-  if (typeof screen !== 'string' || !screen.trim()) return 'unknown';
-  const lines = screen.replace(ansi, '').replaceAll('\r', '').split('\n');
-  let index = -1, match;
-  for (let i = 0; i < lines.length; i++) {
-    const candidate = prompt.exec(lines[i]);
-    if (candidate) { index = i; match = candidate; }
-  }
-  if (index < 0) return 'unknown';
-  if (active.test(lines.slice(Math.max(0, index - 12), index).join('\n'))) return 'busy';
-  const parts = [match[2] ?? ''];
-  for (const line of lines.slice(index + 1)) {
-    if (footer.test(line.trim())) break;
-    parts.push(line.trim());
-  }
-  return placeholder.test(parts.join(' ').trim().replace(/\s+/g, ' ')) ? 'idle' : 'draft';
-}
-
 function program(process) {
   const tokens = process.argv ?? String(process.cmdline ?? process.args ?? '').split(/\s+/);
   const first = path.basename(tokens[0] ?? '').replace(/^-/, '');

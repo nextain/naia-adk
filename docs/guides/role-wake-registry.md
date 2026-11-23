@@ -151,6 +151,17 @@ across restarts. A displayed draft, successful keystroke, or unrelated turn leav
 the attempt pending. Use identifiers free of message content. The identifier
 fields accept 1–256 ASCII letters, digits, or `_.:@+/-`.
 
+The common composer classifier recognizes a clipped Codex empty-input hint only
+when it is one nonblank row, an exact prefix of `Ask Codex to do anything`
+containing at least the complete `Ask Codex` token, and every non-whitespace
+payload character has explicit dim styling. That token is nine ASCII characters
+including its internal space. Plain or partially styled text, shorter prefixes,
+paste markers, disabled-input hints and additional input rows retain their
+previous classification. RGB/indexed color parameters alone do not establish dim.
+Busy/native-active checks, existing complete-hint compatibility and native ACK
+requirements remain unchanged. `screenState` keeps its original receiver import
+path; its pure implementation shares `composer-screen.mjs` with the CLI.
+
 If the adapter finds a busy pane **before it types**, record a terminal
 `rejected` decision for this attempt and exit 75. The verifier returns the
 same correlated fields with that decision and its receipt. The next pump
