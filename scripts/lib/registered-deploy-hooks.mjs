@@ -39,9 +39,43 @@ function pinned(file, expected) {
   } finally { fs.closeSync(fd) }
 }
 
+function registrationIdentity(registration, descriptor, entries, instance) {
+  if (registration.schema !== "registered-gate/v2" || registration.planRoot !== instance || registration.engine?.root !== descriptor.engine.root || registration.engine?.commit !== descriptor.engine.commit || !Array.isArray(registration.profiles) || registration.profiles.length < 2) fail("registration identity mismatch")
+  const seen = new Set()
+  for (const profile of registration.profiles) {
+    if (typeof profile.id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(profile.id) || seen.has(profile.id) || entries.has(profile.id) && (profile.root !== entries.get(profile.id).root || profile.scope !== entries.get(profile.id).scope)) fail("registration profile mismatch")
+    seen.add(profile.id)
+  }
+  if ([...entries.keys()].some(id => !seen.has(id))) fail("selected profile is not registered")
+}
+
+function previousRegistration(args, descriptor, entries, instance) {
+  const values = [args.previousRegisteredDeployHooks, args.previousRegisteredDeployHooksSha256, args.previousRegistrationFile]
+  if (values.every(value => value === undefined)) return null
+  if (args.target !== "codex" || !values[0] || !digest(values[1]) || !values[2]) fail("rotation requires the previous descriptor, SHA256 and registration backup for explicit Codex")
+  const previous = JSON.parse(pinned(values[0], values[1]).toString("utf8"))
+  keys(previous, ["schema", "home", "instanceRoot", "engine", "registration", "entries"], "previous descriptor")
+  keys(previous.engine, ["root", "commit", "entrySha256"], "previous engine")
+  keys(previous.registration, ["file", "sha256"], "previous registration")
+  if (["schema", "home", "instanceRoot"].some(key => previous[key] !== descriptor[key]) || ["root", "commit", "entrySha256"].some(key => previous.engine[key] !== descriptor.engine[key]) || previous.registration.file !== descriptor.registration.file || !digest(previous.registration.sha256)) fail("previous descriptor topology differs")
+  if (!Array.isArray(previous.entries) || previous.entries.length !== entries.size) fail("previous profile set differs")
+  const ids = new Set()
+  for (const item of previous.entries) {
+    keys(item, ["id", "scope", "root"], "previous entry")
+    const expected = entries.get(item.id)
+    if (!expected || ids.has(item.id) || expected.scope !== item.scope || expected.root !== item.root) fail("previous profile identity differs")
+    ids.add(item.id)
+  }
+  registrationIdentity(JSON.parse(pinned(values[2], previous.registration.sha256).toString("utf8")), previous, entries, instance)
+  return { descriptor: previous, verify() { pinned(values[0], values[1]); pinned(values[2], previous.registration.sha256) } }
+}
+
 export function loadRegisteredDeployHooks(args) {
   const file = args.registeredDeployHooks, expected = args.registeredDeployHooksSha256
-  if (file === undefined && expected === undefined) return null
+  if (file === undefined && expected === undefined) {
+    if ([args.previousRegisteredDeployHooks, args.previousRegisteredDeployHooksSha256, args.previousRegistrationFile].some(value => value !== undefined)) fail("rotation requires the new registered descriptor")
+    return null
+  }
   if (!file || !digest(expected)) fail("registered file and SHA256 digest are paired")
   if (!["claude", "codex"].includes(args.target) || process.platform === "win32") fail("requires explicit --target claude or codex on a POSIX host")
   const bytes = pinned(file, expected), descriptor = JSON.parse(bytes.toString("utf8"))
@@ -73,17 +107,13 @@ export function loadRegisteredDeployHooks(args) {
   if (slots.get("project")?.root !== instance || !slots.has("global")) fail("project profile root mismatch")
   // The official entry owns the complete registration schema and all policy
   // decisions; installation checks only this explicit identity projection.
-  if (registration.schema !== "registered-gate/v2" || registration.planRoot !== instance || registration.engine?.root !== descriptor.engine.root || registration.engine?.commit !== descriptor.engine.commit || !Array.isArray(registration.profiles) || registration.profiles.length < 2) fail("registration identity mismatch")
-  const seen = new Set()
-  for (const profile of registration.profiles) {
-    if (typeof profile.id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(profile.id) || seen.has(profile.id) || entries.has(profile.id) && (profile.root !== entries.get(profile.id).root || profile.scope !== entries.get(profile.id).scope)) fail("registration profile mismatch")
-    seen.add(profile.id)
-  }
-  if ([...entries.keys()].some(id => !seen.has(id))) fail("selected profile is not registered")
-  const command = id => ["/usr/bin/node", entry, "hook", "--registration", descriptor.registration.file, "--sha256", descriptor.registration.sha256, "--profile", id].map(quote).join(" ")
+  registrationIdentity(registration, descriptor, entries, instance)
+  const previous = previousRegistration(args, descriptor, entries, instance)
+  const command = (record, id) => ["/usr/bin/node", entry, "hook", "--registration", record.registration.file, "--sha256", record.registration.sha256, "--profile", id].map(quote).join(" ")
   return {
-    global: command(slots.get("global").id), project: command(slots.get("project").id),
-    verify() { pinned(file, expected); pinned(entry, descriptor.engine.entrySha256); pinned(descriptor.registration.file, descriptor.registration.sha256); gitIdentity(descriptor.engine) },
+    global: command(descriptor, slots.get("global").id), project: command(descriptor, slots.get("project").id),
+    ...(previous ? { previous: { global: command(previous.descriptor, slots.get("global").id), project: command(previous.descriptor, slots.get("project").id) } } : {}),
+    verify() { pinned(file, expected); pinned(entry, descriptor.engine.entrySha256); pinned(descriptor.registration.file, descriptor.registration.sha256); previous?.verify(); gitIdentity(descriptor.engine) },
   }
 }
 
@@ -93,13 +123,13 @@ const legacyDeploy = command => command === legacyProject || /^(?:"[^"\n]+\/node
 const suspiciousDeploy = command => typeof command === "string" && (command.includes("deploy-guard.js") || isRegisteredDeployCommand(command))
 const clone = value => structuredClone(value ?? {})
 
-function rewrite(settings, expected, replace) {
+function rewrite(settings, expected, replace, previous = null) {
   const result = clone(settings), slots = []
   for (const [event, groups] of Object.entries(result.hooks ?? {})) for (const group of groups) {
     for (let i = 0; i < (group.hooks ?? []).length; i++) {
       const hook = group.hooks[i]
       if (!suspiciousDeploy(hook.command)) continue
-      if (event !== "PreToolUse" || group.matcher !== "Bash" || hook.type !== "command" || !(legacyDeploy(hook.command) || hook.command === expected)) fail("ambiguous existing deploy hook")
+      if (event !== "PreToolUse" || group.matcher !== "Bash" || hook.type !== "command" || !(hook.command === expected || (previous ? hook.command === previous : legacyDeploy(hook.command)))) fail("ambiguous existing deploy hook")
       slots.push({ group, index: i })
     }
   }
@@ -108,6 +138,8 @@ function rewrite(settings, expected, replace) {
     const { group, index } = slots[0]
     if (replace) group.hooks[index] = { ...group.hooks[index], command: expected }
     else group.hooks.splice(index, 1)
+  } else if (previous) {
+    fail("previous registered deploy slot is missing")
   } else if (replace) {
     result.hooks ??= {}
     result.hooks.PreToolUse ??= []
@@ -136,7 +168,7 @@ export function registeredHookSettings(current, profile, project, registered) {
 
 export function registeredCodexHookSettings(user, project, registered) {
   if (!registered) fail("native Codex pair requires its registered descriptor")
-  return { user: rewrite(user, registered.global, true), project: rewrite(project, registered.project, true) }
+  return { user: rewrite(user, registered.global, true, registered.previous?.global), project: rewrite(project, registered.project, true, registered.previous?.project) }
 }
 
 export function validateRegisteredSettingsTarget(file) {

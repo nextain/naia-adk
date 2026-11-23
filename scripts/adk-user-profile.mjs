@@ -25,13 +25,20 @@ const require = createRequire(import.meta.url)
 
 export function parseArgs(raw) {
   const args = { mode: raw[0], home: os.homedir(), homeExplicit: false, adkRoot: scriptRoot, instanceRoot: null, target: "all" }
+  const descriptorFlags = {
+    "--registered-deploy-hooks": "registeredDeployHooks",
+    "--registered-deploy-hooks-sha256": "registeredDeployHooksSha256",
+    "--previous-registered-deploy-hooks": "previousRegisteredDeployHooks",
+    "--previous-registered-deploy-hooks-sha256": "previousRegisteredDeployHooksSha256",
+    "--previous-registration-file": "previousRegistrationFile",
+  }
   for (let i = 1; i < raw.length; i++) {
     if (raw[i] === "--home") { args.home = raw[++i]; args.homeExplicit = true }
     else if (raw[i] === "--adk-root") args.adkRoot = raw[++i]
     else if (raw[i] === "--instance-root") args.instanceRoot = raw[++i]
     else if (raw[i] === "--target") args.target = raw[++i]
-    else if (["--registered-deploy-hooks", "--registered-deploy-hooks-sha256"].includes(raw[i])) {
-      const key = raw[i] === "--registered-deploy-hooks" ? "registeredDeployHooks" : "registeredDeployHooksSha256"
+    else if (Object.hasOwn(descriptorFlags, raw[i])) {
+      const key = descriptorFlags[raw[i]]
       if (Object.hasOwn(args, key) || !raw[i + 1] || raw[i + 1].startsWith("--")) throw new Error("registered deploy descriptor: missing or duplicate argument")
       args[key] = raw[++i]
     }
@@ -45,6 +52,7 @@ export function parseArgs(raw) {
   if (Object.hasOwn(args, "registeredDeployHooks") || Object.hasOwn(args, "registeredDeployHooksSha256")) {
     if (!args.registeredDeployHooks || !/^[a-f0-9]{64}$/.test(args.registeredDeployHooksSha256 ?? "") || !["claude", "codex"].includes(args.target)) throw new Error("registered deploy descriptor: paired file/SHA256 and explicit --target claude or codex required")
   }
+  if (["previousRegisteredDeployHooks", "previousRegisteredDeployHooksSha256", "previousRegistrationFile"].some(key => Object.hasOwn(args, key)) && (!args.previousRegisteredDeployHooks || !/^[a-f0-9]{64}$/.test(args.previousRegisteredDeployHooksSha256 ?? "") || !args.previousRegistrationFile || !args.registeredDeployHooks || args.target !== "codex")) throw new Error("registered deploy descriptor: previous descriptor, SHA256 and registration backup require explicit native rotation")
   args.home = path.resolve(args.home)
   args.adkRoot = path.resolve(args.adkRoot)
   // Hook code runs from the ADK root; hooks read instance settings (deploy, gcs, identity) from NAIA_ADK_ROOT.
