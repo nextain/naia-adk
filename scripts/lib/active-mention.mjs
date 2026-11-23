@@ -29,8 +29,9 @@ export function originFile(directory, role, message) {
 }
 
 export function activeMentionPolicy(value) {
-  if (!value || !path.isAbsolute(value.origin_dir ?? '') || !Array.isArray(value.home_channels) ||
-      !value.home_channels.length || !value.home_channels.every(snowflake)) throw new Error('active_mentions needs origin_dir and home_channels');
+  if (!value || !path.isAbsolute(value.origin_dir ?? '')) throw new Error('active_mentions needs an absolute origin_dir');
+  if (value.excluded_channels !== undefined && (!Array.isArray(value.excluded_channels) ||
+      !value.excluded_channels.every(snowflake))) throw new Error('active_mentions.excluded_channels must contain channel ids');
   if (value.format_command !== undefined && (!Array.isArray(value.format_command) || !value.format_command.length ||
       !value.format_command.every(part => typeof part === 'string' && part) || !path.isAbsolute(value.format_command[0]))) throw new Error('active_mentions.format_command must name an absolute trusted formatter');
   return value;
@@ -38,8 +39,8 @@ export function activeMentionPolicy(value) {
 
 // A Markdown filename, mention-looking text, or priority environment value can
 // only suggest a lookup. None of them establishes authorship or the target.
-export function readGatewayMention(policy, role, bot, authors, message, digest) {
-  if (!policy || !snowflake(bot) || !snowflake(message) || !/^[a-f0-9]{64}$/.test(digest ?? '')) return null;
+export function readGatewayMention(policy, role, bot, authors, message) {
+  if (!policy || !snowflake(bot) || !snowflake(message)) return null;
   try {
     const file = originFile(policy.origin_dir, role, message);
     const stat = fs.lstatSync(file), directory = fs.statSync(path.dirname(file)), root = fs.statSync(policy.origin_dir);
@@ -47,8 +48,8 @@ export function readGatewayMention(policy, role, bot, authors, message, digest) 
         (root.mode & 0o022) || stat.uid !== directory.uid || stat.uid !== root.uid) return null;
     const proof = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (proof.schema === 'discord-human-mention/v1' && proof.role === role && proof.bot === bot && proof.message === message &&
-        proof.wake_sha256 === digest && snowflake(proof.guild) && snowflake(proof.channel) && snowflake(proof.author) &&
-        authors.includes(proof.author) && !policy.home_channels.includes(proof.channel)) return proof;
+        /^[a-f0-9]{64}$/.test(proof.wake_sha256) && snowflake(proof.guild) && snowflake(proof.channel) && snowflake(proof.author) &&
+        authors.includes(proof.author) && !policy.excluded_channels?.includes(proof.channel)) return proof;
   } catch { /* Missing or unreadable trusted origin leaves the ordinary delivery in place. */ }
   return null;
 }
@@ -62,10 +63,10 @@ export function activeDispatch(registry, role, profile, key, text, transportSha2
     const file = path.join(directory, 'submissions', role + '.json');
     if (fs.realpathSync(file) !== file || !fs.lstatSync(file).isFile()) return null;
     const attempt = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (attempt.attempt !== key || attempt.role !== role || attempt.pane !== profile.pane_id || attempt.sha256 !== transportSha256) return null;
+    if (attempt.attempt !== key || attempt.role !== role || attempt.pane !== profile.pane_id || attempt.sha256 !== transportSha256 || attempt.gateway_only !== true) return null;
     const proof = readGatewayMention(policy, role, profile.bot_id, registry.delivery?.priority_user_ids ?? [],
-      attempt.messageId, attempt.gateway_wake_sha256);
-    if (!proof) return null;
+      attempt.messageId);
+    if (!proof || proof.wake_sha256 !== attempt.gateway_wake_sha256) return null;
     const grant = () => {
       activeAttempts.set(proof, { role, pane: profile.pane_id, thread: profile.session?.thread_id, key, payload: sha(text), transport: transportSha256 });
       return proof;

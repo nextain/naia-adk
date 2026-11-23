@@ -182,7 +182,7 @@ test('an active steer requires a same-turn native user item and reconciles once 
   await fs.writeFile(path.join(profile.active_mentions.origin_dir, 'writer', message + '.json'), JSON.stringify(proof), { mode: 0o600 });
   await fs.mkdir(path.join(f.dir, 'submissions'), { mode: 0o700 });
   await fs.writeFile(path.join(f.dir, 'submissions', 'writer.json'), JSON.stringify({ attempt: key, role: 'writer', pane: profile.pane_id,
-    messageId: message, sha256: options.transportSha256, gateway_wake_sha256: proof.wake_sha256 }));
+    messageId: message, sha256: options.transportSha256, gateway_only: true, gateway_wake_sha256: proof.wake_sha256 }));
   const mention = activeDispatch({ state_dir: f.dir, delivery: { priority_user_ids: [author] } }, 'writer', profile, key, text, options.transportSha256);
   assert.deepEqual(mention, proof);
   const item = turnId => row('event_msg', { type: 'item_completed', thread_id: f.session.thread_id, turn_id: turnId,

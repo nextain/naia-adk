@@ -1804,7 +1804,9 @@ test('an active mention requires its private Gateway origin and the current exac
       const formatted = activeDispatch(f.doc, 'role-a', rendered, env.ADK_WAKE_ATTEMPT, 'Header\n' + text, env.ADK_WAKE_PAYLOAD_SHA256, args[1]);
       assert.deepEqual(formatted, check());
       assert.equal(check(profile, text + 'different'), null);
-      assert.equal(check({ ...profile, active_mentions: { ...role.active_mentions, home_channels: [SOURCE_CHANNEL] } }), null);
+      assert.deepEqual(check({ ...profile, active_mentions: { origin_dir: dir } }), check());
+      assert.deepEqual(check({ ...profile, active_mentions: { origin_dir: dir, home_channels: [SOURCE_CHANNEL] } }), check());
+      assert.equal(check({ ...profile, active_mentions: { ...role.active_mentions, excluded_channels: [SOURCE_CHANNEL] } }), null);
     } else if (bin === '/opt/verify') {
       const e = options.env;
       return JSON.stringify({ status: 'rejected', attempt: e.ADK_WAKE_ATTEMPT, sha256: e.ADK_WAKE_PAYLOAD_SHA256, role: e.ADK_WAKE_ROLE, pane: e.ADK_WAKE_PANE, session: 'test-thread', receipt: 'not-submitted:test' });
@@ -1819,4 +1821,87 @@ test('an active mention requires its private Gateway origin and the current exac
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, JSON.stringify(proof), { mode: 0o600 });
   deliver(f.load(), f.deps);
   assert.deepEqual(dispatches[1], proof);
+});
+
+test('one genuine guild request is delivered, conflicting relay bytes are retained across pump runs', async t => {
+  const { gatewayMention, originFile, activeDispatch } = await import('./lib/active-mention.mjs');
+  const f = setup(t); configurePriority(f);
+  const id = '300000000000000018', guild = '100000000000000099';
+  const role = f.doc.roles['role-a'], origins = path.join(f.dir, 'gateway'), accepted = [];
+  role.verify_submission = ['/opt/verify']; role.active_mentions = { origin_dir: origins };
+  f.doc.delivery.workHeader = true;
+  role.ledger = path.join(f.dir, 'ledger.json'); writeWorkLedger(role.ledger, 'role-a', []);
+  f.write();
+  const body = priorityGateway('role-a', id, `Please review <@${botA}>`, { guild });
+  const event = { id, guild_id: guild, channel_id: SOURCE_CHANNEL, author: { id: PRIORITY_AUTHOR }, mentions: [{ id: botA }], content: `Please review <@${botA}>` };
+  const proof = gatewayMention({ id: 'role-a', botUserId: botA }, event, body);
+  const proofFile = originFile(origins, 'role-a', id);
+  fs.mkdirSync(path.dirname(proofFile), { recursive: true, mode: 0o700 });
+  const put = (name, bytes) => { const file = f.put('role-a', name); fs.writeFileSync(file, bytes); return file; };
+  const relay = put(`1-${id}-route-role-a.md`, 'Different relay rendering; keep the original.');
+  let busy = true, allow = false;
+  f.deps.run = (bin, args, options) => {
+    const e = options.env;
+    if (bin === '/opt/deliver') {
+      const text = fs.readFileSync(args[1], 'utf8');
+      const verified = activeDispatch(f.doc, 'role-a', { ...role, pane_id: role.find.pane_id }, e.ADK_WAKE_ATTEMPT, text, e.ADK_WAKE_PAYLOAD_SHA256);
+      allow = Boolean(verified) || !busy;
+      if (allow) accepted.push(text);
+      else throw Object.assign(new Error('held while busy'), { status: 75 });
+    } else if (bin === '/opt/verify') return JSON.stringify({ status: allow ? 'accepted' : 'rejected', attempt: e.ADK_WAKE_ATTEMPT, sha256: e.ADK_WAKE_PAYLOAD_SHA256,
+      role: e.ADK_WAKE_ROLE, pane: e.ADK_WAKE_PANE, session: 'test-thread', receipt: allow ? 'native:received' : 'not-submitted:test' });
+    return '';
+  };
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 0);
+  fs.writeFileSync(proofFile, JSON.stringify(proof), { mode: 0o600 });
+  const gateway = put(`2-${id}-gw.md`, body);
+  const equivalent = put(`3-${id}-ten-role-a.md`, body);
+  const separate = put('independent-ledger-work.md', '[장부] A separate work card');
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+  assert.equal(accepted.length, 1);
+  assert.ok(accepted[0].endsWith(body)); assert.doesNotMatch(accepted[0], /Different relay rendering|\[merged /);
+  const lateBytes = Buffer.from([0x66, 0x80, 0xff, 0x0a]);
+  const late = put(`4-${id}-route-role-a.md`, lateBytes);
+  busy = false;
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 0);
+  assert.equal(accepted.length, 2); assert.ok(accepted[1].includes('A separate work card'));
+  const rows = fs.readFileSync(path.join(f.doc.state_dir, 'delivered-role-a.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const entry = file => rows.find(row => row.file === path.basename(file));
+  assert.equal(entry(gateway).status, 'delivered'); assert.equal(entry(equivalent).status, 'duplicate');
+  assert.equal(entry(separate).message_id, null);
+  for (const file of [relay, late]) {
+    const row = entry(file); assert.equal(row.status, 'conflicting-copy'); assert.equal(row.submission, undefined);
+    assert.equal(row.related_receipt, 'message:' + id); assert.equal(row.gateway_wake_sha256, proof.wake_sha256);
+    assert.deepEqual(fs.readFileSync(path.join(f.doc.state_dir, row.source_archive)), fs.readFileSync(file));
+  }
+});
+
+test('a route received at idle prevents a second owner request when its Gateway copy arrives', async t => {
+  const { gatewayMention, originFile } = await import('./lib/active-mention.mjs');
+  for (const equivalent of [true, false]) {
+    const f = setup(t); configurePriority(f);
+    const id = '300000000000000019', guild = '100000000000000099';
+    const role = f.doc.roles['role-a'], origins = path.join(f.dir, 'origins');
+    role.active_mentions = { origin_dir: origins, home_channels: [SOURCE_CHANNEL] };
+    role.verify_submission = ['/opt/verify']; f.write();
+    const body = priorityGateway('role-a', id, `Ask <@${botA}>`, { guild });
+    const event = { id, guild_id: guild, channel_id: SOURCE_CHANNEL, author: { id: PRIORITY_AUTHOR }, mentions: [{ id: botA }], content: `Ask <@${botA}>` };
+    const proof = gatewayMention({ id: 'role-a', botUserId: botA }, event, body);
+    let presented = 0;
+    f.deps.run = (bin, args, { env: e }) => {
+      if (bin === '/opt/deliver') presented++;
+      if (bin === '/opt/verify') return JSON.stringify({ status: 'accepted', attempt: e.ADK_WAKE_ATTEMPT, sha256: e.ADK_WAKE_PAYLOAD_SHA256, role: e.ADK_WAKE_ROLE, pane: e.ADK_WAKE_PANE, session: 'session', receipt: 'native:idle' });
+      return '';
+    };
+    fs.writeFileSync(f.put('role-a', `1-${id}-route-role-a.md`), equivalent ? body : 'Normal standalone idle message');
+    assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+    const file = originFile(origins, 'role-a', id);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, JSON.stringify(proof), { mode: 0o600 });
+    const gateway = f.put('role-a', `2-${id}-gw.md`); fs.writeFileSync(gateway, body);
+    assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 0); assert.equal(presented, 1);
+    const rows = fs.readFileSync(path.join(f.doc.state_dir, 'delivered-role-a.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const disposition = rows.find(row => row.file === path.basename(gateway));
+    assert.equal(disposition.status, equivalent ? 'duplicate' : 'conflicting-copy'); assert.equal(disposition.submission, undefined);
+  }
 });

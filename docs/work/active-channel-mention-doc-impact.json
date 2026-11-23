@@ -13,6 +13,6 @@
   "reusable_learning": {
     "status": "UPDATED",
     "files": ["docs/guides/role-session-input.md"],
-    "reason": "Distinguishes queue priority, a transport response and a native same-turn user acknowledgement."
+    "reason": "Distinguishes queue priority, a native same-turn acknowledgement and a conflicting relay retained under its original message identity."
   }
 }
