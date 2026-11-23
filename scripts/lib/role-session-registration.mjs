@@ -162,7 +162,7 @@ export async function observeRegistration({role,profile,launchId},deps) {
 export async function resolveRegistration({role,profile},deps) {
   return guarded(async()=>{
     const p=policy(role,profile),store=await deps.store(role,profile);
-    return await store.lock(async()=>{
+    const snapshot=await store.lock(async()=>{
       const current=await state(store),invalid=checkIntent(current,p,current.intent);
       if(invalid)return pending(invalid);
       const lease=await store.read('lease'),intent=current.intent;
@@ -171,10 +171,18 @@ export async function resolveRegistration({role,profile},deps) {
           lease.launch_id!==intent.launch_id)return pending('registration_generation_mismatch');
       if(lease.policy_sha256!==intent.policy_sha256 || lease.boot_id!==intent.boot_id || lease.uid!==p.uid ||
           lease.argv_sha256!==intent.argv_sha256)return pending('registration_policy_changed');
-      const observed=await binding(p,profile,intent,deps,lease);
-      if(observed.code!==0)return observed;
-      for(const key of ['frontend','owner','native','endpoint'])
-        if(!equal(observed[key],lease[key]))return pending('registration_binding_changed');
+      return {code:0,intent,lease};
+    })??pending('registration_locked');
+    if(snapshot.code!==0)return snapshot;
+    const {intent,lease}=snapshot;
+    const observed=await binding(p,profile,intent,deps,lease);
+    if(observed.code!==0)return observed;
+    for(const key of ['frontend','owner','native','endpoint'])
+      if(!equal(observed[key],lease[key]))return pending('registration_binding_changed');
+    return await store.lock(async()=>{
+      const latest=await state(store),currentLease=await store.read('lease');
+      if(latest.generation!==intent.generation||!equal(latest.intent,intent)||!equal(currentLease,lease))
+        return pending('intent_superseded');
       return {code:0,reason:'session_registered',lease,session:{kind:'codex-jsonl',thread_id:p.thread_id,
         cwd:p.cwd,native_path:p.native_path,pid:lease.frontend.pid,process_start:lease.frontend.start}};
     })??pending('registration_locked');

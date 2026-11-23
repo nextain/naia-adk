@@ -57,7 +57,8 @@ node /installed/adk/scripts/role-session-registration.mjs watch \
   --timeout-ms 30000
 ```
 
-Intent creation must succeed before the opted-in launcher proceeds. Start the
+Intent creation must succeed before the opted-in launcher proceeds. The CLI
+retries a transient role mutex at most three times with 100 ms pauses. Start the
 bounded watcher in the background before exec, with detached stdin and private
 stdout/stderr logs. It must not consume the TUI's input. `observe` checks once;
 `watch` retries for at most thirty seconds. A timeout or ineligible observation
@@ -67,8 +68,9 @@ Boot identity is Linux `/proc/sys/kernel/random/boot_id`. The frontend is the
 same launcher PID after exec, or its known Node wrapper's nearest native child.
 Changed PID/start, executable, UID/cwd, argv or root rollout leave input pending.
 Intent creation, generation recheck plus atomic lease rename, and pair resolution
-share one per-role PID/start-time mutex. A superseded observer cannot publish an
-older lease.
+share one per-role PID/start-time mutex. Slow process/endpoint validation runs
+outside that mutex; resolution reacquires it and compares the entire intent and
+lease before returning. A superseded observer cannot publish an older lease.
 
 ## Separate owning server
 
@@ -130,3 +132,9 @@ Native headers, process/FD probes and replies are bounded. Repeated endpoint
 validation uses the recorded owner hint, not a full search for the newest file.
 Actual acceptance still requires two authorized normal starts and fresh normal-pump
 native ACK after current work and collaboration children finish.
+
+The source's model-free OS/CLI tests exercise exec-in-place, a Node foreground
+wrapper with a separate native child, and an unrelated endpoint owner. They use
+disposable shell/Node fixtures and a fake pane adapter, never a production Codex
+process. The consumer checks the registered frontend against the foreground
+ancestry; the registration resolver independently checks the native owner.

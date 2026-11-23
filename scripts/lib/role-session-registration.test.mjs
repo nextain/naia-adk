@@ -167,3 +167,16 @@ test('an already-running native frontend cannot manufacture a new pre-launch int
   const result=await f.begin();assert.equal(result.reason,'launcher_identity_mismatch');
   assert.equal(f.records.has('intent'),false);
 });
+
+test('slow resolution releases the state mutex and rejects a concurrently superseded intent',async()=>{
+  const f=fixture(),one=await f.begin();f.activate();
+  await observeRegistration({role:'writer',profile:f.profile,launchId:one.intent.launch_id},f.deps);
+  const native=f.deps.native;
+  f.deps.native=async()=>{
+    f.deps.native=native;const current=await f.deps.process(20);f.processes.set(20,{...f.launcher});
+    const next=await f.begin();f.processes.set(20,current);
+    assert.equal(next.code,0,'new launcher intent must not be blocked by the read-only probe');
+    return native();
+  };
+  assert.equal((await resolveRegistration({role:'writer',profile:f.profile},f.deps)).reason,'intent_superseded');
+});

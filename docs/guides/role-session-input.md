@@ -169,3 +169,7 @@ thread. This requires a launcher intent and actual process/owner evidence.
 Other-account state uses a separately configured owner resolver; the native
 snapshot read prefix does not implicitly authorize it. Missing registration
 leaves input pending, and an uncertain attempt is never replayed on renewal.
+For a registered native frontend below its known Node Codex launcher, discovery
+follows only the current foreground ancestry to that exact PID. Another provider
+or an unrelated matching PID cannot authorize input. The registration resolver
+checks a separate daemon owner independently; the pane guard compares the frontend.

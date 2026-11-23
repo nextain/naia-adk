@@ -52,3 +52,9 @@ test('actual stdin pipe returns missing registration 75 without reopening dev/st
   assert.deepEqual(JSON.parse(failure.stdout),{code:75,reason:'registration_missing'});
   await assert.rejects(fs.stat(f.profile.registration.state_dir),{code:'ENOENT'});
 });
+
+test('intent retries a transient role mutex at most three times before startup proceeds',async t=>{
+  const f=await fixture(t),base=f.deps.store;let attempts=0;
+  f.deps.store=async()=>{const store=await base();return {...store,lock:async fn=>++attempts<3?null:fn()};};
+  assert.equal((await f.call('intent',['--launcher-pid','20'])).code,0);assert.equal(attempts,3);
+});

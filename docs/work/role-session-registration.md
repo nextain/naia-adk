@@ -60,7 +60,8 @@ role generation and an unpredictable launch id. A late watcher may publish only
 while its intent remains current. Intent creation and lease publication use the
 same per-role PID/start-time mutex; publication rechecks generation/launch ID
 inside that mutex immediately before atomic rename. Resolution reads the
-intent/lease pair under that mutex as well. A consumer rejects a lease from an older
+intent/lease pair under that mutex, validates slow process/endpoint evidence
+outside it, then reacquires and rechecks both records. A consumer rejects a lease from an older
 generation or a different launch id, including after PID recycling. Instance
 policy defines the private state path and its trusted UID; another account's
 lease is resolved by an explicitly configured `registration.resolve_command`.

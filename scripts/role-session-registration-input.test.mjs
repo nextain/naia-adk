@@ -66,3 +66,26 @@ test('existing fixed session profiles do not consult registration or change prov
   f.deps.registration=()=>assert.fail('legacy fixed binding changed');
   assert.equal((await f.call()).code,0);assert.equal(f.submits(),1);
 });
+
+test('registered native child is selected under its actual Node Codex foreground wrapper',async t=>{
+  const f=await fixture(t),wrapper=process.pid+100000;
+  f.deps.inspect=async()=>({foreground:[{pid:wrapper,argv:['/usr/bin/node','/fixture/codex.js']}],
+    processes:[{pid:f.session.pid,ppid:wrapper,argv:['/fixture/codex','resume',f.session.thread_id]}],
+    screen:'› Ask Codex to do anything'});
+  const answer=await f.call();assert.equal(answer.code,0);assert.equal(f.submits(),1);
+  assert.equal((await f.call(['verify'])).answer.status,'accepted');assert.equal(f.submits(),1);
+});
+
+test('registered PID outside the current foreground ancestry cannot be selected from the global process list',async t=>{
+  const f=await fixture(t);
+  f.deps.inspect=async()=>({foreground:[{pid:process.pid+100000,args:'codex'}],
+    processes:[{pid:f.session.pid,ppid:1,args:'codex'}],screen:'› Ask Codex to do anything'});
+  assert.equal((await f.call()).answer.reason,'process_mismatch');assert.equal(f.submits(),0);
+});
+
+test('a different Node provider cannot authorize its Codex worker as the role frontend',async t=>{
+  const f=await fixture(t),wrapper=process.pid+100000;
+  f.deps.inspect=async()=>({foreground:[{pid:wrapper,argv:['node','/fixture/muse.js']}],
+    processes:[{pid:f.session.pid,ppid:wrapper,args:'codex'}],screen:'› Ask Codex to do anything'});
+  assert.equal((await f.call()).answer.reason,'unsupported');assert.equal(f.submits(),0);
+});

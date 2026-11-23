@@ -26,7 +26,11 @@ export async function main(argv=process.argv.slice(2),deps=registrationHost(),st
   if(action==='intent'){
     const launcherPid=Number(value('--launcher-pid'));
     const arguments_=JSON.parse(stdin());
-    result=await beginRegistration({role,profile,launcherPid,argv:arguments_},deps);
+    for(let attempt=0;attempt<3;attempt++){
+      result=await beginRegistration({role,profile,launcherPid,argv:arguments_},deps);
+      if(result.reason!=='registration_locked'||attempt===2)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
   }else if(action==='observe'||action==='watch'){
     const launchId=value('--launch-id');
     const timeout=Number(value('--timeout-ms')??30000);

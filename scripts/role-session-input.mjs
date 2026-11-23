@@ -171,7 +171,8 @@ export async function main(argv = process.argv.slice(2), dependencies, env = pro
     }
   }
   if (probe) {
-    const inspected = await deps.inspect(resolved), agent = resolveAgentProcess(inspected.foreground, inspected.processes);
+    const inspected = await deps.inspect(resolved), agent = resolveAgentProcess(inspected.foreground, inspected.processes,
+      resolved.registration ? resolved.session?.pid : null);
     const native = agent ? await deps.native(resolved.session, '') : {};
     const invalid = agent ? validateBinding(resolved.session, agent, native) : 'unknown_agent';
     const screen = screenState(inspected.screen);
