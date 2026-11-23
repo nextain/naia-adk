@@ -62,6 +62,11 @@ The registry therefore requires a consumer that runs outside the session:
   When work headers are enabled, the original Discord metadata selects the
   matching work card before the merged input is formatted. Remote box reads
   are reused within a pass, while a retry reads the current work ledger.
+- A delivery command that exits 75 defers the current input. Its originals
+  remain pending, any old failures for those files are cleared, and that role
+  stops handing over inputs for this pass. The next scheduled pass can retry
+  without failure backoff. The summary counts deferred files separately and a
+  deferred input does not make the delivery heartbeat fail.
 - A file that fails is written to `state_dir/failed-<role>.json` and the run
   goes on to the files behind it and to the other roles. The file is retried
   after 60 seconds, doubling up to `retry_max_seconds`; new files go before

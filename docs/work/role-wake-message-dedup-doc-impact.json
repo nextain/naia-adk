@@ -22,18 +22,19 @@
     "baseline_command": "node --test scripts/role-wake.test.mjs",
     "baseline_passed": 35,
     "command": "node --test scripts/role-wake.test.mjs",
-    "passed": 52,
+    "passed": 53,
     "failed": 0,
     "red_evidence": "Six new integration regressions failed against the unchanged base before implementation.",
     "integration_command": "node --test scripts/role-wake.test.mjs scripts/stalled-cards.test.mjs scripts/work-ledger/*.test.mjs",
     "integration_result": {
-      "passed": 276,
+      "passed": 277,
       "failed": 0,
-      "fixture": "A private SESSION_HEALTH_TEST_TMP avoids a pre-existing shared /tmp fixture permission conflict."
+      "fixture": "Private SESSION_HEALTH_TEST_TMP"
     },
     "diff_check": "PASS",
     "guide_sync_check": "PASS",
-    "oss_readiness": "PASS: all five hard gates report zero findings"
+    "oss_readiness": "PASS: all five hard gates report zero findings",
+    "deferred_delivery": "Exit 75 preserves pending originals, clears prior failures, avoids retry backoff and updates the healthy heartbeat. The new regression failed on the previous commit and passes here."
   },
   "review": {
     "independent_review": "Root relayed independent instance findings for cross-run Discord duplicates and stalled ledger notices. Both have regression coverage. No live delivery acceptance is claimed.",

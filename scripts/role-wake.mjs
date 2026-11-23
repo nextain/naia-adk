@@ -506,11 +506,11 @@ function deliverRole(registry, role, deps, now, at) {
       for (const member of group.members) handovers.push({ members: [member], entry: member });
     }
   }
-  let delivered = 0, filesDone = 0, attempts = 0, streak = 0;
+  let delivered = 0, filesDone = 0, deferred = 0, attempts = 0, streak = 0;
   for (const handover of handovers) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
     attempts += 1;
-    let ok = true, mergedFile = null;
+    let ok = true, held = false, mergedFile = null;
     try {
       let entry = handover.entry;
       if (!entry) {
@@ -521,7 +521,10 @@ function deliverRole(registry, role, deps, now, at) {
         entry = { ...handover.members[0], file: mergedFile, box: null, body: handover.body, sourceBody: handover.sourceBody };
       }
       handOver(registry, role, entry, deps);
-    } catch { ok = false; } finally {
+    } catch (error) {
+      ok = false;
+      held = error?.status === 75;
+    } finally {
       if (mergedFile) fs.rmSync(mergedFile, { force: true });
     }
     if (ok) {
@@ -529,13 +532,19 @@ function deliverRole(registry, role, deps, now, at) {
       if (handover.messageId) append([messageMark(handover.messageId)], 'message');
       for (const member of handover.members) delete failures[member.key];
       delivered += 1; filesDone += handover.members.length; streak = 0;
+    } else if (held) {
+      for (const member of handover.members) delete failures[member.key];
+      deferred += handover.members.length;
+      // The consumer is waiting normally. Keep these originals pending and
+      // let the next scheduled pass try them without failure backoff.
+      break;
     } else {
       for (const member of handover.members) noteFailure(member.key);
       streak += 1;
     }
   }
   if (JSON.stringify(failures) !== JSON.stringify(before)) atomic(failureFile(registry, role), JSON.stringify(failures));
-  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...error, ...busy };
+  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - filesDone, ...(deferred ? { deferred } : {}), ...error, ...busy };
 }
 
 // Hands each new wake file to the instance delivery command, in arrival order. A

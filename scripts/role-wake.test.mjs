@@ -1183,3 +1183,38 @@ test('grouped delivery keeps role routing and the configured busy observation', 
     assert.ok(!attempt.body.includes(`Wake for ${attempt.role === 'role-a' ? 'role-b' : 'role-a'}`));
   }
 });
+
+
+test('consumer exit 75 keeps originals pending, clears old failures and keeps the heartbeat healthy', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-111111111111111111-gw.md');
+  const second = f.put('role-a', '0002-111111111111111111-route-role-a.md');
+  const run = f.deps.run;
+  let status = 1, attempts = 0;
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/deliver') {
+      attempts += 1;
+      if (status) {
+        const error = new Error('consumer deferred or failed');
+        error.status = status;
+        throw error;
+      }
+    }
+    return run(command, args, options);
+  };
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 2, pending: 2 });
+  f.state.now += 61_000;
+  status = 75;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.deepEqual(readFailures(registry, registry.roles[0]), {});
+  assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  assert.ok(fs.existsSync(first) && fs.existsSync(second));
+  const heartbeat = JSON.parse(fs.readFileSync(path.join(registry.stateDir, 'deliver-heartbeat.json'), 'utf8'));
+  assert.equal(heartbeat.ok_at, new Date(f.state.now).toISOString());
+  assert.equal(main(['deliver', '--config', f.file], {}, f.deps, () => {}), 0);
+  assert.equal(attempts, 3, 'deferred inputs retry on the next pass without failure backoff');
+  status = 0;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+});
