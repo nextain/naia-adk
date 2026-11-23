@@ -112,3 +112,14 @@ test('semantic deadline recovery keeps one durable original across receipt/state
     assert.equal(fs.existsSync(path.join(flow.inbox,'.ledger-card-outbox'))?fs.readdirSync(path.join(flow.inbox,'.ledger-card-outbox')).length:0,0);
   }
 });
+
+test('disabled timer repairs an existing claimed receipt without repeating the published original', async t => {
+ const f=setup(t),card=ledgerRow('due-card',{due:'2026-01-09T00:00:00Z'}),flow=ledgerWatcher(f,[card]);
+ const receipt=receiptPath(f.root,'role-a',card.id,card.due);fs.mkdirSync(path.dirname(receipt),{recursive:true});
+ fs.writeFileSync(receipt,JSON.stringify({role:'role-a',id:card.id,due:card.due,status:'claimed',at:NOW-60000}));
+ const config={roles:[{role:'role-a',channels:[]}],due_timer:{enabled:false}};
+ const forbidden=async()=>assert.fail('disabled recovery must not call a system runner');
+ const first=await ledgerWatch({root:f.root,config,now:NOW,runner:forbidden});
+ assert.equal(first.wakes.length,1);assert.equal(JSON.parse(fs.readFileSync(receipt)).status,'sent');
+ for(const minutes of [31,61,360]){assert.deepEqual((await ledgerWatch({root:f.root,config,now:NOW+minutes*60000,runner:forbidden})).wakes,[]);assert.equal(flow.pending().length,1);}
+});
