@@ -79,6 +79,8 @@ private spool copy. A missing, unreadable or invalid ledger gives the wake
 a single `[장부 읽기 실패: …]` line and its original body. The deliverer reads
 the ledger as its own OS user, including when `via` reads the wake file.
 Retries keep the original wake's key and read the current ledger each time.
+For a stalled-card wake addressed to the receiving role, the header lists
+the named card first, including on repeat and escalated wakes.
 For an instance acceptance check, confirm that the configured delivery
 command forwards the spool copy's header to the pane along with the body.
 

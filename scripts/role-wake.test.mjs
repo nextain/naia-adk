@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
 import { ledgerPath } from './work-ledger/ledger.mjs';
 import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
+import { formatStalledCardWake } from './lib/stalled-cards.mjs';
 
 const NOW = Date.parse('2026-01-10T00:00:00Z');
 const DAY = 86_400_000;
@@ -106,6 +107,36 @@ test('work-header delivery uses producer metadata, falls back to recent work, an
     assert.ok(attempt.body.endsWith(`\n\n${bodies[i]}`));
     assert.equal(fs.readFileSync(files[i], 'utf8'), bodies[i]);
     assert.equal(fs.existsSync(attempt.file), false);
+  }
+});
+
+test('stalled wakes put the named card first in the receiving role’s work header', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  f.doc.roles['role-a'].ledger = 'role-a.json';
+  const target = ledgerRow('target', { checked_at: '2026-01-01T00:00:00Z' });
+  const recent = ledgerRow('recent', { checked_at: '2026-01-09T00:00:00Z', from: { channel: '', msg_id: '-', quote: '' } });
+  writeWorkLedger(path.join(f.root, 'role-a.json'), 'role-a', [target, recent]);
+  f.write();
+  const registry = f.load();
+  const received = readAtDelivery(f);
+  deliver(registry, f.deps);
+  const wake = (roleId, wakeCount) => formatStalledCardWake({
+    roleId, wakeCount, escalateAfterCount: 3,
+    card: { ...target, stalledMs: 60 * 60_000, lastEvidenceAt: null, resultPaths: [] },
+  });
+  const cases = [
+    [wake('role-a', 1), target.id],
+    [wake('role-a', 3).replaceAll('\n', '\r\n'), target.id],
+    [wake('role-b', 1), recent.id],
+  ];
+  for (const [i, [body, expected]] of cases.entries()) {
+    const file = f.put('role-a', `0${i}-stalled.md`);
+    fs.writeFileSync(file, body);
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+    assert.ok(received[i].body.startsWith(`[내 장부 먼저]\n- ${expected} | open |`));
+    assert.ok(received[i].body.endsWith(`\n\n${body}`));
+    assert.equal(fs.readFileSync(file, 'utf8'), body);
   }
 });
 
