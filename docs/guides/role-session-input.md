@@ -199,3 +199,16 @@ Use the existing owning Codex app-server endpoint. Its Unix domain socket and an
 The adapter reads thread identity, working directory, rollout path and the latest in-progress turn. It calls `turn/steer` with that thread and its expected turn ID. The operation leaves the terminal composer untouched, including an unsent human draft. A matching RPC response is recorded in the private attempt journal. Delivery is accepted only after the native rollout records a new `UserMessage` with the submitted digest, same thread, same turn and a native item ID. An interrupted or unconfirmed transport retains its attempt for read-only reconciliation after restart. Without a verified Gateway origin, an available owning endpoint or an eligible active turn, the original remains in the local wake queue under the usual idle delivery rules.
 
 The active transport was exercised with Codex 0.170.0 and a disposable private terminal session. Sites must confirm their deployed role and owning endpoint, including whether the installed CLI exposes this protocol. Other providers continue through their installed receiver.
+
+## Binding after an authorized normal startup
+
+An installation may opt a role into [explicit session registration](role-session-registration.md)
+to replace its fixed PID/start with a validated lease for the same configured
+thread. This requires a launcher intent and actual process/owner evidence.
+Other-account state uses a separately configured owner resolver; the native
+snapshot read prefix does not implicitly authorize it. Missing registration
+leaves input pending, and an uncertain attempt is never replayed on renewal.
+For a registered native frontend below its known Node Codex launcher, discovery
+follows only the current foreground ancestry to that exact PID. Another provider
+or an unrelated matching PID cannot authorize input. The registration resolver
+checks a separate daemon owner independently; the pane guard compares the frontend.

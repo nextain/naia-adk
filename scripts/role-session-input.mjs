@@ -9,6 +9,8 @@ import { createHash } from 'node:crypto';
 import { activeDispatch } from './lib/active-mention.mjs';
 import { steerActiveTurn } from './lib/codex-active-turn.mjs';
 
+import { resolveRoleRegistration } from './lib/role-session-registration-host.mjs';
+
 const entry = fileURLToPath(import.meta.url);
 
 export async function nativeSnapshot(session, hash, query = {}) {
@@ -166,9 +168,19 @@ export async function main(argv = process.argv.slice(2), dependencies, env = pro
   const resolved = { ...profile, pane_id: profile.pane_id ?? profile.find?.pane_id };
   if (!resolved.pane_id) throw new Error('role pane is not configured');
   if ((env.ADK_WAKE_ROLE && env.ADK_WAKE_ROLE !== role) || (env.ADK_WAKE_PANE && env.ADK_WAKE_PANE !== resolved.pane_id)) throw new Error('dispatcher binding differs');
-  const deps = dependencies ?? hostDependencies({ paneBin: registry.pane?.bin });
+  let deps = dependencies ?? hostDependencies({ paneBin: registry.pane?.bin });
+  if (resolved.registration) {
+    const registration = await (deps.registration ?? resolveRoleRegistration)(role, resolved);
+    if (registration.code === 0) resolved.session = { ...resolved.session, ...registration.session };
+    else {
+      const reason = /^[a-z_]{1,64}$/.test(registration.reason ?? '') ? registration.reason : 'registration_unavailable';
+      resolved.session = { ...resolved.session, pid: null, process_start: null, registration_error: reason };
+      deps = { ...deps, native: async () => ({ error: reason }) };
+    }
+  }
   if (probe) {
-    const inspected = await deps.inspect(resolved), agent = resolveAgentProcess(inspected.foreground, inspected.processes);
+    const inspected = await deps.inspect(resolved), agent = resolveAgentProcess(inspected.foreground, inspected.processes,
+      resolved.registration ? resolved.session?.pid : null);
     const native = agent ? await deps.native(resolved.session, '') : {};
     const invalid = agent ? validateBinding(resolved.session, agent, native) : 'unknown_agent';
     const screen = screenState(inspected.screen);
