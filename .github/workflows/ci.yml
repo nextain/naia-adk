@@ -25,6 +25,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch immutable policy preservation baseline
+        run: |
+          policy_baseline=995405a67fa07bdf376f71fb631e2028a776d85b
+          git fetch --no-tags --depth=1 origin "$policy_baseline"
+          git cat-file -e "$policy_baseline^{commit}"
+          git cat-file -e "$policy_baseline:.agents/hooks/policies/bash.js"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
