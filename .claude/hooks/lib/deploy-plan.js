@@ -193,16 +193,106 @@ const REVIEW_MODELS = Object.freeze({
 });
 // 승인 확인은 비동기이며 검증 함수들은 동기식이다. 검증 범위마다 확인된 스냅샷만 전달한다.
 const gateConfigContext = new AsyncLocalStorage();
-async function withGateConfig(options, fn) {
-	const root = path.resolve(options.root || ROOT);
+async function approvedConfigAt(options, root) {
 	const before = gateConfigPin.snapshotGateConfig(root);
 	const approved = before ? await gateConfigPin.approvedGateConfig({ ...options, root, discordConfirms }) : null;
 	const after = gateConfigPin.snapshotGateConfig(root);
-	const trusted = approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
-	return gateConfigContext.run(trusted, fn);
+	return approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
+}
+const PROFILE_ID = /^[a-z][a-z0-9_-]{0,63}$/;
+function registeredRoot(root) {
+	if (typeof root !== "string" || !path.isAbsolute(root) || path.resolve(root) !== root || fs.realpathSync(root) !== root || !fs.statSync(root).isDirectory()) throw new Error("A registered gate requires a canonical absolute directory");
+	return root;
+}
+function registeredPolicyRoot(root) {
+	registeredRoot(root);
+	for (const name of gateConfigPin.GATE_CONFIG_FILES) {
+		const file = path.join(root, name);
+		if (fs.realpathSync(file) !== file || !fs.lstatSync(file).isFile()) throw new Error("Registered gate configuration must stay in its site root");
+	}
+	return root;
+}
+function siteAllowlist(root, verifyCommit = false) {
+	const dir = path.join(root, "config"), file = path.join(dir, "deploy-gate.json");
+	for (const [target, directory] of [[dir, true], [file, false]]) {
+		let st;
+		try { st = fs.lstatSync(target); }
+		catch (error) { if (error.code === "ENOENT") return { digest: null, items: [] }; throw error; }
+		if (!(directory ? st.isDirectory() : st.isFile())) throw new Error("Gate policy must be a regular file in its registered root");
+	}
+	const bytes = fs.readFileSync(file);
+	const policy = validateReadOnlyScriptsConfig(JSON.parse(bytes));
+	if (!policy.ok) throw new Error(policy.why);
+	if (verifyCommit && policy.items.length) {
+		const clean = verifyRepoFileGitClean(file, null, "config/deploy-gate.json");
+		if (!clean.ok || clean.sha256 !== sha256(bytes)) throw new Error("Registered read-only gate policy differs from its committed bytes");
+	}
+	return { digest: sha256(bytes), items: policy.items };
+}
+async function withGateConfig(options, fn) {
+	const root = path.resolve(options.root || ROOT);
+	const trusted = await approvedConfigAt(options, root);
+	if (options.reviewProfiles === undefined) return gateConfigContext.run(trusted, fn);
+	registeredRoot(root);
+	if (!Array.isArray(options.reviewProfiles) || !options.reviewProfiles.length) throw new Error("reviewProfiles must register at least one gate");
+	const profiles = [], ids = new Set(), roots = new Set();
+	for (const entry of options.reviewProfiles) {
+		const site = registeredPolicyRoot(entry?.root);
+		if (typeof entry?.id !== "string" || !PROFILE_ID.test(entry.id) || ids.has(entry.id) || roots.has(site)) throw new Error("Each gate requires a distinct profile ID and site root");
+		ids.add(entry.id); roots.add(site);
+		const policy = await approvedConfigAt(entry, site);
+		if (!policy) throw new Error(`Gate ${entry.id} has no current approved policy`);
+		profiles.push({ ...policy, id: entry.id, approverId: entry.approverId, allowlist: siteAllowlist(site, true) });
+	}
+	profiles.sort((a, b) => a.id < b.id ? -1 : 1);
+	return gateConfigContext.run({ root, owner: trusted, profiles }, fn);
+}
+function registeredReviewProfiles(root, verifyCommits = false) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx?.profiles) return [];
+	if (ctx.root !== path.resolve(root)) throw new Error("Plan root differs from the registered review scope");
+	for (const p of ctx.profiles) {
+		if (gateConfigPin.snapshotGateConfig(registeredPolicyRoot(p.root))?.hash !== p.hash || siteAllowlist(p.root, verifyCommits).digest !== p.allowlist.digest) throw new Error(`Gate ${p.id} policy changed; reload its registered approval`);
+	}
+	return ctx.profiles;
+}
+function registeredReviewProfileIds(root) {
+	return registeredReviewProfiles(root).map(profile => profile.id);
+}
+function withReviewProfile(root, id, fn) {
+	const profile = registeredReviewProfiles(root).find(p => p.id === id);
+	if (!profile) throw new Error("Unregistered review profile");
+	return gateConfigContext.run({ ...gateConfigContext.getStore(), selected: profile }, fn);
+}
+function reviewProfileBinding(planFile, root) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx?.selected) return null;
+	registeredReviewProfiles(root);
+	const p = ctx.selected;
+	const plan = resultFile(ctx.root, path.relative(ctx.root, path.resolve(planFile)));
+	if (plan !== path.resolve(planFile)) throw new Error("Review requires a canonical plan within its registered root");
+	return { id: p.id, scope_sha256: sha256(JSON.stringify(["gate-review/v1", p.id, p.root, p.hash, p.allowlist.digest, p.approverId, ctx.root, plan])) };
+}
+function reviewRecordDirectory(gatesDir, create = false) {
+	const p = gateConfigContext.getStore()?.selected;
+	if (!p) return gatesDir;
+	let dir = fs.realpathSync(gatesDir);
+	for (const part of ["reviews", p.id]) {
+		dir = path.join(dir, part);
+		if (create) {
+			try { fs.mkdirSync(dir); } catch (error) { if (error.code !== "EEXIST") throw error; }
+		}
+		if (!fs.lstatSync(dir).isDirectory() || fs.realpathSync(dir) !== dir) throw new Error("Invalid gate review directory");
+	}
+	return dir;
 }
 function trustedGateConfig(root) {
-	const ctx = gateConfigContext.getStore();
+	let ctx = gateConfigContext.getStore();
+	if (ctx?.profiles) {
+		registeredReviewProfiles(root);
+		if (ctx.selected) return ctx.selected.config;
+		ctx = ctx.owner;
+	}
 	if (!ctx || ctx.root !== path.resolve(root)) return null;
 	const current = gateConfigPin.snapshotGateConfig(root);
 	return current && current.hash === ctx.hash ? ctx.config : null;
@@ -735,7 +825,10 @@ function planReadOnlyScriptsBinding(plan, root) {
 		if (!cleanScript.ok || cleanScript.rel !== item.path || cleanScript.sha256 !== item.sha256) continue;
 		bound.push({ sha256: item.sha256, path: item.path, service: item.service, script_sha256: cleanScript.sha256 });
 	}
-	return { ok: true, items: canonicalReadOnlyBinding(bound) };
+	const profile = gateConfigContext.getStore()?.selected;
+	const permitted = profile ? bound.filter(row => profile.allowlist.items.some(rule =>
+		rule.path === row.path && rule.service === row.service && rule.sha256 === row.sha256)) : bound;
+	return { ok: true, items: canonicalReadOnlyBinding(permitted) };
 }
 
 /** 계획 단계 명령이 직접 호출하는 저장소 내 대본 경로를 뽑는다(리뷰 시 본문 고정을 강제하기 위함). */
@@ -935,6 +1028,7 @@ function resultFile(gatesDir, result, allowMissing = false) {
 }
 
 function reviewPrompt(plan, sha, root, opts = null) {
+	const profile = reviewProfileBinding(opts?.planFile, root);
 	const roItems = opts && Array.isArray(opts.readOnlyScripts) ? canonicalReadOnlyBinding(opts.readOnlyScripts) : [];
 	const roLines = roItems.length
 		? [
@@ -980,6 +1074,7 @@ function reviewPrompt(plan, sha, root, opts = null) {
 		...(plan.scenario || []).flatMap((s) => (s.commands || []).map((c) => `- ${s.id}: ${commandHash(c)}`)),
 		...((plan.incident && plan.incident.actions) || []).flatMap((a) => (a.commands || []).map((c) => `- 장애 ${a.id}: ${commandHash(c)}`)),
 		"",
+		...(profile ? [`Review gate: ${profile.id}. Registered policy and plan scope: ${profile.scope_sha256}`] : []),
 		...pinnedFilesText(plan, root),
 		...roLines,
 	].join("\n");
@@ -1020,6 +1115,8 @@ function reviewInputEntries(planFile, root, opts = null) {
 	const entries = [{ file: "\0plan", sha256: planSha256 }];
 	const problems = [];
 	const seen = new Set(["\0plan"]);
+	const profile = reviewProfileBinding(planFile, base);
+	if (profile) entries.push({ file: "\0gate_review", sha256: profile.scope_sha256 });
 	let resolvedModels = null;
 	try { resolvedModels = reviewModelsFor(base); }
 	catch (error) { problems.push(`review_models 설정을 읽지 못함: ${error.message}`); }
@@ -1069,6 +1166,17 @@ function reviewInputEntries(planFile, root, opts = null) {
 	return { base, planSha256, entries, problems, digest: problems.length ? null : sha256(JSON.stringify(entries)) };
 }
 function reviewInputManifest(planFile, root, opts = null) {
+	const profiles = registeredReviewProfiles(root || resolveRepoRoot(path.dirname(path.resolve(planFile))));
+	if (profiles.length && !gateConfigContext.getStore().selected) {
+		const base = root || resolveRepoRoot(path.dirname(path.resolve(planFile)));
+		const plan = readPlanSnapshot(planFile)?.plan;
+		const manifests = profiles.map(p => withReviewProfile(base, p.id, () => {
+			const ro = planReadOnlyScriptsBinding(plan, base);
+			if (!ro.ok) throw new Error(ro.why);
+			return [p.id, reviewInputManifest(planFile, base, { readOnlyScripts: ro.items })];
+		}));
+		return sha256(JSON.stringify(["gate-reviews/v1", manifests]));
+	}
 	const r = reviewInputEntries(planFile, root, opts);
 	if (r.problems.length) throw new Error(r.problems[0]);
 	return r.digest;
@@ -1157,12 +1265,50 @@ function reviewBodyProblems(text, sha, acceptSecurity = false, opts = null) {
 /** 리뷰 결과의 무결성·대상·작성자 분리·열 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
+	try {
+		const profiles = registeredReviewProfiles(base, true);
+		if (!profiles.length) return selectedReviewProblems(gatesDir, sha, base);
+		const results = profiles.map(p => [p.id, withReviewProfile(base, p.id, () => selectedReviewProblems(gatesDir, sha, base))]);
+		const problems = results.flatMap(([id, r]) => r.problems.map(issue => `[${id}] ${issue}`));
+		const reviewers = results.flatMap(([id, r]) => r.reviewers.map(row => ({ ...row, id: `${id}/${row.id}` })));
+		const summary = results.flatMap(([id, r]) => r.summary.map(row => ({ ...row, reviewer: `${id}/${row.reviewer}` })));
+		const manifests = results.map(([id, r]) => [id, r.input_manifest_sha256]);
+		return { ok: !problems.length, problems, reviewers, summary, findings: profiles.map(p => `gates/reviews/${p.id}/deploy-plan-review-findings.md`),
+			input_manifest_sha256: problems.length ? null : sha256(JSON.stringify(["gate-reviews/v1", manifests])) };
+	} catch (error) {
+		return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null };
+	}
+}
+function selectedReviewProblems(gatesDir, sha, base) {
+	try { return singleReviewProblems(gatesDir, sha, base); }
+	catch (error) { return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null }; }
+}
+function reviewedReadOnlyScripts(gatesDir, root) {
+	const profiles = registeredReviewProfiles(root, true);
+	const read = () => {
+		const dir = reviewRecordDirectory(gatesDir);
+		const rec = readJson(resultFile(dir, REVIEW_FILE));
+		const profile = reviewProfileBinding(path.join(gatesDir, PLAN_FILE), root);
+		if (!rec || (profile ? rec.review_profile?.scope_sha256 !== profile.scope_sha256 || rec.review_profile.id !== profile.id : rec.review_profile !== undefined)) return [];
+		return validateReadOnlyBindingRecords(rec.read_only_scripts).items;
+	};
+	if (!profiles.length) {
+		const record = readJson(path.join(gatesDir, REVIEW_FILE));
+		return record?.review_profile === undefined && Array.isArray(record?.read_only_scripts) ? record.read_only_scripts : [];
+	}
+	const lists = profiles.map(profile => withReviewProfile(root, profile.id, read));
+	return lists[0].filter(row => lists.every(items => items.some(item => item.path === row.path && item.service === row.service && item.sha256 === row.sha256 && item.script_sha256 === row.script_sha256)));
+}
+function singleReviewProblems(gatesDir, sha, base) {
 	let MODELS;
 	try { MODELS = reviewModelsFor(base); }
 	catch (error) {
 		return { ok: false, problems: [`review_models 설정을 읽지 못함: ${error.message}`], reviewers: [], summary: [] };
 	}
-	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
+	const recordDir = reviewRecordDirectory(gatesDir);
+	const file = path.join(gatesDir, PLAN_FILE);
+	const profile = reviewProfileBinding(file, base);
+	const rec = readJson(profile ? resultFile(recordDir, REVIEW_FILE, true) : path.join(recordDir, REVIEW_FILE));
 	const snapshot = readPlanSnapshot(path.join(gatesDir, PLAN_FILE));
 	const plan = snapshot?.plan;
 	const problems = [];
@@ -1179,16 +1325,21 @@ function reviewProblems(gatesDir, sha, root) {
 		}
 		return { ok: problems.length === 0, problems, reviewers, input_manifest_sha256: manifest, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
+	if (rec && (profile ? rec.review_profile?.id !== profile.id || rec.review_profile.scope_sha256 !== profile.scope_sha256 || rec.plan !== path.relative(base, file) : rec.review_profile !== undefined)) problems.push("Review record differs from the registered gate policy or plan scope");
 	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
 	if (plan) problems.push(...riskAcceptanceProblems(plan));
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
-	let roOpt = null;
+	let roOpt = profile ? { planFile: file } : null;
 	if (rec && rec.read_only_scripts !== undefined) {
 		const validRo = validateReadOnlyBindingRecords(rec.read_only_scripts);
 		if (!validRo.ok) problems.push(validRo.why);
-		else roOpt = { readOnlyScripts: validRo.items };
+		else roOpt = { planFile: file, readOnlyScripts: validRo.items };
+	}
+	if (profile && plan && rec) {
+		const current = planReadOnlyScriptsBinding(plan, base);
+		if (!current.ok || !Array.isArray(rec.read_only_scripts) || JSON.stringify(roOpt?.readOnlyScripts) !== JSON.stringify(current.items)) problems.push("Reviewed allowlist differs from the current gate policy");
 	}
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, roOpt)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
@@ -1271,7 +1422,7 @@ function reviewProblems(gatesDir, sha, root) {
 		let text = null;
 		try {
 			if (typeof r?.result === "string" && r.result) {
-				const real = resultFile(gatesDir, r.result);
+				const real = resultFile(recordDir, r.result);
 				const stat = fs.statSync(real);
 				const identity = `${stat.dev}:${stat.ino}`;
 				if (resultIdentities.has(identity)) own.push("리뷰어 결과 파일이 서로 같음(경로 별칭 포함)");
@@ -1654,6 +1805,10 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 	const manifest = review.input_manifest_sha256;
 	const made = await withStateLock(env, () => {
 		if (readPlanSnapshot(abs)?.sha !== sha) return { ok: false, why: "발급 중 계획서가 변경되었습니다" };
+		if (registeredReviewProfiles(base).length) {
+			const current = reviewProblems(gatesDir, sha, base);
+			if (!current.ok || current.input_manifest_sha256 !== manifest) return { ok: false, why: "Registered gate review changed while issuing approval codes" };
+		}
 		const state = loadState(env);
 		const request = { root: base, file: abs, plan, sha, manifest, sessionId };
 		const planCh = activeApproval(state, approvalScope(request), plan, now);
@@ -1703,7 +1858,7 @@ function renderReport(plan, sha, review) {
 	L.push(`장애 판단 기준: ${(plan.incident?.criteria || []).join(" / ")}`);
 	for (const a of plan.incident?.actions || []) L.push(`장애 시 선조치 ${a.id}: ${a.why_safe}`, ...(a.commands || []).map((c) => `     명령 sha ${sha256(c).slice(0, 12)}: ${JSON.stringify(c)}`));
 	L.push("남은 위험(승인하면 책임지는 것):", ...(plan.residual_risks || []).map((r) => `  - ${r}`));
-	if (review) L.push(`적대 리뷰: ${review.summary.map((s) => `${s.reviewer}/${s.id} ${s.verdict}`).join(", ")}; 남은 지적 0; 참고 지적 ${(review.reviewers || []).reduce((n, r) => n + (r.advisoryFindings || 0), 0)}건(차단 아님, gates/deploy-plan-review-findings.md)`);
+	if (review) L.push(`적대 리뷰: ${review.summary.map((s) => `${s.reviewer}/${s.id} ${s.verdict}`).join(", ")}; 남은 지적 0; 참고 지적 ${(review.reviewers || []).reduce((n, r) => n + (r.advisoryFindings || 0), 0)}건(차단 아님, ${(review.findings || ["gates/deploy-plan-review-findings.md"]).join(", ")})`);
 	return L.join("\n");
 }
 
@@ -2394,7 +2549,7 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 	const realTarget = realPathLooseForLock(targetPath);
 	const rel = path.relative(realRepo, realTarget).replace(/\\/g, "/");
 	if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) return false;
-	const m = rel.match(/^(?:\.agents\/progress\/[^/]+\/gates|gates)\/([^/]+)$/);
+	const m = rel.match(/^(?:\.agents\/progress\/[^/]+\/gates|gates)\/(?:reviews\/[a-z][a-z0-9_-]{0,63}\/)?([^/]+)$/);
 	if (!m) return false;
 	const base = m[1];
 	if (base === PLAN_FILE || base === "deploy.json" || base === DISCORD_FILE) return false;
@@ -2409,5 +2564,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 module.exports = {
 	targetPins, verifyTargetPreconditions, verifyTargetResults,
 	readPlanSnapshot, approvalScope, matchesIssuedApproval,
-	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, withGateConfig, selectedReviewProblems, reviewedReadOnlyScripts, registeredReviewProfileIds, withReviewProfile, reviewProfileBinding, reviewRecordDirectory, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

@@ -143,6 +143,45 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 - 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기·확정 `review_models`(리뷰어별 `model`·`effort`·`runner`) 입력 목록 해시(`input_manifest_sha256`), 건너뛴 리뷰어(`skipped`)의 모델·강도, 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
+### Independent reviews for registered gates
+
+An installation can require several gates to review the same plan. Register each gate in the trusted installation wrapper that supplies its existing configuration approval. The plan and its CLI arguments cannot choose the required gates. Both the CLI wrapper and the admission hook must use the same registration.
+
+```js
+// The installation supplies canonical absolute roots and its existing approval inputs.
+// Each approval contains approverId, refs and token for that site's approved config.
+const options = {
+  root: planRoot,
+  reviewProfiles: [
+    { ...primaryApproval, id: "primary", root: primarySiteRoot },
+    { ...secondaryApproval, id: "secondary", root: secondarySiteRoot },
+  ],
+};
+
+// In the installed approval-plan CLI
+await runApprovedApprovalPlan(options, process.argv.slice(2));
+
+// In the installed admission hook
+const decision = await withGateConfig(options, () => evaluate(context));
+```
+
+The registration must contain at least one gate. Use a distinct existing site root and a distinct ID for each entry. An ID starts with a lowercase ASCII letter and permits up to 63 further lowercase letters, digits, underscores or hyphens. The existing configuration approval must verify independently for each site's `.claude/deploy/config.json`. Its `review_models` and `planReview` select that gate's reviewers. A site with `readOnlyScripts` in `config/deploy-gate.json` must match its committed policy bytes. A reviewed read-only exception requires the same pinned file, digest and service in the plan repository and every registered gate.
+
+Run the installation's usual CLI once per operation. This example uses an installation wrapper named `site-approval-plan.mjs`.
+
+```sh
+plan=.agents/progress/example/gates/deploy-plan.json
+node site-approval-plan.mjs review-prompt "$plan"
+node site-approval-plan.mjs review "$plan" --author muse
+node site-approval-plan.mjs check "$plan"
+node site-approval-plan.mjs report "$plan"
+node site-approval-plan.mjs preapprove "$plan" --session example-session
+```
+
+One `review` runs each configured gate. The receipt, reviewer output and findings for `primary` go under `gates/reviews/primary/`. Each other gate has its own sibling directory. The optional `--out` accepts a filename in each gate's directory. A receipt binds the gate ID, canonical site and plan locations, approved policy, allowlist, reviewed inputs and reviewer evidence. The report identifies the gate for each reviewer. Checking, reporting a pass, issuing approval codes and admission require a current passing receipt for every registered gate. The usual human approval for the plan and its steps still applies.
+
+Omitting `reviewProfiles` preserves the single-root CLI and its flat `gates/deploy-plan-review.json` receipt. Registering gates requires a review under each profile. Existing executor-byte pins still apply when upgrading the CLI or the gate. Open plans whose pinned executor bytes change need a fresh review.
+
 ### 2.1 리뷰 중 저장소 쓰기 잠금 (`plan-review.lock` + `plan-review-write-guard`)
 
 적대 리뷰가 도는 동안 다른 세션(3층 역할 세션, 2층 일꾼, 서브에이전트, 저장소 직접 세션)이 같은 인스턴스 저장소 안 파일을 고치면 입력 매니페스트·작업 트리 스냅샷이 어긋나 리뷰가 무효가 되거나 PASS 직후 관문이 막힙니다. 이를 글 규칙이 아니라 장치로 막습니다(상세: `docs/guides/plan-review-write-guard.md`).

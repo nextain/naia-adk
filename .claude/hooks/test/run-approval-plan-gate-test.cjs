@@ -4119,3 +4119,128 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	assert.equal(deployPlan.requiresArchitectureFit(newDatedV1), true);
 	assert.ok(deployPlan.formProblems(newDatedV1).some((m) => m.includes("architecture_fit")));
 });
+
+test("registered gates independently review one plan through review, check, report and preapprove", (t) => {
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+	gitRun(root, ["init", "-q"]);
+	gitRun(root, ["config", "user.name", "Fixture"]);
+	gitRun(root, ["config", "user.email", "automation@localhost"]);
+	const scriptPath = "scripts/local-status.sh";
+	const script = "#!/bin/sh\nprintf ready\n";
+	const everySite = { path: "scripts/show-version.sh", service: "fixture:local", sha256: sha256("printf version\n") };
+	const primaryOnly = { path: scriptPath, service: "fixture:local", sha256: sha256(script) };
+	fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+	fs.writeFileSync(path.join(root, scriptPath), script);
+	fs.writeFileSync(path.join(root, everySite.path), "printf version\n");
+	writeGateConfig(root, { readOnlyScripts: [primaryOnly, everySite] });
+	const { planFile, gatesDir } = createValidPlan(root, {
+		author_model: "argon", services: ["fixture:local"],
+		scenario: [
+			{ id: "s1", title: "Print readiness", commands: ["printf ready"], files: { [scriptPath]: primaryOnly.sha256, [everySite.path]: everySite.sha256 }, success_check: "Read the local fixture output", on_failure: "Use the local rollback check" },
+			{ id: "r1", branch: "rollback", title: "Print previous status", commands: ["printf previous"], success_check: "Read previous local status", on_failure: "Keep the local fixture stopped" },
+		],
+	});
+	gitRun(root, ["add", "."]);
+	gitRun(root, ["commit", "-qm", "Local plan fixture"]);
+	const ids = ["primary", "secondary"];
+	for (const id of [...ids, "replacement"]) {
+		const site = path.join(tmp, id);
+		const directory = path.join(site, ".claude", "deploy");
+		fs.mkdirSync(directory, { recursive: true });
+		fs.writeFileSync(path.join(directory, "config.json"), JSON.stringify({
+			review_models: { muse: { model: `fixture-${id === "replacement" ? "secondary" : id}`, runner: "muse", effort: "high" } },
+		}));
+		writeGateConfig(site, { readOnlyScripts: id === "primary" ? [everySite, primaryOnly] : [everySite] });
+		gitRun(site, ["init", "-q"]);
+		gitRun(site, ["add", "."]);
+		gitRun(site, ["-c", "user.name=Fixture", "-c", "user.email=automation@localhost", "commit", "-qm", "Local gate policy"]);
+	}
+	const reviewer = path.join(tmp, "fixture-reviewer.cjs");
+	const criteria = deployPlan.CRITERIA.map(([id]) => id);
+	fs.writeFileSync(reviewer, `#!${process.execPath}
+const fs = require("node:fs");
+const prompt = fs.readFileSync(process.argv[process.argv.indexOf("--prompt-file") + 1], "utf8");
+const id = /^Review gate: ([a-z]+)\\./m.exec(prompt)?.[1];
+if (!id) process.exit(2);
+const reject = id === process.env.FIXTURE_REJECT;
+const criteria = ${JSON.stringify(criteria)};
+console.log(["판정: " + (reject ? "FAIL" : "PASS"), ...criteria.map((name, i) => name + ": " + (reject && i === 0 ? "FAIL" : "PASS")), "참고 지적: 0", "남은 지적: " + (reject ? 1 : 0)].join("\\n"));
+`, { mode: 0o700 });
+	const wrapper = path.join(tmp, "registered-review.mjs");
+	const cli = require("node:url").pathToFileURL(SCRIPT_PATH).href;
+	const pins = require.resolve("../lib/gate-config-pin.js");
+	fs.writeFileSync(wrapper, `import { runApprovedApprovalPlan } from ${JSON.stringify(cli)};
+import { createRequire } from "node:module";
+import path from "node:path";
+const pin = createRequire(import.meta.url)(${JSON.stringify(pins)});
+const root = ${JSON.stringify(root)}, site = ${JSON.stringify(tmp)};
+const ids = ${JSON.stringify(ids)};
+const profiles = ids.map(id => {
+	const directory = path.join(site, id === "secondary" && process.env.FIXTURE_REPLACEMENT ? "replacement" : id);
+	const code = pin.approvalCode(pin.snapshotGateConfig(directory).hash);
+	const approverId = "1".repeat(18), channelId = "2".repeat(18), messageId = "3".repeat(18);
+	return { id, root: directory, approverId, token: "local-only", refs: [{ code, channelId, messageId }],
+		fetchImpl: async () => ({ ok: true, json: async () => ({ id: messageId, channel_id: channelId, author: { id: approverId }, content: id === process.env.FIXTURE_UNVERIFIED ? "pending" : code }) }) };
+});
+const options = { root, reviewProfiles: profiles };
+const engine = createRequire(import.meta.url)(${JSON.stringify(require.resolve("../lib/deploy-plan.js"))});
+if (process.argv[2] === "fixture-read-only") {
+	console.log(JSON.stringify(await engine.withGateConfig(options, () => engine.reviewedReadOnlyScripts(${JSON.stringify(gatesDir)}, root))));
+} else if (process.argv[2] === "fixture-admission") {
+	const decision = await engine.withGateConfig(options, () => engine.evaluate({
+		root, cwd: root, env: process.env, services: ["fixture:local"], command: "printf ready",
+		sessionId: "local-fixture", transcriptPath: ${JSON.stringify(transcriptPath)},
+	}));
+	console.log(JSON.stringify({ allow: decision.allow, event: decision.audit.event }));
+} else await runApprovedApprovalPlan(options, process.argv.slice(2));
+`);
+	const run = (args, env = {}) => spawnSync(process.execPath, [wrapper, ...args], {
+		cwd: root, timeout: 30000, encoding: "utf8",
+		env: { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, APPROVAL_PLAN_MUSE_BIN: reviewer, ...env },
+	});
+	const review = ["review", planFile, "--author", "argon"];
+	const unverified = run(review, { FIXTURE_UNVERIFIED: "secondary" });
+	assert.notEqual(unverified.status, 0);
+	assert.equal(fs.existsSync(path.join(gatesDir, "reviews")), false);
+	const prompts = run(["review-prompt", planFile]);
+	assert.equal(prompts.status, 0, prompts.stderr);
+	for (const id of ids) assert.match(prompts.stdout, new RegExp(`Review gate: ${id}\\.`));
+	const rejected = run(review, { FIXTURE_REJECT: "secondary" });
+	assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+	assert.match(rejected.stdout + rejected.stderr, /secondary/);
+	assert.equal(run(["check", planFile]).status, 1);
+	const read = id => JSON.parse(fs.readFileSync(path.join(gatesDir, "reviews", id, deployPlan.REVIEW_FILE)));
+	assert.deepEqual(ids.map(id => read(id).reviewers[0].model), ["fixture-primary", "fixture-secondary"]);
+	const accepted = run(review);
+	assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+	const records = ids.map(read);
+	assert.deepEqual(records.map(record => record.review_profile.id), ids);
+	assert.deepEqual(records.map(record => record.read_only_scripts.map(row => row.path)), [[scriptPath, everySite.path], [everySite.path]]);
+	const exceptions = run(["fixture-read-only"]);
+	assert.equal(exceptions.status, 0, exceptions.stderr);
+	assert.deepEqual(JSON.parse(exceptions.stdout), [{ ...everySite, script_sha256: everySite.sha256 }]);
+	assert.equal(deployPlan.isPlanReviewRecordPath(path.join(gatesDir, "reviews", "primary", deployPlan.REVIEW_FILE), root), true);
+	assert.notEqual(records[0].prompt_sha256, records[1].prompt_sha256);
+	assert.notEqual(records[0].reviewers[0].receipt.input_manifest_sha256, records[1].reviewers[0].receipt.input_manifest_sha256);
+	for (const id of ids) assert.equal(fs.existsSync(path.join(gatesDir, "reviews", id, "deploy-plan-review-findings.md")), true);
+	assert.equal(fs.existsSync(path.join(gatesDir, deployPlan.REVIEW_FILE)), false);
+	for (const args of [["check", planFile], ["report", planFile], ["preapprove", planFile, "--session", "local-fixture"]]) {
+		const accepted = run(args);
+		assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+		const changed = run(args, { FIXTURE_REPLACEMENT: "1" });
+		assert.equal(changed.status, 1, changed.stdout + changed.stderr);
+	}
+	const issued = run(["preapprove", planFile, "--session", "local-fixture"]);
+	const codes = issued.stdout.match(/\b(?:PLAN|STEP)-[0-9A-F]{64}\b/g);
+	assert.equal(codes.length, 3);
+	const admit = env => {
+		const result = run(["fixture-admission"], env);
+		assert.equal(result.status, 0, result.stderr);
+		return JSON.parse(result.stdout);
+	};
+	assert.equal(admit({}).allow, false, "human consent is still required");
+	fs.appendFileSync(transcriptPath, JSON.stringify({ type: "user", timestamp: new Date().toISOString(),
+		message: { role: "user", content: [{ type: "text", text: codes.join(" ") }] } }) + "\n");
+	assert.equal(admit({ FIXTURE_REPLACEMENT: "1" }).allow, false);
+	assert.equal(admit({}).allow, true);
+});

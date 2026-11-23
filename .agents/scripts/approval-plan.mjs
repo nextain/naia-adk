@@ -547,15 +547,23 @@ async function runReviewers(ids, prompt, abs, preManifest, roOpt, planRoot, sign
 	}
 }
 
+function writeReviewFile(target, content, profile) {
+	if (!profile) return fs.writeFileSync(target, content);
+	const temp = path.join(path.dirname(target), `.review-${crypto.randomUUID()}.tmp`);
+	fs.writeFileSync(temp, content, { flag: "wx" });
+	try { fs.renameSync(temp, target); } finally { fs.rmSync(temp, { force: true }); }
+}
+
 function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
-	const r = lib.reviewProblems(gatesDir, sha, root);
+	const r = writeFindings ? lib.selectedReviewProblems(gatesDir, sha, root) : lib.reviewProblems(gatesDir, sha, root);
 	for (const row of r.reviewers) {
 		const fail = row.summary.filter((s) => s.verdict !== "PASS").map((s) => s.id);
 		console.log(`리뷰어 ${row.id}: ${row.body ? (row.ok ? "PASS" : "FAIL") : "결과 없음"}; 불통과 기준 ${fail.join(", ") || (row.summary.length === lib.CRITERIA.length ? "없음" : "결과 없음")}; 남은 지적(차단) ${row.openFindings ?? "확인 불가"}; 참고 지적 ${row.advisoryFindings ?? 0}(차단 아님)`);
 	}
-	const merged = path.join(gatesDir, "deploy-plan-review-findings.md");
 	if (writeFindings) {
-		fs.writeFileSync(merged, lib.renderMergedFindings(r, sha));
+		const dir = lib.reviewRecordDirectory(gatesDir);
+		const merged = lib.resultFile(dir, "deploy-plan-review-findings.md", true);
+		writeReviewFile(merged, lib.renderMergedFindings(r, sha), dir !== gatesDir);
 		console.log(`통합 지적: ${path.relative(root, merged)}`);
 	}
 	return r;
@@ -592,16 +600,36 @@ switch (cmd) {
 		break;
 	}
 	case "review-prompt": {
-		const { plan, sha, root: planRoot } = loadPlan(args[0]);
+		const { abs, plan, sha, root: planRoot } = loadPlan(args[0]);
+		const profileIds = lib.registeredReviewProfileIds(planRoot);
+		if (profileIds.length && !lib.reviewProfileBinding(abs, planRoot)) {
+			for (const id of profileIds) await lib.withReviewProfile(planRoot, id, () => runApprovalPlan(argv));
+			return;
+		}
 		try { lib.reviewModelsFor(planRoot); }
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
-		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
+		console.log(lib.reviewPrompt(plan, sha, planRoot, { planFile: abs, readOnlyScripts: roBind.items }));
 		break;
 	}
 	case "review": {
 		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		const profileIds = lib.registeredReviewProfileIds(planRoot);
+		const profile = lib.reviewProfileBinding(abs, planRoot);
+		if (profileIds.length && !profile) {
+			let passed = true;
+			for (const id of profileIds) {
+				console.log(`Review gate: ${id}`);
+				const ok = await lib.withReviewProfile(planRoot, id, () => runApprovalPlan(argv));
+				if (!ok) passed = false;
+			}
+			const combined = lib.reviewProblems(gatesDir, sha, planRoot);
+			if (!combined.ok) console.error(combined.problems.join("\n"));
+			process.exitCode = passed && combined.ok ? 0 : 1;
+			return passed && combined.ok;
+		}
+		const recordDir = lib.reviewRecordDirectory(gatesDir, true);
 		try { lib.reviewModelsFor(planRoot); }
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
@@ -634,9 +662,11 @@ switch (cmd) {
 		for (const w of warnings) console.error(w);
 		const pins = lib.pinnedFileProblems(plan, planRoot);
 		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });
+		const prompt = lib.reviewPrompt(plan, sha, planRoot, { planFile: abs, readOnlyScripts: roBind.items });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
-		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
+		const out = opt(args, "--out");
+		if (profile && out && (out === "." || out === ".." || path.basename(out) !== out)) die("For registered gates --out is a filename within each gate's review directory");
+		const base = out ? (profile ? path.join(recordDir, out) : path.resolve(out)) : path.join(recordDir, `deploy-plan-review-${stamp}.md`);
 		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
 		const reviewedAt = new Date().toISOString();
 		let ids;
@@ -649,7 +679,7 @@ switch (cmd) {
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
-		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
+		try { for (const out of outputs) lib.resultFile(recordDir, path.relative(recordDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
 		const planRel = path.relative(planRoot, abs);
 		const lockHandle = lib.acquirePlanReviewLock({ repoRoot: planRoot, plan: planRel, pid: process.pid, env: process.env });
@@ -670,8 +700,9 @@ switch (cmd) {
 		process.on("SIGHUP", onSigHup);
 		try {
 			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
-			const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
-			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
+			if (profile) rec.review_profile = profile;
+			const writeRecord = () => writeReviewFile(lib.resultFile(lib.reviewRecordDirectory(gatesDir), lib.REVIEW_FILE, true), `${JSON.stringify(rec, null, 2)}\n`, profile);
+			writeRecord();
 			const reviewStartedAt = Date.now();
 			// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
 			const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
@@ -699,16 +730,17 @@ switch (cmd) {
 				const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
 				const final = `${text}review-run: target_sha256=${sha} prompt_sha256=${sha256(prompt)} stdout_sha256=${sha256(text)}\n`;
 				let output;
-				try { output = lib.resultFile(gatesDir, path.relative(gatesDir, actualOutput), true); }
+				try { output = lib.resultFile(lib.reviewRecordDirectory(gatesDir), path.relative(recordDir, actualOutput), true); }
 				catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
 				fs.writeFileSync(output, final, { flag: "wx" });
-				rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
+				rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(recordDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
 				console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
 			}
-			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
+			writeRecord();
 			const r = reviewStatus(gatesDir, sha, true, planRoot);
 			console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 			cleanupLock();
+			if (profile) return r.ok;
 			process.exit(r.ok ? 0 : 1);
 		} finally {
 			cleanupLock();

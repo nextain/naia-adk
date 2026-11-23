@@ -1,0 +1,18 @@
+{
+  "work": "per-gate-plan-review",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Documents trusted review profile registration and the shared CLI and gate entrypoints."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Shows how to review one plan with two required gates and find their receipts and findings."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Explains how independent policy scopes and intersected read-only permissions preserve gate authority."
+  }
+}

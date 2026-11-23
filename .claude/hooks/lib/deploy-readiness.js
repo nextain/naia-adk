@@ -931,7 +931,7 @@ function extractPinnedReadOnlyScript(command, c, clauses, files, fileHashes, ser
  * 명령 형식/대본/리뷰 바인딩/sha-경로-서비스가 맞지 않을 때는 null 을 돌려 기존 경로(승인 코드 또는 차단)로 떨어뜨린다.
  */
 function matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHashes, services, cwd, planBinding }) {
-	const { validateReadOnlyScriptsConfig, verifyRepoFileGitClean } = require("./deploy-plan.js");
+	const { validateReadOnlyScriptsConfig, verifyRepoFileGitClean, reviewedReadOnlyScripts } = require("./deploy-plan.js");
 	const valid = validateReadOnlyScriptsConfig(cfg);
 	if (!valid.ok) return { ok: false, why: valid.why };
 	if (valid.items.length === 0) return null;
@@ -955,17 +955,12 @@ function matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHa
 
 	const gatesDir = planBinding && planBinding.gatesDir;
 	if (!gatesDir) return null;
-	let reviewRec;
-	try {
-		reviewRec = JSON.parse(fs.readFileSync(path.join(gatesDir, "deploy-plan-review.json"), "utf8"));
-	} catch {
-		return null;
-	}
-	if (!reviewRec || !Array.isArray(reviewRec.read_only_scripts)) return null;
+	let reviewed;
+	try { reviewed = reviewedReadOnlyScripts(gatesDir, root); } catch { return null; }
 	for (const s of services) {
 		const item = matched.find((m) => m.service === s);
 		if (!item) return null;
-		const bound = reviewRec.read_only_scripts.some((r) =>
+		const bound = reviewed.some((r) =>
 			r && typeof r === "object"
 			&& r.sha256 === item.sha256
 			&& r.path === item.path
