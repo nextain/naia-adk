@@ -1,5 +1,3 @@
-import { screenState } from './role-session-input.mjs';
-
 // Empty-composer hints observed in the installed Muse 1.4.25 catalog. The UI
 // clips these horizontally. Text alone is not proof: renderer styling must
 // also identify a placeholder, so an actual slash command remains a draft.
@@ -31,7 +29,27 @@ export const museComposerHints = [
 const ansi = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
 const prompt = /^[ \t]*([❯›➜»>])(?:[ \t]+(.*)|$)/;
 const footer = /^(?:[─━═]{3,}|GPT[- ]\d|muse[- ·]|claude[- ·]|gemini[- ·]|\[default\]|tab\s+to\s+queue|\?\s+for\s+shortcuts|\d+%\s+context)/i;
+const placeholder = /^(?:type a message|ask anything|ask codex to do anything|\/usage shows this|메시지를 입력하세요)?$/i;
+const active = /^[ \t]*(?:#[ \t]*)?(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒✶✳✢✻✽✼◈◇•][ \t]+[^\n]*\(\s*\d+(?:\.\d+)?\s*[smh]\b|(?:thinking|working|running|double\s+checking)(?:[.…]|\s*\()|(?:esc|escape)\s+to\s+(?:cancel|interr\w*))/im;
 const clean = raw => raw.replace(ansi, '');
+
+function ordinaryScreenState(screen) {
+  if (typeof screen !== 'string' || !screen.trim()) return 'unknown';
+  const lines = screen.replace(ansi, '').replaceAll('\r', '').split('\n');
+  let index = -1, match;
+  for (let i = 0; i < lines.length; i++) {
+    const candidate = prompt.exec(lines[i]);
+    if (candidate) { index = i; match = candidate; }
+  }
+  if (index < 0) return 'unknown';
+  if (active.test(lines.slice(Math.max(0, index - 12), index).join('\n'))) return 'busy';
+  const parts = [match[2] ?? ''];
+  for (const line of lines.slice(index + 1)) {
+    if (footer.test(line.trim())) break;
+    parts.push(line.trim());
+  }
+  return placeholder.test(parts.join(' ').trim().replace(/\s+/g, ' ')) ? 'idle' : 'draft';
+}
 
 function styledChars(raw) {
   const chars = [];
@@ -62,9 +80,13 @@ function styledChars(raw) {
   return chars;
 }
 
+export function screenState(screen) {
+  return classifyComposerScreen(screen, 'codex');
+}
+
 export function classifyComposerScreen(screen, tool) {
-  const ordinary = screenState(screen);
-  if (tool !== 'muse' || ['busy', 'unknown'].includes(ordinary)) return ordinary;
+  const ordinary = ordinaryScreenState(screen);
+  if (!['muse', 'codex'].includes(tool) || ['busy', 'unknown'].includes(ordinary)) return ordinary;
   const lines = screen.replaceAll('\r', '').split('\n');
   let index = -1, match;
   for (let line = 0; line < lines.length; line++) {
@@ -81,9 +103,19 @@ export function classifyComposerScreen(screen, tool) {
     textParts.push(clean(raw).trim()); payload.push(...styledChars(raw));
   }
   const text = textParts.join(' ').trim().replace(/\s+/g, ' ');
+  const visible = payload.filter(({ char }) => !/\s/.test(char));
+  if (tool === 'codex') {
+    // Codex renders this hint dim on one clipped row; typed input is not dim.
+    // The complete product token is nine ASCII characters including its space.
+    const hint = 'Ask Codex to do anything', prefix = (match[2] ?? '').trim();
+    const clipped = prefix.length >= 'Ask Codex'.length && prefix.length < hint.length && hint.startsWith(prefix);
+    const singleRow = textParts.filter(part => part.trim()).length === 1;
+    return clipped && singleRow && visible.length && visible.every(({ dim }) => dim) ? 'idle' : ordinary;
+  }
+
   const borderColors = new Set([...lines.slice(Math.max(0, index - 2), index), ...lines.slice(index + 1, index + 3)]
     .flatMap(styledChars).filter(({ char, fg }) => '─━═'.includes(char) && fg !== null).map(({ fg }) => fg));
-  const visible = payload.filter(({ char }) => !/\s/.test(char));
+
   const catalog = text.length >= 16 && museComposerHints.some(hint => hint.startsWith(text));
   const placeholderStyle = visible.length && visible.every(({ fg, dim }) => dim || fg !== null && borderColors.has(fg));
   if (catalog && placeholderStyle) return 'idle';

@@ -1,0 +1,12 @@
+{
+  "issue": "codex-clipped-placeholder",
+  "architecture_fit": {
+    "original_request": "Recognize a styled clipped known empty-composer hint without accepting human draft text.",
+    "parent_structure": "The existing common pure composer classifier and Codex receiver screenState import API.",
+    "acceptance_rationale": "Reuse the existing SGR parser in the composer module and re-export the receiver API. Preserve all input, native ACK and runtime control boundaries."
+  },
+  "repository_docs": { "status": "UPDATED", "path": "docs/guides/role-wake-registry.md" },
+  "user_manual": { "status": "UPDATED", "path": "docs/guides/role-wake-registry.md" },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/work/codex-clipped-placeholder-20261123.md" },
+  "validation_scope": "Pure classifier and CLI; receiver/native ACK and canonical attempt regressions; single-row/style/color negative matrix. No live UI, model, runtime pointer or settings writes."
+}
