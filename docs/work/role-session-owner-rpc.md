@@ -1,6 +1,7 @@
 # Owner-account RPC for the existing role turn
 
-Status: bounded phase-2 contract, before implementation. Integration base is
+Status: bounded phase-2 contract with model-free implementation tests. Live
+startup and operating acceptance remain separate gates. Integration base is
 main `8ac90c6c5489a598e198323e518c412984112ec7`, which contains active mentions
 and legacy-612 compatibility. The reviewed registration component is
 `a272dca19b0bd11dbed57dff2d53808f1acbee1b`.

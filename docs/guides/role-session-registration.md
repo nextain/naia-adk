@@ -99,9 +99,9 @@ owning server only; it must not start a server, load/resume a saved thread or
 change a turn. An unloaded saved thread cannot prove ownership. Implicit daemon
 selection or embedded fallback cannot be inferred from a TUI PID.
 
-This phase implements registration. The standard owner-side active RPC adapter,
-owning endpoint installation and actual normal-restart acceptance are separate
-integration gates.
+The [owner-account RPC adapter](role-owner-rpc.md) provides the standard read-only
+probe and optional active transport. Owning endpoint installation and actual
+normal-restart acceptance remain separate integration gates.
 
 ## Reading private state from another account
 

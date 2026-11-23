@@ -44,14 +44,14 @@ export function resolveAgentProcess(foreground, processes, registeredPid = null)
     const item = queue.shift(), executable = program(item);
     const tool = [...tools].find(tool => executable.name === tool || executable.name.startsWith(tool + '-bin'));
     if (tool) {
-      // A registered native child may share the foreground group with the
-      // known Node Codex launcher. Only follow that foreground ancestry;
-      // never select an unrelated PID from the global process list.
-      if (registeredPid && item.pid !== registeredPid && tool === 'codex' && ['node', 'nodejs'].includes(executable.first)) {
+      if (!registeredPid || item.pid === registeredPid) return { ...item, tool };
+      // A registration selects one exact frontend within the foreground group
+      // or its known launch ancestry, independent of unrelated sibling order.
+      // Other providers never authorize traversal into their worker children.
+      if (tool === 'codex' && ['node', 'nodejs'].includes(executable.first)) {
         if (!seen.has(item.pid)) { seen.add(item.pid); queue.push(...processes.filter(child => child.ppid === item.pid)); }
-        continue;
       }
-      return { ...item, tool };
+      continue;
     }
     if (!wrappers.has(executable.first) || !Number.isInteger(item.pid) || seen.has(item.pid)) continue;
     seen.add(item.pid);

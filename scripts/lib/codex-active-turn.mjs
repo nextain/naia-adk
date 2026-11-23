@@ -22,7 +22,7 @@ function waitFor(socket, type) {
 
 // An already-running, authenticated loopback app server is required. This client
 // never starts, resumes, interrupts, or switches a thread, and never uses a TTY.
-export async function steerActiveTurn(profile, expectedTurnId, text) {
+async function requestRoleTurn(profile, expectedTurnId, text, threadOnly = false) {
   let socket, sentSteer = false;
   try {
     const config = profile.active_mentions?.app_server;
@@ -79,8 +79,13 @@ export async function steerActiveTurn(profile, expectedTurnId, text) {
     await request('initialize', { clientInfo: { name: 'naia_role_receiver', title: 'Role receiver', version: '1' } });
     socket.send(JSON.stringify({ method: 'initialized' }));
     const { thread_id, cwd, native_path } = profile.session;
-    const { thread } = await request('thread/read', { threadId: thread_id });
-    if (thread?.id !== thread_id || thread.cwd !== cwd || thread.path !== native_path || thread.status?.type !== 'active') throw new Error('active_turn_changed');
+    const { thread } = await request('thread/read', { threadId: thread_id, includeTurns: false });
+    if (thread?.id !== thread_id || thread.cwd !== cwd || thread.path !== native_path) throw new Error('active_turn_changed');
+    if (threadOnly) {
+      if (!['idle', 'active'].includes(thread.status?.type)) throw new Error('active_turn_changed');
+      return { id: thread.id, cwd: thread.cwd, path: thread.path, status: { type: thread.status.type } };
+    }
+    if (thread.status?.type !== 'active') throw new Error('active_turn_changed');
     const { data: turns } = await request('thread/turns/list', { threadId: thread_id, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });
     const current = turns?.[0];
     if (current?.status !== 'inProgress' || !current.id || (expectedTurnId && current.id !== expectedTurnId)) throw new Error('active_turn_changed');
@@ -94,4 +99,12 @@ export async function steerActiveTurn(profile, expectedTurnId, text) {
   } catch (error) {
     throw Object.assign(error, { notSubmitted: !sentSteer });
   } finally { socket?.close(); }
+}
+
+export async function steerActiveTurn(profile, expectedTurnId, text) {
+  return requestRoleTurn(profile, expectedTurnId, text);
+}
+
+export async function probeRoleThread(profile) {
+  return requestRoleTurn(profile, null, undefined, true);
 }

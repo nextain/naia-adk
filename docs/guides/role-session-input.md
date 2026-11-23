@@ -12,6 +12,10 @@ Route only configured Codex sessions here; an instance may retain another
 consumer for Muse and other tools. This version does not claim native
 acknowledgements for those tools.
 
+An optional [registered owner-account RPC](role-owner-rpc.md) lets the same
+consumer reach a protected owning endpoint under another configured UID. The
+central canonical attempt, source/formatter grant and native ACK stay unchanged.
+
 ## Private configuration
 
 ```json
