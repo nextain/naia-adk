@@ -145,11 +145,15 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
     record.native_file_id = native.file_id;
     record.native_after_offset = native.byte_size;
     record.native_cursor = { offset: native.byte_size };
+    if (deps.transportApi) record.transport_api = deps.transportApi;
     await finish(75, 'native_ack_pending');
     try { await deps.submit(profile, text); }
     catch (error) {
-      if (error.code === 'ENOENT') return finish(1, 'transport_unavailable', { status: 'not_submitted' });
-      return finish(75, 'native_ack_pending', { status: 'submitted_unconfirmed', transport_error: error.code ?? 'unconfirmed' });
+      const evidence = { transport_error: error.transportCode ?? error.code ?? 'unconfirmed',
+        ...(Number.isInteger(error.status) && { transport_exit_status: error.status }) };
+      if (error.code === 'ENOENT' || error.beforeInput === true) return finish(1,
+        error.code === 'ENOENT' ? 'transport_unavailable' : 'transport_rejected', { ...evidence, status: 'not_submitted' });
+      return finish(75, 'native_ack_pending', { ...evidence, status: 'submitted_unconfirmed' });
     }
     const deadline = deps.now() + ackTimeoutMs;
     do {

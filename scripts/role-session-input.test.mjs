@@ -62,10 +62,10 @@ test('overlarge unfinished native record is explicit and never skipped', async t
   assert.equal(after.error, 'native_record_too_large'); assert.equal(after.next_cursor.offset, before.byte_size);
 });
 
-test('host submits supported atomic prompt without model/restart/key commands', async () => {
+test('host submits atomic pane input without agent metadata/model/restart/key commands', async () => {
   const calls = [], deps = hostDependencies({ paneBin: '/generic/herdr', run: (bin, args) => { calls.push([bin, args]); return ''; } });
   await deps.submit({ pane_id: 'w2:p6' }, 'exact\npayload');
-  assert.deepEqual(calls, [['/generic/herdr', ['agent', 'prompt', 'w2:p6', 'exact\npayload', '--wait', '--until', 'working', '--timeout', '5000']]]);
+  assert.deepEqual(calls, [['/generic/herdr', ['pane', 'run', 'w2:p6', 'exact\npayload']]]);
 });
 
 test('CLI uses dispatcher canonical attempt and verify projection', async t => {
@@ -113,4 +113,56 @@ test('native child reads inherited pipe fd without reopening /dev/stdin', async 
   const deps = hostDependencies();
   const answer = await deps.native({ ...f.session, read_prefix: ['/usr/bin/env'] }, 'none', null);
   assert.equal(answer.error, undefined); assert.equal(answer.thread_id, 'own-thread');
+});
+
+for (const metadata of ['stale-muse', 'unregistered']) {
+  test(`existing Codex pane accepts input with ${metadata} agent metadata`, async t => {
+    const { spawnSync } = await import('node:child_process');
+    const f = await fixture(t), fake = path.join(f.dir, 'fake-herdr.mjs');
+    const audit = path.join(f.dir, 'transport-audit.jsonl'), input = path.join(f.dir, 'formatted.txt');
+    const config = path.join(f.dir, 'input.json');
+    const payload = "정확한 본문 $HOME $(touch should-not-run)\nsecond 'quoted' --wait\n";
+    await fs.writeFile(input, payload);
+    await fs.writeFile(fake, `#!/usr/bin/env node
+      import fs from 'node:fs';
+      const args = process.argv.slice(2);
+      fs.appendFileSync(process.env.FAKE_AUDIT, JSON.stringify({ method: args.slice(0, 2), count: args.length }) + '\\n');
+      if (args[0] === 'agent') {
+        console.error(JSON.stringify({ error: { code: process.env.FAKE_METADATA === 'unregistered' ? 'agent_not_found' : 'agent_not_ready' } }));
+        process.exit(1);
+      }
+      if (args[0] === 'pane' && args[1] === 'process-info') {
+        console.log(JSON.stringify({ result: { process_info: { foreground_processes: [{ pid: Number(process.env.FAKE_PID), cmdline: '/generic/bin/codex' }] } } }));
+      } else if (args[0] === 'pane' && args[1] === 'read') {
+        console.log('› Ask Codex to do anything');
+      } else if (args[0] === 'pane' && args[1] === 'run') {
+        if (args.length !== 4) process.exit(2);
+        fs.appendFileSync(process.env.FAKE_NATIVE, JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: args[3] }] } }) + '\\n');
+        console.log(JSON.stringify({ result: { ok: true } }));
+      } else process.exit(2);
+    `, { mode: 0o755 });
+    await fs.writeFile(config, JSON.stringify({ state_dir: f.dir, pane: { bin: fake }, roles: { writer: { pane_id: 'w2:p6', session: f.session } } }));
+    const env = { ...process.env, FAKE_AUDIT: audit, FAKE_METADATA: metadata, FAKE_PID: String(process.pid), FAKE_NATIVE: f.file,
+      ADK_WAKE_ATTEMPT: `attempt-${metadata}`, ADK_WAKE_ROLE: 'writer', ADK_WAKE_PANE: 'w2:p6', ADK_WAKE_PAYLOAD_SHA256: payloadHash(payload) };
+    const result = spawnSync(process.execPath, ['scripts/role-session-input.mjs', '--config', config, '--role', 'writer', '--file', input], { encoding: 'utf8', env });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const answer = JSON.parse(result.stdout);
+    assert.equal(answer.reason, 'submitted_ack'); assert.equal(answer.native_user_ack.payload_sha256, payloadHash(payload));
+    const calls = (await fs.readFile(audit, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls.filter(call => call.method[0] === 'agent').length, 0);
+    assert.deepEqual(calls.filter(call => call.method[1] === 'run'), [{ method: ['pane', 'run'], count: 4 }]);
+    const log = (await fs.readFile(f.file, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(log.at(-1).payload.content[0].text, payload);
+  });
+}
+
+test('only definite pane API prequeue errors carry a negative transport proof', async () => {
+  for (const [code, beforeInput] of [['pane_not_found', true], ['invalid_key', true], ['pane_send_failed', false], ['agent_not_ready', false]]) {
+    const error = Object.assign(new Error('private diagnostic body'), { status: 1,
+      stderr: JSON.stringify({ error: { code, message: 'private diagnostic body' } }) });
+    const deps = hostDependencies({ run: () => { throw error; } });
+    await assert.rejects(deps.submit({ pane_id: 'w2:p6' }, 'exact payload'), thrown => {
+      assert.equal(thrown.transportCode, code); assert.equal(thrown.beforeInput, beforeInput); return true;
+    });
+  }
 });

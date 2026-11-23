@@ -166,3 +166,27 @@ test('concurrent verification during preflight never reports rejected on either 
     assert.equal((await verifyInput(options, h.deps)).status, 'accepted'); assert.equal(h.count(), 1);
   }
 });
+
+test('proved transport rejection is terminal while unproved errors remain uncertain', async t => {
+  const h = await harness(t);
+  h.deps.transportApi = 'herdr.pane.send_input';
+  h.deps.submit = async () => { throw Object.assign(new Error('secret error details'), { beforeInput: true, transportCode: 'pane_not_found', status: 1 }); };
+  assert.equal((await h.call({ canonicalAttempt: true })).reason, 'transport_rejected');
+  const file = attemptFile(h.stateDir, 'author', 'source-a'), raw = await fs.readFile(file, 'utf8');
+  const record = JSON.parse(raw);
+  assert.equal(record.status, 'not_submitted'); assert.equal(record.transport_error, 'pane_not_found');
+  assert.equal(record.transport_exit_status, 1); assert.equal(raw.includes('secret error details'), false);
+  const answer = await verifyInput({ role: 'author', key: 'source-a', transportSha256: 'transporthash', profile, stateDir: h.stateDir }, h.deps);
+  assert.equal(answer.status, 'rejected');
+  assert.equal((await h.call({ canonicalAttempt: true })).reason, 'attempt_terminal');
+});
+
+test('unproved API failure stays uncertain and never repeats pane input', async t => {
+  const h = await harness(t); let calls = 0;
+  h.deps.submit = async () => { calls++; throw Object.assign(new Error('private provider details'), { beforeInput: false, transportCode: 'pane_send_failed', status: 1 }); };
+  const first = await h.call({ canonicalAttempt: true });
+  assert.equal(first.status, 'uncertain'); assert.equal(first.code, 75);
+  const record = JSON.parse(await fs.readFile(first.attempt_path, 'utf8'));
+  assert.equal(record.status, 'submitted_unconfirmed'); assert.equal(record.transport_error, 'pane_send_failed');
+  assert.equal((await h.call({ canonicalAttempt: true })).reason, 'native_ack_pending'); assert.equal(calls, 1);
+});

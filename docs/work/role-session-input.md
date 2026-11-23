@@ -28,7 +28,7 @@ Human drafts are preserved. Transport success alone leaves the input pending.
 | Foreground reports sudo/bash while Codex is its child | The nearest real agent executable is selected | Transparent-wrapper process traversal |
 | Native session is active or the input box contains a draft | Exit 75, original retained, reason recorded | Session and screen preconditions |
 | A configured process/thread/cwd differs from the native session | Exit 75, no input | Explicit session binding validation |
-| Herdr accepts an atomic prompt and a matching native user message appears | Exit 0, native evidence recorded | Atomic prompt and acknowledgement probe |
+| Herdr accepts atomic pane input and a matching native user message appears | Exit 0, native evidence recorded | Atomic pane input and acknowledgement probe |
 | Herdr reports success without native acknowledgement | Exit 75, uncertain attempt retained, no repeated paste | Durable attempt reconciliation |
 | Receiver restarts after submission and acknowledgement appears later | Exit 0 without submitting again | Reconcile before replay |
 | Another installation uses different users, paths and pane ids | Same behavior through its own configuration | Host adapter configuration |
@@ -44,7 +44,7 @@ reconciliation of a pre-existing composer draft require instance evidence.
 
 ## Validation evidence
 
-The receiver's 34 local regressions cover two installation profiles, busy and
+The receiver's 39 local regressions cover two installation profiles, busy and
 human-draft deferral, PID/thread/cwd mismatches, old and delayed native ACKs,
 changed headers before and after submission, uncertain retry without repeated
 paste, stale lock recovery, split JSONL writes, bounded large-log reads,
@@ -63,3 +63,9 @@ absent record never proves that no sender is running. A shared role mutex
 serializes read-only verification with sender preflight; canonical rejected
 attempts cannot later submit. Two-installation concurrent fixtures cover this
 case alongside missing/legacy/terminal/fresh-attempt state transitions.
+
+A further transport acceptance test covers existing panes whose managed-agent
+metadata is stale or absent. Both fixtures fail with the old agent-prompt
+transport, then pass with one pane input request and exact native ACK. Literal
+multiline payloads, shell-like text and definitive prequeue API failures are
+covered without changing any live pane or agent metadata.

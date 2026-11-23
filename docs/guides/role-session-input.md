@@ -76,7 +76,7 @@ A dispatcher attempt that is deferred before submission records an explicit
 later. The dispatcher verifies its rejection and creates a fresh attempt for a
 retry, which may carry updated work/context headers.
 After submission begins, the stored actual payload remains fixed. The receiver
-uses Herdr's atomic `agent prompt ... --wait --until working` operation and then
+uses Herdr's atomic `pane run PANE PAYLOAD` operation and then
 checks for a matching native `response_item` user record after the attempt's
 baseline offset. Old identical messages do not acknowledge a new attempt.
 An uncertain retry reconciles the saved payload and never pastes again.
@@ -138,3 +138,25 @@ Do not silently migrate absence into rejection. An operator must preserve the
 original and old records, establish the actual prior consumer version and its
 pre-submission evidence, then reconcile that specific attempt. Native ACK
 evidence takes precedence when input may already have been received.
+
+## Pane transport and agent metadata
+
+The configured existing Codex process is authenticated by foreground PID/start,
+thread, cwd and native session evidence. It need not have been started through
+Herdr's managed-agent interface. Stale tool labels or absent agent registration
+therefore do not authorize or prevent this consumer's input. The adapter does
+not call agent start, change lifecycle authority or replace the current model.
+
+In [Herdr 0.8.0's CLI](https://github.com/herdrdev/herdr/blob/v0.8.0/src/cli/pane.rs),
+`pane run` maps one literal payload argument to `pane.send_input` with Enter.
+The [server handler](https://github.com/herdrdev/herdr/blob/v0.8.0/src/app/api/panes.rs)
+queues the combined buffer once, and its
+[encoder](https://github.com/herdrdev/herdr/blob/v0.8.0/src/app/api_helpers.rs)
+uses the terminal's live bracketed-paste and keyboard protocol. No shell parses
+the payload. Native user-input ACK remains required after transport success.
+
+A structured `pane_not_found` or `invalid_key` response is a definitive failure
+before queueing input and records terminal `not_submitted`. Other failures,
+including an unstructured exit or timeout, remain uncertain. The journal keeps
+only the safe API error code and exit status, never raw stderr or error messages.
+Older uncertain attempts are never reset just because this adapter changed.

@@ -85,10 +85,29 @@ function processList(run) {
     .map(match => ({ pid: Number(match[1]), ppid: Number(match[2]), args: match[3] }));
 }
 
+function transportFailure(error) {
+  // Retain only the API's bounded machine code, never its message or payload.
+  for (const raw of [error.stdout, error.stderr]) {
+    if (!raw || Buffer.byteLength(raw) > 64 * 1024) continue;
+    try {
+      const code = JSON.parse(String(raw)).error?.code;
+      if (/^[a-z][a-z0-9_]{0,63}$/.test(code ?? '')) {
+        error.transportCode = code;
+        // Both errors return before the single byte-buffer enqueue in Herdr
+        // 0.8.0 handle_pane_send_input. Other errors remain uncertain.
+        error.beforeInput = ['pane_not_found', 'invalid_key'].includes(code);
+        break;
+      }
+    } catch { /* no structured error: preserve uncertainty */ }
+  }
+  return error;
+}
+
 export function hostDependencies({ paneBin = 'herdr', run = (bin, args, options = {}) => execFileSync(bin, args, {
   encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024, ...options,
 }) } = {}) {
   return {
+    transportApi: 'herdr.pane.send_input',
     now: () => Date.now(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     async inspect(profile) {
@@ -110,9 +129,11 @@ export function hostDependencies({ paneBin = 'herdr', run = (bin, args, options 
       } catch (error) { return { error: error.code ?? 'native_read_failed' }; }
     },
     async submit(profile, text) {
-      // The pane target selects an existing agent. No model or restart command
-      // is supplied. Herdr encodes Enter using the live keyboard/paste modes.
-      run(paneBin, ['agent', 'prompt', profile.pane_id, text, '--wait', '--until', 'working', '--timeout', '5000'], { timeout: 7000 });
+      // Existing-session identity was checked independently of Herdr's agent
+      // registration. One literal argument becomes one pane.send_input RPC:
+      // live bracketed paste plus encoded Enter, with no shell interpretation.
+      try { run(paneBin, ['pane', 'run', profile.pane_id, text], { timeout: 7000 }); }
+      catch (error) { throw transportFailure(error); }
     },
   };
 }
