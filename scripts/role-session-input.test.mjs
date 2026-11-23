@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { nativeSnapshot, hostDependencies, main } from './role-session-input.mjs';
-import { attemptFile, payloadHash, verifyInput } from './lib/role-session-input.mjs';
+import { attemptFile, deliverInput, payloadHash, verifyInput } from './lib/role-session-input.mjs';
 const row = (type, payload) => JSON.stringify({ type, payload }) + '\n';
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'role-native-'));
@@ -61,7 +61,19 @@ test('upgrade reconciles a pre-pane receiver attempt only against its original d
   assert.equal(accepted.evidence.native_user_ack.offset, baseline.byte_size);
   assert.equal((await verify()).receipt, accepted.receipt);
   assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), record);
-  for (const changes of [{ pane: 'another-pane' }, { role: 'other' }, { attempt: 'other' }, { sha256: '0'.repeat(64) }]) {
+  // Retrying the already-issued UUID can only observe the first presentation.
+  const retryDeps = { ...deps, now: Date.now, submit: async () => assert.fail('original would be presented twice') };
+  const retry = await deliverInput({ ...options, text: payload, canonicalAttempt: true }, retryDeps);
+  assert.equal(retry.code, 0);
+  assert.equal((await verify()).receipt, accepted.receipt);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(file, 'utf8')), 'canonical_attempt'), false);
+  // Previous upgrade builds had already added this flag when retrying older journals.
+  await save(file, { ...record, canonical_attempt: true, source_message_id: '12345678901234567' });
+  assert.equal((await verify()).receipt, accepted.receipt, 'an independent card may carry its originating Discord ID');
+  await save(dispatchFile, { ...dispatch, messageId: '22345678901234567' });
+  assert.equal((await verify()).status, 'unknown', 'two explicit original IDs must agree');
+  await save(file, record);
+  for (const changes of [{ pane: 'another-pane' }, { role: 'other' }, { attempt: 'other' }, { sha256: '0'.repeat(64) }, { keys: [] }]) {
     await save(dispatchFile, { ...dispatch, ...changes });
     assert.equal((await verify()).status, 'unknown');
   }
@@ -73,6 +85,8 @@ test('upgrade reconciles a pre-pane receiver attempt only against its original d
   await save(otherFile, dispatch);
   const split = { ...options, profile: { ...options.profile, active_mentions: { dispatcher_state_dir: otherState } } };
   assert.equal((await verifyInput(split, deps)).receipt, accepted.receipt);
+  await fs.chmod(path.dirname(otherFile), 0o770);
+  assert.equal((await verifyInput(split, deps)).status, 'unknown', 'shared write access cannot establish the original pane');
   await save(dispatchFile, dispatch);
   await save(file, { ...record, native_after_offset: undefined });
   assert.equal((await verify()).status, 'unknown');

@@ -97,6 +97,13 @@ During an upgrade, a receiver record written before pane IDs were stored can
 use the dispatcher's original pending record to establish the pane. The role,
 attempt and transport digest must also match. Verification reads the same
 session file from the original send offset to find the matching user input.
+Repeating the delivery command for that attempt keeps the same evidence. An
+independent card can carry an originating Discord ID even when the dispatcher
+did not group it with a Discord post. Two recorded grouping/source IDs must agree.
+The receiver needs read access to the authoritative dispatcher journal, using
+`active_mentions.dispatcher_state_dir` when the paths differ. The state root,
+`submissions` directory and journal must share one owner and exclude group and
+other write access. An unreadable journal leaves the attempt pending.
 Keep both journals until the dispatcher records the receipt. If either history
 is insufficient, the item stays pending and the receiver sends no new input.
 
@@ -140,7 +147,7 @@ deferral under the same `--key`. Such a legacy, nonterminal attempt can receive
 an accepted native ACK but cannot issue a rejected proof for the dispatcher.
 Use canonical environment fields for distributed delivery.
 
-Older journals lacking explicit phase/binding fields stay unknown after upgrade.
+Older journals lacking a recoverable phase or binding stay unknown after upgrade.
 Do not silently migrate absence into rejection. An operator must preserve the
 original and old records, establish the actual prior consumer version and its
 pre-submission evidence, then reconcile that specific attempt. Native ACK

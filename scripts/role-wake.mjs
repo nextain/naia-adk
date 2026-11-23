@@ -410,11 +410,15 @@ function submissionEnv(submission) {
 function readSubmission(file, role) {
   let value;
   try { value = readJson(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (value?.role !== role.id || typeof value.pane !== 'string' || !value.pane ||
+  return validatePendingSubmission(value, role.id);
+}
+
+export function validatePendingSubmission(value, roleId) {
+  if (value?.role !== roleId || typeof value.pane !== 'string' || !value.pane ||
       typeof value.attempt !== 'string' || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(value.attempt) ||
       typeof value.sha256 !== 'string' || !/^[\da-f]{64}$/.test(value.sha256) ||
       !Array.isArray(value.keys) || !value.keys.length || !value.keys.every(key => typeof key === 'string' && key) ||
-      !(value.messageId === null || SNOWFLAKE.test(value.messageId))) throw new Error(`Invalid pending submission for ${role.id}`);
+      !(value.messageId === null || SNOWFLAKE.test(value.messageId))) throw new Error(`Invalid pending submission for ${roleId}`);
   return value;
 }
 

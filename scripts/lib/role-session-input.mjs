@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { acquireLock } from '../role-wake.mjs';
+import { acquireLock, validatePendingSubmission } from '../role-wake.mjs';
 import { verifiedActiveMention } from './active-mention.mjs';
 
 export const payloadHash = text => createHash('sha256').update(text).digest('hex');
@@ -81,7 +81,7 @@ async function readAttempt(file) {
 // Before receiver records included a pane, the dispatcher recorded it on the
 // same attempt. Consult that original entry only for already-presented input.
 async function originalPaneMatches(record, stateDir, profile) {
-  if (Object.hasOwn(record, 'pane_id') || Object.hasOwn(record, 'canonical_attempt') ||
+  if (Object.hasOwn(record, 'pane_id') ||
       !['submitting', 'submitted_unconfirmed', 'accepted'].includes(record.status) ||
       !record.native_file_id || !Number.isSafeInteger(record.native_after_offset) || record.native_after_offset < 0 ||
       !/^[a-f0-9]{64}$/.test(record.payload_hash) || !/^[a-f0-9]{64}$/.test(record.transport_sha256)) return false;
@@ -92,11 +92,13 @@ async function originalPaneMatches(record, stateDir, profile) {
   try {
     if (await fs.realpath(file) !== file) return false;
     handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const stat = await handle.stat();
-    if (!stat.isFile() || (stat.mode & 0o022)) return false;
-    const entry = JSON.parse(await handle.readFile('utf8'));
-    return entry.role === record.role && entry.pane === profile.pane_id && entry.attempt === record.source_key &&
-      entry.sha256 === record.transport_sha256 && (!record.source_message_id || record.source_message_id === entry.messageId);
+    const [stat, parent, root] = await Promise.all([handle.stat(), fs.stat(path.dirname(file)), fs.stat(directory)]);
+    if (!stat.isFile() || !parent.isDirectory() || !root.isDirectory() ||
+        ((stat.mode | parent.mode | root.mode) & 0o022) || stat.uid !== parent.uid || stat.uid !== root.uid) return false;
+    const entry = validatePendingSubmission(JSON.parse(await handle.readFile('utf8')), record.role);
+    // Standalone card notices may retain a source message without being grouped by it.
+    return entry.pane === profile.pane_id && entry.attempt === record.source_key && entry.sha256 === record.transport_sha256 &&
+      (!entry.messageId || !record.source_message_id || entry.messageId === record.source_message_id);
   } catch {
     return false;
   } finally {
@@ -122,7 +124,7 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
     const hash = immutable ? before.payload_hash : payloadHash(text);
     const record = { ...before, role, source_key: key, source_message_id: immutable ? before.source_message_id : sourceMessageId,
       status: immutable ? before.status : 'not_submitted',
-      canonical_attempt: before?.canonical_attempt ?? canonicalAttempt,
+      canonical_attempt: immutable ? before.canonical_attempt : before?.canonical_attempt ?? canonicalAttempt,
       pane_id: immutable ? before.pane_id : profile.pane_id,
       thread_id: immutable ? before.thread_id : profile.session?.thread_id ?? null,
       source_sha256: immutable ? before.source_sha256 : sourceSha256 ?? before?.source_sha256 ?? null,
