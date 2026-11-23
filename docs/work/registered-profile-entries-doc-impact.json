@@ -1,0 +1,6 @@
+{
+  "issue": "nextain/nextain-adk#125",
+  "repository_docs": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" },
+  "user_manual": { "status": "N/A", "reason": "Existing administrator profile installation; no product UI or new approval authority." },
+  "reusable_learning": { "status": "UPDATED", "path": "docs/guides/claude-user-profile.md" }
+}

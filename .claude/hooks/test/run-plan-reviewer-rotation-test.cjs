@@ -11,6 +11,7 @@ const { spawnSync } = require("node:child_process");
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const deployPlan = require("../lib/deploy-plan.js");
+const {writeFakeBins}=require("./plan-reviewer-bin-fixtures.cjs");
 
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
@@ -158,6 +159,38 @@ function writeRotationReceipt(root, planFile, reviewer, extra = {}) {
 	return { planSha, promptSha, manifestSha };
 }
 
+test("대상 교체 전후 동일한 리뷰 본문과 영수증, 변조는 차단", (t) => {
+	const { root } = makeWorkspace(t);
+	const { planFile, gatesDir, plan } = createValidPlan(root);
+	const live = path.join(root, "scripts/rollout.sh");
+	const before = fs.readFileSync(live);
+	const after = Buffer.from("#!/bin/sh\necho replacement\n");
+	fs.writeFileSync(path.join(root, "scripts/before.sh"), before);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), after);
+	plan.file_pins = { rule: "legacy description", targets: [{ path: "scripts/rollout.sh", role: "target", before: sha256(before), after: sha256(after), before_source: "scripts/before.sh", after_source: "scripts/after.sh" }] };
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	const receipt = writeRotationReceipt(root, planFile, "argon");
+	const prompt = deployPlan.reviewPrompt(plan, receipt.planSha, root);
+	assert.match(prompt, /replacement/);
+	assert.ok(prompt.includes(before.toString()));
+	const check = () => deployPlan.reviewProblems(gatesDir, receipt.planSha, root).ok;
+	assert.equal(check(), true);
+	fs.writeFileSync(live, after);
+	assert.equal(deployPlan.reviewPrompt(plan, receipt.planSha, root), prompt);
+	assert.equal(deployPlan.reviewInputManifest(planFile, root), receipt.manifestSha);
+	assert.equal(check(), true);
+	fs.writeFileSync(live, "third");
+	assert.equal(check(), false);
+	fs.writeFileSync(live, before);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), "tampered");
+	assert.equal(check(), false);
+	fs.writeFileSync(path.join(root, "scripts/after.sh"), after);
+	delete plan.file_pins.targets;
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	fs.writeFileSync(live, after);
+	assert.ok(deployPlan.pinnedFileProblems(plan, root).length);
+});
+
 test("차례: 작성자 다음 모델이 먼저, 나머지가 다음", (t) => {
 	const { root } = makeWorkspace(t);
 	assert.deepEqual(deployPlan.rotationOrder("argon"), ["codex", "muse"]);
@@ -209,22 +242,6 @@ test("한도 판별식: 종료 코드가 0이 아니고 출력이 맞을 때만 
 	assert.equal(deployPlan.isLimitFailure(null, "rate limit exceeded"), false);
 });
 
-function writeFakeBins(tmp, { argonBody, argonStderr = "", argonStatus = 0, codexBody, codexStatus = 0, withMarker = false }) {
-	const binDir = path.join(tmp, "bin");
-	const fakeHome = path.join(tmp, "home");
-	fs.mkdirSync(binDir, { recursive: true });
-	fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
-	fs.mkdirSync(path.join(fakeHome, ".gemini"), { recursive: true });
-	const bwrap = path.join(binDir, "bwrap");
-	fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
-	const marker = path.join(tmp, "codex-ran");
-	const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
-	const argon = path.join(binDir, "fake-agy");
-	fs.writeFileSync(argon, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "${argonBody}"\nprintf '%s\\n' "${argonStderr}" >&2\nexit ${argonStatus}\n`, { mode: 0o755 });
-	const codex = path.join(binDir, "fake-codex");
-	fs.writeFileSync(codex, `#!/bin/sh\n${withMarker ? `: > "${marker}"\n` : ""}[ "$1" = exec ] || exit 19\nfor arg do last="$arg"; done\n[ "$last" = - ] || exit 20\ncat >/dev/null\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${codexBody ?? passBody}\nREVIEW_EOF\nprintf 'tokens used\\n'\nexit ${codexStatus}\n`, { mode: 0o755 });
-	return { binDir, fakeHome, marker };
-}
 
 test("codex 는 큰 요청문을 마지막 인자 - 와 stdin 으로 받는다", (t) => {
 	const { root, tmp, stateDir } = makeWorkspace(t);

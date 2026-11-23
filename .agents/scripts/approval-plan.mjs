@@ -15,802 +15,230 @@
  * 이 도구는 운영 서버에 아무 명령도 보내지 않는다.
  */
 import Module, { createRequire } from "node:module";
-import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
-
-// 기동 시점 실행기 해시: 해시한 동일 바이트를 실행한다.
+const sha256 = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+if(process.argv[2]==="hook"){
+ const blocked=error=>{const bytes=Buffer.from(JSON.stringify({decision:"block",reason:"[Harness] Registered hook unavailable: "+String(error?.message||error).slice(0,1500)}));for(let offset=0;offset<bytes.length;)offset+=fs.writeSync(1,bytes,offset);process.exit(0);};
+ process.on("uncaughtException",blocked);process.on("unhandledRejection",blocked);
+}
+// The installed host/bootstrap is the TCB. This does not undo parent preloads.
+function registrationInvocation(argv) {
+ const required=["--registration","--sha256","--profile"], values={},rest=[];
+ const enabled=argv[0]==="hook"||argv[0]==="ready"||argv.some(a=>required.includes(a));
+ if(!enabled)return null;
+ for(let i=1;i<argv.length;i++){
+  const key=argv[i];if(required.includes(key)){if(values[key]!==undefined||!argv[i+1]||argv[i+1].startsWith("--"))throw new Error("Duplicate or missing registration/profile argument");values[key]=argv[++i];}else rest.push(key);
+ }
+ if(required.some(k=>values[k]===undefined)||argv[0]==="hook"&&rest.length)throw new Error("Invalid closed registration hook arguments");
+ if(!/^[a-f0-9]{64}$/.test(values["--sha256"]))throw new Error("Invalid registration sha256");
+ return{file:values["--registration"],sha:values["--sha256"],profile:values["--profile"],argv:[argv[0],...rest]};
+}
+function regularBytes(file) {
+ if(!path.isAbsolute(file)||path.resolve(file)!==file||fs.realpathSync(file)!==file)throw new Error("Registered input is not canonical");
+ const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+ try{const before=fs.fstatSync(fd,{bigint:true});if(!before.isFile()||before.size>64n*1024n*1024n)throw new Error("Invalid registered file");const b=fs.readFileSync(fd),after=fs.fstatSync(fd,{bigint:true}),now=fs.lstatSync(file,{bigint:true});if(before.ino!==now.ino||before.dev!==now.dev||before.size!==after.size||before.mtimeNs!==after.mtimeNs||before.ctimeNs!==now.ctimeNs)throw new Error("Registered file changed while reading");return b;}finally{fs.closeSync(fd);}
+}
+function exactFields(value,keys){if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join()!==[...keys].sort().join())throw new Error("Invalid closed registration shape");}
+function readRegistration(spec) {
+ const bytes=regularBytes(spec.file);if(sha256(bytes)!==spec.sha)throw new Error("Registration digest differs");const r=JSON.parse(bytes);
+ exactFields(r,["schema","planRoot","engine","instance","profiles","approverId","providers"]);
+ exactFields(r.engine,["root","commit","files"]);exactFields(r.instance,["files"]);
+ if(r.schema!=="registered-gate/v2"||r.engine.root!==ROOT||!/^\d{5,22}$/.test(r.approverId)||!/^[a-f0-9]{40}$/.test(r.engine.commit))throw new Error("Registration engine or authority identity differs");
+ for(const root of[r.planRoot,...r.profiles.map(p=>p.root)])if(!path.isAbsolute(root)||path.resolve(root)!==root||fs.realpathSync(root)!==root||!fs.statSync(root).isDirectory())throw new Error("Registration root is not canonical");
+ const ids=new Set(),roots=new Set(),states=new Set();
+ if(!Array.isArray(r.profiles)||!r.profiles.length)throw new Error("Registration profile set missing");
+ for(const p of r.profiles){exactFields(p,["id","scope","root","policy","expectedPolicySha256","stateDir"]);if(!/^[a-z][a-z0-9_-]{0,63}$/.test(p.id)||ids.has(p.id)||roots.has(p.root)||states.has(p.stateDir)||!["global","project"].includes(p.scope)||p.policy!=="strict-defaults"||!/^[a-f0-9]{64}$/.test(p.expectedPolicySha256)||!path.isAbsolute(p.stateDir)||path.resolve(p.stateDir)!==p.stateDir)throw new Error("Invalid registration profile identity");ids.add(p.id);roots.add(p.root);states.add(p.stateDir);}
+ if(!ids.has(spec.profile))throw new Error("Unknown registered profile");
+ if(Object.keys(r.providers).sort().join()!=="argon,codex,muse")throw new Error("Registered providers missing");
+ for(const p of Object.values(r.providers)){exactFields(p,["file","sha256"]);if(!path.isAbsolute(p.file)||!/^[a-f0-9]{64}$/.test(p.sha256))throw new Error("Invalid registered provider");}
+ return{...r,sha256:spec.sha,selected:spec.profile,argv:spec.argv,files:new Map()};
+}
+let invocation=null,registration=null;
+try{invocation=registrationInvocation(process.argv.slice(2));if(invocation)registration=readRegistration(invocation);}
+catch(error){if(process.argv[2]==="hook"){process.stdout.write(JSON.stringify({decision:"block",reason:"[Harness] Registered hook unavailable: "+error.message}));process.exit(0);}throw error;}
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/gate-config-pin.js",
+	"scripts/lib/pid-lock.cjs",
+	"scripts/lib/registered-git-identity.cjs",
+	".claude/hooks/lib/deploy-plan-common.js",
+	".claude/hooks/lib/deploy-plan-discord.js",
+	".claude/hooks/lib/deploy-plan-readonly-policy.js",
+	".claude/hooks/lib/deploy-plan-context.js",
+	".claude/hooks/lib/deploy-plan-review-policy.js",
+	".claude/hooks/lib/deploy-plan-schema.js",
+	".claude/hooks/lib/deploy-plan-commands.js",
+	".claude/hooks/lib/deploy-plan-targets.js",
+	".claude/hooks/lib/deploy-plan-readonly-binding.js",
+	".claude/hooks/lib/deploy-plan-review-input.js",
+	".claude/hooks/lib/deploy-plan-review-results.js",
+	".claude/hooks/lib/deploy-plan-approval-state.js",
+	".claude/hooks/lib/deploy-plan-human-confirmation.js",
+	".claude/hooks/lib/deploy-plan-evidence.js",
+	".claude/hooks/lib/deploy-plan-flow.js",
+	".claude/hooks/lib/deploy-plan-admission.js",
+	".claude/hooks/lib/deploy-plan-review-lock.js",
 	".claude/hooks/lib/deploy-plan.js",
+	".claude/hooks/lib/deploy-readiness-io.js",
+	".claude/hooks/lib/deploy-readiness-ops.js",
+	".claude/hooks/lib/deploy-readiness-policy.js",
+	".claude/hooks/lib/deploy-readiness-evidence.js",
+	".claude/hooks/lib/deploy-readiness-script-binding.js",
+	".claude/hooks/lib/deploy-readiness-plan-binding.js",
+	".claude/hooks/lib/deploy-readiness-assessment.js",
+	".claude/hooks/lib/deploy-readiness-planning.js",
+	".claude/hooks/lib/deploy-readiness.js",
+	".claude/hooks/lib/git-command-parser.js",
+	".claude/hooks/lib/effective-argv.js",
+	".claude/hooks/lib/deploy-command-classifier.js",
+	".agents/hooks/core/delegation-contract.js",
+	".agents/hooks/core/hook-project-root.js",
+	".agents/hooks/core/subagent-failure-receipt.js",
+	".agents/hooks/core/session-contract.js",
+	".agents/harness/session-baseline.cjs",
+	".agents/hooks/core/harness-core.js",
+	".agents/hooks/policies/edit.js",
+	".agents/hooks/policies/bash.js",
+	".agents/hooks/policies/bash-git.cjs",
+	".agents/hooks/policies/bash-external.cjs",
+	".agents/hooks/policies/bash-deploy.cjs",
+	".agents/hooks/policies/deploy-policy-roots.cjs",
+	".agents/hooks/policies/bash-artifact-context.cjs",
+	".agents/hooks/policies/bash-artifact-wrappers.cjs",
+	".agents/hooks/policies/bash-artifact-scripts.cjs",
+	".agents/hooks/policies/bash-artifact.cjs",
+	".agents/scripts/approval-plan-files.cjs",
+	".agents/scripts/approval-plan-snapshot.cjs",
+	".agents/scripts/approval-plan-reviewer.cjs",
+	".agents/scripts/approval-plan-cli.cjs",
+	".agents/scripts/registered-gate-runtime.cjs",
+	".agents/scripts/registered-gate-loader.cjs",
+	".agents/scripts/registered-gate-environment.cjs",
+	".claude/hooks/lib/hook-watchdog.js",
+	".claude/hooks/_claude-bash-guard.js"
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
-if (preloadFlag.test(process.env.NODE_OPTIONS || "") || process.execArgv.some((arg) => preloadFlag.test(arg))) {
-	die("기동 거부: NODE_OPTIONS/execArgv 선적재 옵션은 허용하지 않음", 1);
-}
-const pinnedExecutors = PINNED_CJS_EXECUTORS.map((rel) => {
-	const requested = path.resolve(ROOT, rel);
-	return { rel, requested, filename: fs.realpathSync(requested) };
-});
-for (const { requested, filename } of pinnedExecutors) {
-	if (Object.hasOwn(require.cache, requested) || Object.hasOwn(require.cache, filename)) {
-		die("기동 거부: 실행기 require.cache 선적재는 허용하지 않음", 1);
-	}
+if (preloadFlag.test(process.env.NODE_OPTIONS || "") || process.execArgv.some(arg => preloadFlag.test(arg))) {
+ if(process.argv[2]==="hook")throw new Error("Unsupported caller startup preload options");
+ console.error("기동 거부: NODE_OPTIONS/execArgv 선적재 옵션은 허용하지 않음"); process.exit(1);
 }
 const bootEntryAbs = (() => {
-	const entry = fileURLToPath(import.meta.url);
-	try { return fs.realpathSync(entry); }
-	catch { return path.resolve(entry); }
+ const entry = fileURLToPath(import.meta.url);
+ try { return fs.realpathSync(entry); }
+ catch { return path.resolve(entry); }
 })();
 let BOOT_ENTRY_SHA = null;
 try { BOOT_ENTRY_SHA = sha256(fs.readFileSync(bootEntryAbs)); }
 catch { BOOT_ENTRY_SHA = null; }
 const STARTUP_EXECUTOR_SHAS = new Map();
-let lib, commandHash, statePath;
-{
-	for (const executor of pinnedExecutors) {
-		const { rel, filename } = executor;
-		const buf = fs.readFileSync(filename);
-		executor.buffer = buf;
-		STARTUP_EXECUTOR_SHAS.set(rel, sha256(buf));
-	}
-	const entryRel = path.relative(fs.realpathSync(ROOT), bootEntryAbs);
-	STARTUP_EXECUTOR_SHAS.set(entryRel, BOOT_ENTRY_SHA);
-	const compiled = [];
-	try {
-		for (const { filename, buffer } of pinnedExecutors) {
-			const mod = new Module(filename);
-			mod.filename = filename;
-			mod.paths = Module._nodeModulePaths(path.dirname(filename));
-			if (compiled.length) {
-				mod.require = function (request) {
-					if (request === "./deploy-human-approval.js") return compiled[0].exports;
-					if (request === "./gate-config-pin.js" && compiled.length > 1) return compiled[1].exports;
-					return Module.prototype.require.call(this, request);
-				};
-			}
-			require.cache[filename] = mod;
-			compiled.push(mod);
-			mod._compile(buffer.toString(), filename);
-			mod.loaded = true;
-		}
-		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[2].exports;
-	} catch (error) {
-		for (const mod of compiled) delete require.cache[mod.filename];
-		throw error;
-	}
-}
-
-const MUSE = process.env.APPROVAL_PLAN_MUSE_BIN || "muse";
-
-function die(msg, code = 2) {
-	console.error(msg);
-	process.exit(code);
-}
-function opt(args, name) {
-	const i = args.indexOf(name);
-	return i >= 0 ? args[i + 1] : undefined;
-}
-function optAll(args, name) {
-	const out = [];
-	for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1]) out.push(args[++i]);
-	return out;
-}
-function isInside(parentDir, targetPath) {
-	const rel = path.relative(parentDir, targetPath);
-	return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-function hasSymlinkSegment(baseDir, targetAbs) {
-	const rel = path.relative(baseDir, targetAbs);
-	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return true;
-	let cur = baseDir;
-	for (const seg of rel.split(path.sep)) {
-		cur = path.join(cur, seg);
-		if (fs.lstatSync(cur).isSymbolicLink()) return true;
-	}
-	return false;
-}
-
-function findGitRoot(startDir) {
-	let dir = path.resolve(startDir);
-	for (;;) {
-		const dotGit = path.join(dir, ".git");
-		let gitStat = null;
-		try { gitStat = fs.lstatSync(dotGit); } catch (e) { if (e.code !== "ENOENT") return null; }
-		if (gitStat) {
-			if (gitStat.isSymbolicLink() || (!gitStat.isDirectory() && !gitStat.isFile())) return null;
-			return dir;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) return null;
-		dir = parent;
-	}
-}
-
-function resolvePlanRoot(abs) {
-	let st;
-	try { st = fs.lstatSync(abs); } catch (e) { die(`계획서를 읽지 못함: ${e.message}`); }
-	if (st.isSymbolicLink() || !st.isFile()) die("계획서 경로는 심볼릭 링크가 아닌 일반 파일이어야 합니다");
-	let realAbs;
-	try { realAbs = fs.realpathSync(abs); } catch (e) { die(`계획서를 읽지 못함: ${e.message}`); }
-	const realRoot = fs.realpathSync(ROOT);
-
-	if (isInside(ROOT, abs)) {
-		if (hasSymlinkSegment(ROOT, abs) || !isInside(realRoot, realAbs)) {
-			die("계획서 경로에 심볼릭 링크는 허용하지 않습니다");
-		}
-		const relFromRoot = path.relative(ROOT, abs);
-		if (relFromRoot.split(path.sep)[0] === ".git") die("계획서 경로가 .git 안에 있을 수 없습니다");
-		return ROOT;
-	}
-
-	if (isInside(realRoot, realAbs) || realAbs !== abs) {
-		die("계획서 경로에 심볼릭 링크는 허용하지 않습니다");
-	}
-	const gitRoot = findGitRoot(path.dirname(abs));
-	if (!gitRoot) die("계획서가 git 저장소(.git) 안에 있지 않습니다");
-	let realGitRoot;
-	try { realGitRoot = fs.realpathSync(gitRoot); } catch (e) { die(`계획서 저장소 확인 실패: ${e.message}`); }
-	if (realGitRoot !== gitRoot || !isInside(gitRoot, abs) || hasSymlinkSegment(gitRoot, abs)) {
-		die("계획서 저장소 경로가 유효하지 않습니다");
-	}
-	const relFromGitRoot = path.relative(gitRoot, abs);
-	if (relFromGitRoot.split(path.sep)[0] === ".git") die("계획서 경로가 .git 안에 있을 수 없습니다");
-	if (lib.resolveRepoRoot(path.dirname(abs)) !== gitRoot) {
-		die("계획서 저장소 루트가 일치하지 않습니다");
-	}
-	return gitRoot;
-}
-
-function loadPlan(p) {
-	if (!p) die("계획서 경로가 필요합니다(.agents/progress/<작업>/gates/deploy-plan.json)");
-	const abs = path.resolve(p);
-	if (path.basename(abs) !== lib.PLAN_FILE || path.basename(path.dirname(abs)) !== "gates") die(`계획서는 .agents/progress/<작업>/gates/${lib.PLAN_FILE} 여야 합니다`);
-	const root = resolvePlanRoot(abs);
-	let plan;
-	try {
-		plan = JSON.parse(fs.readFileSync(abs, "utf8"));
-	} catch (e) {
-		die(`계획서를 읽지 못함: ${e.message}`);
-	}
-	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
-}
-
-function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
-	const validated = lib.validateReviewModelEntry("muse", museCfg);
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-"));
-	const file = path.join(dir, "prompt.txt");
-	fs.writeFileSync(file, prompt, { mode: 0o600 });
-	let res;
-	try {
-		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", validated.model, "--reasoning-effort", validated.effort, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-	if (res.status !== 0 || !String(res.stdout || "").trim()) die(`muse 실행 실패(status ${res.status}): ${String(res.stderr || res.error || "").slice(0, 400)}`, 3);
-	return String(res.stdout);
-}
-
-function execReviewer(bin, args, input, promptSha, model, effort, cwd, env, signal) {
-	signal.throwIfAborted();
-	return new Promise((resolve) => {
-		const startedAt = new Date().toISOString();
-		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
-		const processGroup = process.platform !== "win32";
-		const child = spawn(bin, args, { cwd, env, detached: processGroup, stdio: ["pipe", "pipe", "pipe"] });
-		let stopped = false;
-		const stop = () => {
-			if (!child.pid || stopped) return;
-			stopped = true;
-			if (processGroup) {
-				try { process.kill(-child.pid, "SIGKILL"); }
-				catch (error) {
-					if (error.code === "ESRCH") return;
-					failed = `검수 프로세스 그룹 종료 실패 (${error.code})`;
-					child.kill("SIGKILL");
-				}
-			} else {
-				const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
-				const result = spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
-				if (result.status !== 0) child.kill("SIGKILL");
-			}
-		};
-		signal.addEventListener("abort", stop, { once: true });
-		// A wrapper may exit while a helper still owns its pipes or the shared test slot.
-		if (processGroup) child.once("exit", stop);
-		const finish = (status, error = "") => {
-			if (finished) return;
-			finished = true; clearTimeout(timer);
-			signal.removeEventListener("abort", stop);
-			resolve({ body: stdout, stderr, receipt: { model, effort, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
-		};
-		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; stop(); }, 45 * 60 * 1000);
-		child.on("error", () => finish(null, "실행 파일을 시작하지 못함"));
-		child.stdout.setEncoding("utf8");
-		child.stdout.on("data", (b) => {
-			bytes += Buffer.byteLength(b, "utf8");
-			if (bytes > 64 * 1024 * 1024) { failed = "출력 크기 제한 초과"; stop(); }
-			else stdout += b;
-		});
-		// stderr 는 한도 판별에만 쓰고 기록에는 남기지 않는다. 끝 16KB 만 둔다.
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", (b) => { stderr = (stderr + b).slice(-16 * 1024); });
-		child.on("close", (status) => finish(status));
-		child.stdin.on("error", () => {});
-		child.stdin.end(input);
-	});
-}
-
-function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false, baseRoot = cwd) {
-	const git = (args, allowFailure = false) => {
-		const r = spawnSync("git", args, { cwd, encoding: "buffer", maxBuffer: 128 * 1024 * 1024 });
-		if (r.status !== 0 || r.error) {
-			if (allowFailure) return null;
-			const error = new Error("읽기 전용 확인용 git 상태를 읽지 못함");
-			error.code = r.error?.code || (r.signal ? `GIT_SIGNAL_${r.signal}` : `GIT_EXIT_${r.status}`);
-			error.syscall = r.error?.syscall || "spawnSync";
-			error.path = cwd;
-			error.snapshotStage = `git-${args[0]}${args.includes("--cached") ? "-cached" : ""}`;
-			throw error;
-		}
-		return r.stdout;
-	};
-	const topBuf = git(["rev-parse", "--show-toplevel"], seen.size > 0);
-	if (topBuf === null) {
-		const h = crypto.createHash("sha256");
-		h.update("broken\0");
-		hashPath(h, cwd, true);
-		return h.digest("hex");
-	}
-	const top = fs.realpathSync(topBuf.toString("utf8").trim());
-	if (seen.has(top)) throw new Error("중첩 저장소 경로가 순환함");
-	seen.add(top); cwd = top;
-	const h = crypto.createHash("sha256");
-	h.update(filterSnapshotStatus(git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]), cwd, baseRoot));
-	const hasHead = git(["rev-parse", "--verify", "HEAD"], true) !== null;
-	const auditPathspec = cwd === fs.realpathSync(baseRoot) ? ["--", ".", ":(exclude,literal).claude/deploy/audit.jsonl"] : [];
-	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all", ...auditPathspec]));
-	h.update(git(["diff", "--cached", "--binary", "--ignore-submodules=all", ...auditPathspec]));
-	const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
-	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
-	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file), path.relative(baseRoot, path.resolve(cwd, file)) || ".");
-	for (const name of ["hooks", "config", "info/exclude"]) {
-		const file = git(["rev-parse", "--git-path", name]).toString("utf8").trim();
-		hashPath(h, path.resolve(cwd, file));
-	}
-	const modules = git(["ls-files", "--stage", "-z"]).toString("utf8").split("\0").filter((s) => s.startsWith("160000 ")).map((s) => s.slice(s.indexOf("\t") + 1));
-	const nested = new Set(modules);
-	for (const file of untracked.sort()) {
-		h.update(file);
-		const abs = path.join(cwd, file), stat = fs.lstatSync(abs);
-		if (stat.isDirectory()) {
-			if (!fs.existsSync(path.join(abs, ".git"))) throw new Error("미추적 폴더의 읽기 전용 확인 불가");
-			nested.add(file);
-		} else hashPath(h, abs);
-	}
-	for (const file of [...nested].sort()) {
-		const abs = path.join(cwd, file);
-		if (isRecoveryMode(baseRoot) && isOutsideWorkspace(abs, baseRoot)) {
-			h.update(file + "\0external-recovery-skip"); continue;
-		}
-		if (!fs.existsSync(path.join(abs, ".git"))) {
-			if (fs.existsSync(abs) && fs.readdirSync(abs).length) throw new Error("submodule 내용 확인 불가");
-			h.update(file + "\0uninitialized"); continue;
-		}
-		h.update(file); h.update(gitSnapshot(abs, seen, isolated, baseRoot));
-	}
-	seen.delete(top);
-	return h.digest("hex");
-}
-
-function hashIgnoredPath(h, file, rel = path.relative(ROOT, file) || ".") {
-	let st;
-	try { st = fs.lstatSync(file, { bigint: true }); }
-	catch (error) {
-		if (error.code === "ENOENT") { h.update(JSON.stringify([rel, "missing"])); return; }
-		throw error;
-	}
-	const kind = st.isSymbolicLink() ? "symlink" : st.isDirectory() ? "directory" : st.isFile() ? "file" : "special";
-	h.update(JSON.stringify([rel, kind, ...[st.mode, st.uid, st.gid, st.size, st.mtimeNs, st.ctimeNs].map(String)]));
-	if (!st.isDirectory()) return;
-	try {
-		const prefix = file.endsWith(path.sep) ? file : file + path.sep;
-		const relPrefix = rel === "." ? "" : rel + path.sep;
-		for (const name of fs.readdirSync(file).sort()) hashIgnoredPath(h, prefix + name, relPrefix + name);
-	} catch (error) {
-		if (error.code !== "EACCES") throw error;
-		h.update(JSON.stringify([rel, "unreadable"]));
-	}
-}
-
-function hashPath(h, file, recurse = true) {
-	h.update(JSON.stringify(file));
-	let st;
-	try { st = fs.lstatSync(file); } catch (e) { if (e.code === "ENOENT") { h.update("missing"); return; } throw e; }
-	h.update(String(st.mode));
-	if (st.isSymbolicLink()) {
-		h.update(fs.readlinkSync(file));
-	} else if (st.isDirectory()) {
-		if (recurse) for (const name of fs.readdirSync(file).sort()) hashPath(h, path.join(file, name));
-	} else if (st.isFile()) {
-		const fd = fs.openSync(file, "r"), buf = Buffer.alloc(1024 * 1024);
-		try { let n; while ((n = fs.readSync(fd, buf, 0, buf.length, null))) h.update(buf.subarray(0, n)); }
-		finally { fs.closeSync(fd); }
-	}
-}
-
-const REVIEW_SNAPSHOT_EXCLUDED_FILES = new Set([".claude/deploy/audit.jsonl"]);
-const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/state/", ".agents/.dm-outbox/", "gates/", "tmp/"];
-function isRecoveryMode(root = ROOT) {
-	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
-		try { if (fs.statSync(path.join(root, marker)).isFile()) return true; } catch {}
-	}
-	return false;
-}
-function isOutsideWorkspace(abs, root = ROOT) {
-	let real, realRoot;
-	try { real = fs.realpathSync(abs); realRoot = fs.realpathSync(root); } catch { return false; }
-	return real !== realRoot && !real.startsWith(realRoot + path.sep);
-}
-function isSnapshotExcluded(top, file, root = ROOT) {
-	let realRoot;
-	try { realRoot = fs.realpathSync(root); } catch { realRoot = path.resolve(root); }
-	if (path.resolve(top) !== realRoot) return false;
-	let rel = String(file).replace(/\\/g, "/").replace(/\/+$/, "");
-	if (rel.startsWith("./")) rel = rel.slice(2);
-	if (path.isAbsolute(rel)) rel = path.relative(top, rel).replace(/\\/g, "/");
-	if (!rel || rel === "." || rel.startsWith("..")) return false;
-	return REVIEW_SNAPSHOT_EXCLUDED_FILES.has(rel) || REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p));
-}
-function filterSnapshotStatus(buf, top, root = ROOT) {
-	if (!buf || buf.length === 0) return buf;
-	const kept = [];
-	for (const chunk of buf.toString("utf8").split("\0")) {
-		if (chunk === "") continue;
-		const m = chunk.match(/^(.{2}) (.*)$/s);
-		if (m && isSnapshotExcluded(top, m[2], root) &&
-			((m[1] === "??" || m[1] === "!!") || (m[2] === ".claude/deploy/audit.jsonl" && !/[RC]/.test(m[1])))) continue;
-		kept.push(chunk);
-	}
-	if (!kept.length) return Buffer.alloc(0);
-	return Buffer.from(kept.join("\0") + "\0", "utf8");
-}
-
-function reviewErrorDetails(error, stage, startedAt, root = ROOT) {
-	const token = (v) => typeof v === "string" && /^[A-Za-z0-9_ -]{1,64}$/.test(v) ? v : null;
-	let rel = null;
-	if (typeof error?.path === "string") {
-		const candidate = path.relative(root, path.resolve(root, error.path));
-		if (!path.isAbsolute(candidate) && candidate !== ".." && !candidate.startsWith(".." + path.sep)) rel = candidate || ".";
-	}
-	return JSON.stringify({
-		stage: [stage, error?.snapshotStage].filter(Boolean).join("/"),
-		elapsed_seconds: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
-		code: token(error?.code), syscall: token(error?.syscall), path: rel,
-	});
-}
-
-function readOnlySnapshot(isolated = false, root = ROOT) {
-	const h = crypto.createHash("sha256");
-	const realRoot = fs.realpathSync(root);
-	h.update(gitSnapshot(root, new Set(), isolated, root));
-	if (fs.realpathSync(process.cwd()) !== realRoot) {
-		if (isRecoveryMode(root) && isOutsideWorkspace(process.cwd(), root)) h.update("cwd-external-recovery-skip");
-		else h.update(gitSnapshot(process.cwd(), new Set(), isolated, root));
-	}
-	for (const file of new Set([statePath(process.env), lib.stateFile(process.env)])) hashPath(h, file);
-	return h.digest("hex");
-}
-
-function stateSnapshot() {
-	const h = crypto.createHash("sha256");
-	for (const file of new Set([statePath(process.env), lib.stateFile(process.env)])) hashPath(h, file);
-	return h.digest("hex");
-}
-
-function findBwrap() {
-	for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-		const bin = path.resolve(dir, "bwrap");
-		try { fs.accessSync(bin, fs.constants.X_OK); if (fs.statSync(bin).isFile()) return bin; } catch {}
-	}
-	return null;
-}
-
-function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
-	const root = fs.realpathSync(rootDir), cwd = fs.realpathSync(process.cwd());
-	const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
-	const home = fs.realpathSync(os.homedir());
-	const runtime = id === "agy" ? fs.realpathSync(path.join(home, ".gemini")) : null;
-	if (runtime && (!fs.statSync(runtime).isDirectory() || !runtime.startsWith(home + path.sep) || [root, cwd].some(p => overlaps(p, runtime)))) throw new Error("reviewer home overlaps protected workspace");
-	const protectedDirs = new Set([root, cwd, fs.realpathSync(promptDir)]);
-	for (const state of new Set([statePath(process.env), lib.stateFile(process.env)])) {
-		let parent = path.dirname(path.resolve(state));
-		while (!fs.existsSync(parent)) { const next = path.dirname(parent); if (next === parent) throw new Error("state parent unavailable"); parent = next; }
-		protectedDirs.add(fs.realpathSync(parent));
-		if (fs.existsSync(state)) protectedDirs.add(path.dirname(fs.realpathSync(state)));
-	}
-	const args = ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
-	if (runtime) args.push("--bind", runtime, runtime);
-	if (id === "codex") {
-		// Codex may write session and SQLite runtime state even in ephemeral mode, and opens installation_id read-write at start
-		// (without it the reviewer exits 1 with "Read-only file system", found by the 2026-11-10 real QC).
-		// Grant only existing runtime paths; the repository and gate directories stay read-only.
-		const codexHome = path.join(home, ".codex");
-		for (const name of ["sessions", "tmp", "log", "installation_id", "state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
-			const target = path.join(codexHome, name);
-			if (!fs.existsSync(target)) continue;
-			const real = fs.realpathSync(target);
-			if (real !== target || [...protectedDirs].some(p => overlaps(p, real))) throw new Error("codex runtime overlaps protected workspace");
-			args.push("--bind", target, target);
-		}
-	}
-	for (const dir of protectedDirs) args.push("--ro-bind", dir, dir);
-	return [...args, "--chdir", root];
-}
-
-async function runReviewers(ids, prompt, abs, preManifest, roOpt, planRoot, signal) {
-	let dir, failure;
-	let stage = "config-read";
-	const startedAt = Date.now();
-	try {
-		const models = lib.reviewModelsFor(planRoot);
-		stage = "prompt-create";
-		dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-dual-"));
-		const file = path.join(dir, "prompt.txt");
-		fs.writeFileSync(file, prompt, { mode: 0o600 });
-		stage = "sandbox-prepare";
-		const bwrap = findBwrap();
-		const configs = Object.fromEntries(ids.map((id) => [id, lib.validateReviewModelEntry(id, models[id])]));
-		const runners = ids.map((id) => configs[id].runner);
-		if (runners.some((runner) => runner === "codex" || runner === "claude") && !bwrap) throw new Error("리뷰어: bwrap 읽기 전용 격리 없음");
-		if (isRecoveryMode(planRoot) && runners.some((runner) => runner !== "muse") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
-		const sandboxArgs = runners.some((runner) => runner !== "muse") && bwrap ? reviewerSandboxArgs(dir, runners.includes("agy") ? "agy" : runners.includes("codex") ? "codex" : "claude", planRoot) : null;
-		const boundedRecovery = isRecoveryMode(planRoot) && Boolean(sandboxArgs);
-		stage = "snapshot-before";
-		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs), planRoot);
-		const beforeState = boundedRecovery ? stateSnapshot() : null;
-		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
-		stage = "reviewers";
-		const results = await Promise.all(ids.map(async (id) => {
-			const config = configs[id];
-			let bin, args, input = "";
-			if (config.runner === "muse") {
-				bin = MUSE;
-				args = ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", config.model, "--reasoning-effort", config.effort, "--prompt-file", file];
-			} else if (config.runner === "codex") {
-				bin = process.env.APPROVAL_PLAN_CODEX_BIN || "codex";
-				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-"];
-				input = prompt;
-			} else if (config.runner === "claude") {
-				bin = process.env.APPROVAL_PLAN_CLAUDE_BIN || "claude";
-				args = ["-p", "--model", config.model, "--effort", config.effort, "--setting-sources", ""];
-				input = prompt;
-			} else {
-				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
-				args = ["--model", config.model, "--effort", config.effort, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "text"];
-				input = prompt;
-			}
-			let isolation = config.runner !== "muse" ? "snapshot-only" : "cli-read-only";
-			if (config.runner !== "muse" && bwrap) {
-				args = [...sandboxArgs, "--", bin, ...args];
-				bin = bwrap; isolation = "bwrap-ro-bind";
-			}
-			const env = { ...process.env };
-			if (config.runner === "claude") delete env.CLAUDE_CODE_EFFORT_LEVEL;
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot, env, signal) };
-		}));
-		signal.throwIfAborted();
-		stage = "manifest-after";
-		let afterManifest = null;
-		try {
-			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
-			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, planRoot);
-			if (afterRo.ok) afterManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: afterRo.items });
-		} catch { afterManifest = null; }
-		const manifestChanged = beforeManifest === null || beforeManifest === undefined || afterManifest === null || beforeManifest !== afterManifest;
-		for (const r of results) {
-			if (beforeManifest && r.receipt) r.receipt.input_manifest_sha256 = beforeManifest;
-		}
-		if (manifestChanged) {
-			for (const r of results) r.error = "읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜";
-		} else if (boundedRecovery) {
-			let changed = true;
-			try { changed = beforeState !== stateSnapshot(); }
-			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt, planRoot)); }
-			if (changed) for (const r of results) r.error = "읽기 전용 검사 실패: 승인 상태가 바뀜";
-		} else {
-			let changed = true;
-			try { changed = before !== readOnlySnapshot(Boolean(sandboxArgs), planRoot); }
-			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt, planRoot)); }
-			if (changed) for (const r of results) r.error = "읽기 전용 검사 실패: git status 또는 작업 트리 내용이 바뀜";
-		}
-		return results;
-	} catch (error) {
-		failure = error;
-		error.reviewStage = stage;
-		throw error;
-	} finally {
-		// Synchronous Git snapshots can leave a stop signal pending until the event loop runs again.
-		try { if (dir) await fs.promises.rm(dir, { recursive: true, force: true }); }
-		catch (error) {
-			if (failure) console.error(reviewErrorDetails(error, "prompt-cleanup", startedAt, planRoot));
-			else { error.reviewStage = "prompt-cleanup"; throw error; }
-		}
-	}
-}
-
-function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
-	const r = lib.reviewProblems(gatesDir, sha, root);
-	for (const row of r.reviewers) {
-		const fail = row.summary.filter((s) => s.verdict !== "PASS").map((s) => s.id);
-		console.log(`리뷰어 ${row.id}: ${row.body ? (row.ok ? "PASS" : "FAIL") : "결과 없음"}; 불통과 기준 ${fail.join(", ") || (row.summary.length === lib.CRITERIA.length ? "없음" : "결과 없음")}; 남은 지적(차단) ${row.openFindings ?? "확인 불가"}; 참고 지적 ${row.advisoryFindings ?? 0}(차단 아님)`);
-	}
-	const merged = path.join(gatesDir, "deploy-plan-review-findings.md");
-	if (writeFindings) {
-		fs.writeFileSync(merged, lib.renderMergedFindings(r, sha));
-		console.log(`통합 지적: ${path.relative(root, merged)}`);
-	}
-	return r;
-}
-
-export async function runApprovalPlan(argv = process.argv.slice(2)) {
-const [cmd, ...args] = argv;
-switch (cmd) {
-	case "template":
-		console.log(JSON.stringify({ ...lib.TEMPLATE, createdAt: new Date().toISOString() }, null, 2));
-		break;
-	case "check": {
-		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
-		const form = lib.formProblems(plan);
-		console.log(`계획서: ${path.relative(planRoot, abs)}  sha256 ${sha}`);
-		for (const s of plan.scenario || []) for (const c of s.commands || []) console.log(`  ${s.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
-		for (const a of plan.incident?.actions || []) for (const c of a.commands || []) console.log(`  장애 ${a.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
-		console.log(form.length ? `양식: 빈 칸 ${form.length}\n${form.map((x) => `- ${x}`).join("\n")}` : "양식: 통과");
-		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
-		if (warnings.length) console.log(`경고 ${warnings.length}\n${warnings.map((x) => `- ${x}`).join("\n")}`);
-		const r = reviewStatus(gatesDir, sha, false, planRoot);
-		console.log(r.ok ? "적대 리뷰: 통과" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
-		process.exit(form.length || !r.ok ? 1 : 0);
-	}
-	case "report": {
-		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
-		const form = lib.formProblems(plan);
-		if (form.length) die(`양식 빈 칸 ${form.length}건 — 보고문을 낼 수 없습니다\n${form.join("\n")}`, 1);
-		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
-		for (const w of warnings) console.error(w);
-		const r = lib.reviewProblems(gatesDir, sha, planRoot);
-		if (!r.ok) die(`적대 리뷰 미통과 — 보고문을 낼 수 없습니다\n${r.problems.join("\n")}`, 1);
-		console.log(lib.renderReport(plan, sha, r));
-		break;
-	}
-	case "review-prompt": {
-		const { plan, sha, root: planRoot } = loadPlan(args[0]);
-		try { lib.reviewModelsFor(planRoot); }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
-		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
-		if (!roBind.ok) die(roBind.why, 1);
-		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
-		break;
-	}
-	case "review": {
-		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
-		try { lib.reviewModelsFor(planRoot); }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
-		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
-		if (!roBind.ok) die(roBind.why, 1);
-		let early = null;
-		try { early = lib.reviewInputEntries(abs, planRoot, { readOnlyScripts: roBind.items }); } catch { early = null; }
-		const bindProblems = [];
-		if (!early || early.digest === null) bindProblems.push(`읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(${early && early.problems.length ? early.problems[0] : "계획서·핀·실행기를 읽지 못함"})`);
-		else {
-			if (early.planSha256 !== sha) bindProblems.push("읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(계획서가 manifest 계산 뒤 바뀜)");
-			const earlyByFile = new Map((early.entries || []).map((e) => [e.file, e.sha256]));
-			if (STARTUP_EXECUTOR_SHAS.size !== lib.REVIEW_EXECUTOR_FILES.length) bindProblems.push("읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(실행기 목록이 기동 뒤 바뀜)");
-			for (const [rel, want] of STARTUP_EXECUTOR_SHAS) {
-				let now = null;
-				try { now = sha256(fs.readFileSync(path.join(ROOT, rel))); } catch { now = null; }
-				const earlySha = earlyByFile.get(rel) ?? null;
-				if (want === null || now === null || earlySha === null || now !== want || earlySha !== want) {
-					bindProblems.push(`읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(실행기 ${rel} 가 적재 경계 또는 기동 뒤 바뀜)`);
-					break;
-				}
-			}
-		}
-		if (bindProblems.length) die(bindProblems.join("\n"), 1);
-		const author = opt(args, "--author");
-		if (!lib.ROTATION.includes(author)) die("--author argon|codex|muse|claude 가 필요합니다(차례 작성자 중 계획서 author_model 과 같은 것)");
-		if (plan.author_model !== author) die("--author(argon|codex|muse|claude) 와 계획서 author_model 이 다릅니다");
-		const form = lib.formProblems(plan);
-		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
-		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
-		for (const w of warnings) console.error(w);
-		const pins = lib.pinnedFileProblems(plan, planRoot);
-		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });
-		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
-		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
-		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
-		const reviewedAt = new Date().toISOString();
-		let ids;
-		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
-		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
-		const activeModels = lib.reviewModelsFor(planRoot);
-		if (ids.some((id) => lib.selfReview(author, id, activeModels))) die("작성자와 같은 모델은 리뷰할 수 없습니다", 1);
-		try { lib.reviewModelsFor(planRoot); }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
-		const parsed = path.parse(base);
-		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
-		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
-		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
-		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const planRel = path.relative(planRoot, abs);
-		const lockHandle = lib.acquirePlanReviewLock({ repoRoot: planRoot, plan: planRel, pid: process.pid, env: process.env });
-		if (!lockHandle.ok) die(lockHandle.why, 1);
-		const cleanupLock = () => { try { lib.releasePlanReviewLock(lockHandle); } catch {} };
-		const cancellation = new AbortController();
-		const cancel = (code) => {
-			if (cancellation.signal.aborted) return;
-			process.exitCode = code;
-			cancellation.abort();
-		};
-		const onSigInt = () => cancel(130);
-		const onSigTerm = () => cancel(143);
-		const onSigHup = () => cancel(129);
-		process.once("exit", cleanupLock);
-		process.on("SIGINT", onSigInt);
-		process.on("SIGTERM", onSigTerm);
-		process.on("SIGHUP", onSigHup);
-		try {
-			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
-			const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
-			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-			const reviewStartedAt = Date.now();
-			// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
-			const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
-			let actual = null, actualOutput = null;
-			const roOpt = { readOnlyScripts: roBind.items };
-			try {
-				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot, cancellation.signal);
-				if (cancellation.signal.aborted) return;
-				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first)) && ids.length > 1) {
-					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
-					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
-					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot, cancellation.signal);
-					actual = second; actualOutput = outputs[1];
-				} else {
-					actual = first; actualOutput = outputs[0];
-				}
-			}
-			catch (error) {
-				if (cancellation.signal.aborted) return;
-				die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3);
-			}
-			if (cancellation.signal.aborted) return;
-			{
-				const r = actual;
-				const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
-				const final = `${text}review-run: target_sha256=${sha} prompt_sha256=${sha256(prompt)} stdout_sha256=${sha256(text)}\n`;
-				let output;
-				try { output = lib.resultFile(gatesDir, path.relative(gatesDir, actualOutput), true); }
-				catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
-				fs.writeFileSync(output, final, { flag: "wx" });
-				rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
-				console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
-			}
-			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-			const r = reviewStatus(gatesDir, sha, true, planRoot);
-			console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
-			cleanupLock();
-			process.exit(r.ok ? 0 : 1);
-		} finally {
-			cleanupLock();
-			process.removeListener("exit", cleanupLock);
-			process.removeListener("SIGINT", onSigInt);
-			process.removeListener("SIGTERM", onSigTerm);
-			process.removeListener("SIGHUP", onSigHup);
-		}
-	}
-	case "preapprove": {
-		const { abs, plan, sha, root: planRoot } = loadPlan(args[0]);
-		const session = opt(args, "--session");
-		if (!session) die("--session <rootSessionId> 가 필요합니다");
-		const r = await lib.preapproveStepCodes(abs, planRoot, session, process.env, Date.now());
-		if (!r.ok) die(`사전발급 거부: ${r.why}`, 1);
-		console.log(lib.renderReport(plan, sha, r.review));
-		console.log(`사전발급 코드(사용자 본인이 한 메시지로 승인): PLAN ${r.plan_code} ` + r.steps.map((s) => `${s.step} ${s.code}`).join(" "));
-		break;
-	}
-	case "step-ok": {
-		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
-		try { lib.reviewModelsFor(planRoot); }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
-		const step = args[1];
-		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
-		const ev = opt(args, "--evidence");
-		if (!ev || !fs.existsSync(ev)) die("--evidence <성공 확인 출력 파일> 이 필요합니다");
-		const dir = path.join(gatesDir, "deploy-steps");
-		fs.mkdirSync(dir, { recursive: true });
-		const copy = path.join(dir, `${step}-evidence.txt`);
-		fs.copyFileSync(ev, copy);
-		const rec = { plan_sha256: sha, step, verdict: "pass", evidence: path.basename(copy), evidence_sha256: sha256(fs.readFileSync(copy)), checkedAt: new Date().toISOString() };
-		fs.writeFileSync(path.join(dir, `${step}.json`), `${JSON.stringify(rec, null, 2)}\n`);
-		console.log(`단계 ${step} 성공 확인 기록: ${path.relative(planRoot, path.join(dir, `${step}.json`))}`);
-		break;
-	}
-	case "judge": {
-		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
-		let museCfg;
-		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
-		if (!museCfg || (museCfg.runner && museCfg.runner !== "muse")) die("장애 판정자는 muse 실행기여야 합니다", 1);
-		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
-		if (!roBind.ok) die(roBind.why, 1);
-		let judgeManifest;
-		try { judgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: roBind.items }); }
-		catch (error) { die(`판정 입력 목록(input manifest)을 읽지 못함: ${error.message}`, 1); }
-		const evidence = optAll(args, "--evidence");
-		const executor = opt(args, "--executor-session") || process.env.CLAUDE_SESSION_ID || "";
-		if (!executor) die("--executor-session <실행 세션 id> 가 필요합니다");
-		if (evidence.length === 0) die("--evidence <확인 결과·헬스·오류 로그 파일> 이 하나 이상 필요합니다");
-		const ev = evidence.map((p) => { const evAbs = path.resolve(p); const buf = fs.readFileSync(evAbs); return { path: evAbs, sha256: sha256(buf), text: buf.toString("utf8").slice(0, 20000) }; });
-		const prompt = [
-			"당신은 운영 배포를 실행하는 세션과 다른, 독립 판정자입니다. 지금 상황이 '장애'인지 '개발'인지 판정하십시오.",
-			"장애(incident): 운영 사용자에게 지금 영향이 있거나 곧 생기며, 계획서의 장애 판단 기준에 해당한다. 계획서에 미리 적은 선조치를 바로 해야 한다.",
-			"개발(development): 배포 작업 중 생긴 실패·예상 밖 결과지만 운영 사용자 영향이 없거나 기준에 해당하지 않는다. 실행 세션은 멈추고 보고해야 한다.",
-			"애매하면 개발로 판정하십시오(선조치는 승인 없이 도는 길이라 좁게 씁니다).",
-			"",
-			"장애 판단 기준:",
-			...((plan.incident && plan.incident.criteria) || []).map((c) => `- ${c}`),
-			"선조치 목록:",
-			...((plan.incident && plan.incident.actions) || []).map((a) => `- ${a.id}: ${a.why_safe}`),
-			"",
-			...ev.flatMap((e) => [`증거 ${path.basename(e.path)}:`, "```", e.text, "```"]),
-			"",
-			"출력 마지막 줄을 정확히 'VERDICT: incident' 또는 'VERDICT: development' 로 쓰고, 그 위에 근거를 3줄 이내로 적으십시오.",
-		].join("\n");
-		const raw = runMuse(prompt, museCfg);
-		let afterJudgeManifest = null;
-		try {
-			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
-			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, planRoot);
-			if (afterRo.ok) afterJudgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: afterRo.items });
-		} catch { afterJudgeManifest = null; }
-		if (!afterJudgeManifest || afterJudgeManifest !== judgeManifest) {
-			die("판정 중 계획서·설정·실행기가 바뀌어 판정 기록을 남기지 않음", 3);
-		}
-		const lastLine = raw.trim().split(/\r?\n/).filter((l) => l.trim()).pop() || "";
-		const m = lastLine.match(/^\s*VERDICT:\s*(incident|development)\s*$/i);
-		const verdict = m ? m[1].toLowerCase() : "development";
-		const judgeSession = `muse-judge-${crypto.randomUUID()}`;
-		const dir = path.join(gatesDir, "deploy-incident");
-		fs.mkdirSync(dir, { recursive: true });
-		const rec = { plan_sha256: sha, input_manifest_sha256: judgeManifest, verdict, judge: { model: museCfg.model, effort: museCfg.effort, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
-		const file = path.join(dir, `${rec.decidedAt.replace(/[:.]/g, "-")}.json`);
-		fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
-		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(planRoot, file)}`);
-		process.exit(verdict === "incident" ? 0 : 1);
-	}
-	default:
-		die("사용: approval-plan.mjs template|check|report|review|review-prompt|preapprove|step-ok|judge (docs/guides/approval-plan-gate.md)");
-}
+const aliases = new Map();
+const expectedPins=new Map();
+if(registration){
+ for(const [root,pins]of[[ROOT,registration.engine.files],[registration.planRoot,registration.instance.files]]){
+  if(!Array.isArray(pins))throw new Error("Registered source manifest missing");
+  for(const pin of pins){exactFields(pin,["file","sha256"]);if(typeof pin.file!=="string"||path.isAbsolute(pin.file)||pin.file.startsWith("..")||path.normalize(pin.file)!==pin.file||!/^[a-f0-9]{64}$/.test(pin.sha256))throw new Error("Invalid registered source pin");const abs=path.resolve(root,pin.file);if(expectedPins.has(abs))throw new Error("Duplicate registered source pin");expectedPins.set(abs,pin.sha256);}
+ }
+ for(const rel of[".agents/scripts/approval-plan.mjs",...PINNED_CJS_EXECUTORS])if(!expectedPins.has(path.join(ROOT,rel)))throw new Error("Required registered execution source missing");
+ for(const [file,want]of expectedPins){const bytes=regularBytes(file);if(sha256(bytes)!==want)throw new Error("Registered source differs: "+file);registration.files.set(file,bytes);}
 
 }
-// An instance supplies the code-pinned approver identity and Discord details here.
+const modulePaths=registration?[...new Set([...PINNED_CJS_EXECUTORS.map(p=>path.resolve(ROOT,p)),...registration.instance.files.filter(p=>/\.(?:cjs|js|json)$/.test(p.file)).map(p=>path.resolve(registration.planRoot,p.file))])]:PINNED_CJS_EXECUTORS.map(p=>path.resolve(ROOT,p));
+const executors = modulePaths.map(requested => {
+ const rel=path.relative(ROOT,requested);
+ const filename = fs.realpathSync(requested);
+ if (Object.hasOwn(require.cache, requested) || Object.hasOwn(require.cache, filename)) {
+  console.error("기동 거부: 실행기 require.cache 선적재는 허용하지 않음"); process.exit(1);
+ }
+ const buffer = registration ? registration.files.get(filename) : fs.readFileSync(filename);
+ if(!buffer)throw new Error("Module is outside registered source manifest");
+ if(requested.startsWith(ROOT+path.sep))STARTUP_EXECUTOR_SHAS.set(rel, sha256(buffer));
+ const record = { rel, filename, buffer, module: null, loading: false };
+ aliases.set(requested, record); aliases.set(filename, record);
+ return record;
+});
+STARTUP_EXECUTOR_SHAS.set(path.relative(fs.realpathSync(ROOT), bootEntryAbs), BOOT_ENTRY_SHA);
+function compile(record) {
+ if (record.loading) throw new Error("기동 거부: 고정 실행기 순환 의존");
+ if (record.module) return record.module.exports;
+ record.loading = true;
+ const mod = new Module(record.filename);
+ mod.filename = record.filename;
+ mod.paths = Module._nodeModulePaths(path.dirname(record.filename));
+ mod.require = function(request) {
+  const target = path.isAbsolute(request) ? path.normalize(request)
+   : request.startsWith(".") ? path.resolve(path.dirname(record.filename), request) : null;
+  const dependency = target && (aliases.get(target) || aliases.get(target + ".js") || aliases.get(target + ".cjs"));
+  if(dependency)return compile(dependency);
+  if(registration&&!Module.isBuiltin(request)){
+   const ctx=aliases.get(path.join(ROOT,".claude/hooks/lib/deploy-plan-context.js"))?.module?.exports?.gateConfigView?.getStore();
+   const legacy=ctx?.legacyPolicyRoot,inside=(root,file)=>file===root||file?.startsWith(root+path.sep);
+   if(record.filename.startsWith(registration.planRoot+path.sep)||!legacy||inside(ROOT,legacy)||inside(registration.planRoot,legacy)||target&&(inside(ROOT,target)||inside(registration.planRoot,target)))throw new Error("Unregistered local executable: "+request);
+  }
+  return Module.prototype.require.call(this,request);
+ };
+ record.module = mod;
+ require.cache[record.filename] = mod;
+ try {
+  // Every protected require resolves to these own records. Compile the exact
+  // bytes hashed above; never reopen a protected source through normal require.
+  if(record.filename.endsWith(".json"))mod.exports=JSON.parse(record.buffer.toString());
+  else mod._compile(record.buffer.toString(), record.filename);
+  mod.loaded = true; record.loading = false;
+  return mod.exports;
+ } catch (error) {
+  record.loading = false; record.module = null;
+  if (require.cache[record.filename] === mod) delete require.cache[record.filename];
+  throw error;
+ }
+}
+if(registration){
+ compile(aliases.get(path.join(ROOT,"scripts/lib/registered-git-identity.cjs"))).assertRegisteredGitIdentity(registration.engine);
+ compile(aliases.get(path.join(ROOT,".agents/scripts/registered-gate-loader.cjs"))).installRegisteredModuleHooks({
+  files:registration.files,registrationSha:registration.sha256,entry:bootEntryAbs,roots:[ROOT,registration.planRoot],
+  currentContext:()=>aliases.get(path.join(ROOT,".claude/hooks/lib/deploy-plan-context.js"))?.module?.exports?.gateConfigView?.getStore()
+ });
+}
+if(registration){
+ const environment=compile(aliases.get(path.join(ROOT,".agents/scripts/registered-gate-environment.cjs")));
+ const isChild=invocation.argv[0]==="hook"&&environment.isRegisteredWatchdogChild(bootEntryAbs,registration.sha256);
+ if(["LD_PRELOAD","LD_LIBRARY_PATH","DYLD_INSERT_LIBRARIES","BASH_ENV","ENV"].some(name=>process.env[name]))throw new Error("Unsupported caller startup environment; clean installed host required");
+ const clean=environment.childEnvironment(true);
+ if(isChild){clean.NAIA_HOOK_WATCHDOG_CHILD="1";clean.NAIA_REGISTERED_WATCHDOG_PARENT=String(process.ppid);}
+ for(const key of Object.keys(process.env))delete process.env[key];Object.assign(process.env,clean);
+ if(invocation.argv[0]==="hook"){
+  const watchdog=compile(aliases.get(path.join(ROOT,".claude/hooks/lib/hook-watchdog.js")));
+  if(watchdog.runWithWatchdog({script:bootEntryAbs,args:process.argv.slice(2),env:{...environment.childEnvironment(true),NAIA_REGISTERED_WATCHDOG_PARENT:String(process.pid)},replaceEnvironment:true,childCheck:()=>isChild}))await new Promise(()=>{});
+ }
+}
+
+try { for (const executor of executors.filter(e=>e.filename.startsWith(ROOT+path.sep))) compile(executor); }
+catch (error) {
+ for (const executor of executors) if (require.cache[executor.filename] === executor.module) delete require.cache[executor.filename];
+ throw error;
+}
+const exportsAt = rel => compile(aliases.get(path.resolve(ROOT, rel)));
+const lib = exportsAt(".claude/hooks/lib/deploy-plan.js");
+const runtime = Object.freeze({ plan: lib, policy: exportsAt(".agents/hooks/policies/bash.js"),
+ readiness: exportsAt(".claude/hooks/lib/deploy-readiness.js") });
+const runCli = exportsAt(".agents/scripts/approval-plan-cli.cjs").createApprovalPlanCli({ STARTUP_EXECUTOR_SHAS, BOOT_ENTRY_SHA, registration });
+const registered=registration?exportsAt(".agents/scripts/registered-gate-runtime.cjs").createRegisteredGate(registration,{...runtime,envelope:exportsAt(".claude/hooks/_claude-bash-guard.js")},runCli):null;
+
+export function loadDeployGateRuntime() { return runtime; }
+export async function runApprovalPlan(argv = process.argv.slice(2)) { return runCli(argv); }
 export async function runApprovedApprovalPlan(options, argv = process.argv.slice(2)) {
-	return lib.withGateConfig(options, () => runApprovalPlan(argv));
+ return lib.withGateConfig(options, () => runApprovalPlan(argv));
 }
 const invokedDirectly = (() => {
-	try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === bootEntryAbs; }
-	catch { return false; }
+ try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === bootEntryAbs; }
+ catch { return false; }
 })();
-if (invokedDirectly) await runApprovalPlan();
+if (invokedDirectly) {
+ if(registered)await registered.run(invocation.argv);
+ else await runApprovalPlan();
+}

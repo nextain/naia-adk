@@ -4,8 +4,8 @@
 // env keys, absolute-path hooks for role sessions, and the compaction summary
 // rule block in ~/.claude/CLAUDE.md. Idempotent; existing settings are kept.
 //
-//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]
-//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]
+//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse] [--registered-deploy-hooks <file> --registered-deploy-hooks-sha256 <hex>]
+//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse] [--registered-deploy-hooks <file> --registered-deploy-hooks-sha256 <hex>]
 import fs from "node:fs"
 import os from "node:os"
 import { HANDOFF_CONTEXT_TOKENS, roleWorkspace } from "./work-ledger/role-handoff.mjs"
@@ -13,6 +13,7 @@ import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 import { createRequire } from "node:module"
+import { loadRegisteredDeployHooks, registeredHookSettings, registeredCodexHookSettings, validateRegisteredSettingsTarget, assertRegisteredInstallNotHeld, writeRegisteredHookPair } from "./lib/registered-deploy-hooks.mjs"
 
 const BEGIN = "<!-- naia-adk claude-user-profile: begin -->"
 const END = "<!-- naia-adk claude-user-profile: end -->"
@@ -29,12 +30,20 @@ export function parseArgs(raw) {
     else if (raw[i] === "--adk-root") args.adkRoot = raw[++i]
     else if (raw[i] === "--instance-root") args.instanceRoot = raw[++i]
     else if (raw[i] === "--target") args.target = raw[++i]
+    else if (["--registered-deploy-hooks", "--registered-deploy-hooks-sha256"].includes(raw[i])) {
+      const key = raw[i] === "--registered-deploy-hooks" ? "registeredDeployHooks" : "registeredDeployHooksSha256"
+      if (Object.hasOwn(args, key) || !raw[i + 1] || raw[i + 1].startsWith("--")) throw new Error("registered deploy descriptor: missing or duplicate argument")
+      args[key] = raw[++i]
+    }
     else if (raw[i] === "--muse-only") args.target = "muse"
     else if (raw[i] === "--claude-only") args.target = "claude"
     else throw new Error(`unknown argument: ${raw[i]}`)
   }
   if (!["apply", "check"].includes(args.mode) || !VALID_TARGETS.has(args.target)) {
-    throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]")
+    throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse] [--registered-deploy-hooks <file> --registered-deploy-hooks-sha256 <hex>]")
+  }
+  if (Object.hasOwn(args, "registeredDeployHooks") || Object.hasOwn(args, "registeredDeployHooksSha256")) {
+    if (!args.registeredDeployHooks || !/^[a-f0-9]{64}$/.test(args.registeredDeployHooksSha256 ?? "") || !["claude", "codex"].includes(args.target)) throw new Error("registered deploy descriptor: paired file/SHA256 and explicit --target claude or codex required")
   }
   args.home = path.resolve(args.home)
   args.adkRoot = path.resolve(args.adkRoot)
@@ -213,13 +222,18 @@ export function mergeRule(current, rule) {
 
 const readOptional = (file) => { try { return fs.readFileSync(file, "utf8") } catch (e) { if (e.code === "ENOENT") return null; throw e } }
 
-function writeWithBackup(file, text, stamp) {
+function writeWithBackup(file, text, stamp, preserveIdentity = false) {
   const old = readOptional(file)
   if (old === text) return false
   if (old !== null) fs.copyFileSync(file, `${file}.bak-${stamp}`)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}`
   fs.writeFileSync(tmp, text, { mode: 0o600 })
+  if (preserveIdentity && old !== null) {
+    const stat = fs.statSync(file)
+    fs.chownSync(tmp, stat.uid, stat.gid)
+    fs.chmodSync(tmp, stat.mode & 0o777)
+  }
   fs.renameSync(tmp, file)
   return true
 }
@@ -230,13 +244,16 @@ export function run(args, now = new Date()) {
   const includesClaude = target === "all" || target === "claude"
   const includesMuse = target === "all" || target === "muse"
   const instanceRoot = args.instanceRoot ?? args.adkRoot
+  const registered = loadRegisteredDeployHooks(args)
+  if (includesClaude) assertRegisteredInstallNotHeld(args.home)
+  else if (registered && target === "codex") assertRegisteredInstallNotHeld(args.home, "codex")
   const museSettingsFile = args.museSettingsFile ?? path.join(args.home, ".config", "muse", "settings.json")
 
   const drift = []
   const errors = []
   const changed = []
   let overridden = []
-  let settingsFile, nextSettings, ruleFile, nextRule
+  let settingsFile, nextSettings, ruleFile, nextRule, projectFile, nextProject
   const missingPolicies = []
 
   if (includesClaude) {
@@ -244,7 +261,23 @@ export function run(args, now = new Date()) {
     settingsFile = path.join(args.home, ".claude", "settings.json")
     ruleFile = path.join(args.home, ".claude", "CLAUDE.md")
     const currentSettings = readOptional(settingsFile)
-    const current = currentSettings ? JSON.parse(currentSettings) : {}
+    let current = currentSettings ? JSON.parse(currentSettings) : {}
+    projectFile = path.join(instanceRoot, ".claude/settings.json")
+    let currentProject
+    try { currentProject = readOptional(projectFile) } catch (error) {
+      if (registered || error.code !== "EACCES") throw error
+      currentProject = null
+    }
+    let project = {}
+    try { project = JSON.parse(currentProject ?? "{}") } catch (error) { if (registered) throw error }
+    const bound = registeredHookSettings(current, profile.settings, project, registered)
+    current = bound.current
+    profile.settings = bound.profile
+    if (registered) {
+      for (const file of [settingsFile, projectFile, ruleFile]) validateRegisteredSettingsTarget(file)
+      nextProject = JSON.stringify(bound.project, null, 2) + "\n"
+      if (currentProject === null || JSON.stringify(JSON.parse(currentProject)) !== JSON.stringify(bound.project)) drift.push(projectFile)
+    }
     overridden = Object.keys(profile.settings.env ?? {}).filter((key) => Object.hasOwn(current.env ?? {}, key) && current.env[key] !== profile.settings.env[key]).map((key) => `env.${key}`)
     nextSettings = `${JSON.stringify(mergeSettings(current, profile.settings), null, 2)}\n`
     try { nextRule = mergeRule(readOptional(ruleFile), profile.rule) } catch (e) {
@@ -296,9 +329,19 @@ export function run(args, now = new Date()) {
       }
     }
   }
-  let codexFile, nextCodex
+  let codexFile, nextCodex, codexProjectFile, nextCodexProject
   if (target === "codex" || target === "all") {
-    if (target === "codex" || installedRoles.some(role => role.handoff)) {
+    if (registered && target === "codex") {
+      codexFile = path.join(args.home, ".codex/hooks.json")
+      codexProjectFile = path.join(instanceRoot, ".codex/hooks.json")
+      for (const file of [codexFile, codexProjectFile]) validateRegisteredSettingsTarget(file)
+      const oldUser = readOptional(codexFile), oldProject = readOptional(codexProjectFile)
+      const pair = registeredCodexHookSettings(JSON.parse(oldUser ?? "{}"), JSON.parse(oldProject ?? "{}"), registered)
+      nextCodex = JSON.stringify(pair.user, null, 2) + "\n"
+      nextCodexProject = JSON.stringify(pair.project, null, 2) + "\n"
+      if (oldUser === null || JSON.stringify(JSON.parse(oldUser)) !== JSON.stringify(pair.user)) drift.push(codexFile)
+      if (oldProject === null || JSON.stringify(JSON.parse(oldProject)) !== JSON.stringify(pair.project)) drift.push(codexProjectFile)
+    } else if (target === "codex" || installedRoles.some(role => role.handoff)) {
       const hookScript = path.join(args.adkRoot, "scripts/work-ledger/role-handoff.mjs")
       if (!fs.existsSync(hookScript)) throw new Error(`missing hook: ${hookScript}`)
       codexFile = args.codexHooksFile ?? path.join(args.home, ".codex", "hooks.json")
@@ -342,11 +385,19 @@ export function run(args, now = new Date()) {
       return keys.length ? [`policy required: ${file}; keys: ${keys.join(", ")}`] : []
     })
     if (policyErrors.length) throw new Error(policyErrors.join("\n"))
-    if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
-    if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp)) changed.push(ruleFile)
+    if (registered) {
+      registered.verify()
+      for (const file of [settingsFile, projectFile, ruleFile]) validateRegisteredSettingsTarget(file)
+    }
+    if (registered) changed.push(...writeRegisteredHookPair(args.home, settingsFile, nextSettings, projectFile, nextProject, stamp))
+    else if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
+    if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp, Boolean(registered))) changed.push(ruleFile)
   }
   for (const [file, content] of localMemorySettings) if (writeWithBackup(file, content, stamp)) changed.push(file)
-  if (codexFile && drift.includes(codexFile) && writeWithBackup(codexFile, nextCodex, stamp)) changed.push(codexFile)
+  if (registered && target === "codex") {
+    registered.verify()
+    changed.push(...writeRegisteredHookPair(args.home, codexFile, nextCodex, codexProjectFile, nextCodexProject, stamp, "codex"))
+  } else if (codexFile && drift.includes(codexFile) && writeWithBackup(codexFile, nextCodex, stamp)) changed.push(codexFile)
   if (includesMuse && drift.includes(museSettingsFile) && writeWithBackup(museSettingsFile, nextMuseSettings, stamp)) {
     changed.push(museSettingsFile)
   }
@@ -364,7 +415,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     for (const key of result.overridden) console.log(`overridden: ${key}`)
     for (const f of result.changed) console.log(`updated: ${f}`)
-    if (result.changed.includes(args.codexHooksFile)) console.log("Review this ADK SessionStart hook in Codex /hooks. The CLI skips a new or changed user hook until its exact definition is trusted.")
+    if (result.changed.includes(args.codexHooksFile)) console.log(args.registeredDeployHooks ? "Review both exact registered deploy definitions in Codex /hooks before native execution." : "Review this ADK SessionStart hook in Codex /hooks. The CLI skips a new or changed user hook until its exact definition is trusted.")
     if (!result.changed.length) console.log("already up to date")
   } catch (e) {
     console.error(e.message)

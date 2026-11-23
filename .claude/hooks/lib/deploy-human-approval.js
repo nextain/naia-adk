@@ -53,13 +53,13 @@ function newCode(prefix = "DEPLOY") {
 
 function textOfHumanEntry(entry) {
 	if (!entry || typeof entry !== "object") return [];
+	if (entry.isMeta || entry.isCompactSummary || entry.isSidechain || (entry.origin && entry.origin.kind !== "human")) return [];
 	if (entry.type === "attachment") {
 		const a = entry.attachment || {};
 		if (a.type === "queued_command" && a.origin && a.origin.kind === "human" && typeof a.prompt === "string") return [a.prompt];
 		return [];
 	}
-	if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary || entry.isSidechain) return [];
-	if (entry.origin && entry.origin.kind && entry.origin.kind !== "human") return [];
+	if (entry.type !== "user") return [];
 	const message = entry.message || {};
 	if (message.role !== "user") return [];
 	const content = message.content;
@@ -69,19 +69,27 @@ function textOfHumanEntry(entry) {
 	return blocks.filter((b) => b && b.type === "text" && typeof b.text === "string" && !b.text.trim().startsWith("<")).map((b) => b.text);
 }
 
+// A person can confirm several codes in one message. Each must be a complete token.
+function containsApprovalCode(text, code) {
+	return typeof code === "string" && code.length > 0 && typeof text === "string"
+		&& text.split(/[^A-Za-z0-9_-]+/).includes(code);
+}
+
 /** 대화 기록에서 since 이후 사람이 쓴 메시지에 code 가 있는가. */
-function humanTyped(transcriptPath, code, sinceIso) {
+function humanTyped(transcriptPath, code, sinceIso, { sessionId, until = Infinity } = {}) {
 	if (!transcriptPath) return { ok: false, why: "no-transcript" };
 	let raw;
 	try { raw = fs.readFileSync(transcriptPath, "utf8"); } catch { return { ok: false, why: "no-transcript" }; }
-	const since = Date.parse(sinceIso) || 0;
+	const since = Date.parse(sinceIso);
+	if (!Number.isFinite(since)) return { ok: false, why: "invalid-issuance-time" };
 	for (const line of raw.split("\n")) {
 		if (!line.includes(code)) continue;
 		let entry;
 		try { entry = JSON.parse(line); } catch { continue; }
-		const at = Date.parse(entry.timestamp || "") || 0;
-		if (at < since) continue;
-		if (textOfHumanEntry(entry).some((t) => t.includes(code))) return { ok: true, at: entry.timestamp };
+		const at = Date.parse(entry?.timestamp);
+		if (!Number.isFinite(at) || at < since || at >= until) continue;
+		if (sessionId && [entry.sessionId, entry.session_id].some((id) => id !== undefined && id !== sessionId)) continue;
+		if (textOfHumanEntry(entry).some((t) => containsApprovalCode(t, code))) return { ok: true, at: entry.timestamp };
 	}
 	return { ok: false, why: "not-typed" };
 }
@@ -115,4 +123,4 @@ function checkApproval({ command, services, sessionId, transcriptPath, env = pro
 	return { approved: true, code: challenge.code, services };
 }
 
-module.exports = { checkApproval, humanTyped, textOfHumanEntry, commandHash, statePath, CHALLENGE_TTL_MS };
+module.exports = { checkApproval, humanTyped, textOfHumanEntry, containsApprovalCode, commandHash, statePath, CHALLENGE_TTL_MS };
