@@ -657,7 +657,9 @@ export async function watch({
             revision: [item.title, escalation, item.drop_count ?? 0, item.defer_count ?? 0],
             evidenceAt: Math.max(Date.parse(item.checked_at) || 0, Date.parse(item.updated_at) || 0) });
         }
-        if (item.worker) {
+        // A closed card must not publish another unread-result notice. Waiting
+        // cards still need results, and already-published events stay intact.
+        if (item.worker && !["done", "dropped"].includes(item.status)) {
           try {
             const info = await stat(path.resolve(root, item.worker.done_file), { bigint: true });
             if (!item.checked_at || BigInt(Date.parse(item.checked_at)) * 1000000n < info.mtimeNs)
