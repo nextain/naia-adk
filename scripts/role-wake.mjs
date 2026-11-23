@@ -298,9 +298,11 @@ function readSeenFile(file) {
   return new Set(fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(line => path.resolve(line)));
 }
 
-function wakeSource(body) {
+function wakeSource(body, roleId) {
   const cardId = /^\[장부\] 접수한 작업: [^\r\n]*\r?\n작업카드: ([A-Za-z0-9][A-Za-z0-9_-]*)\r?\n/.exec(body)?.[1];
   if (cardId) return { cardId };
+  const stalled = /^\[장부\] 멈춘 카드: [^\r\n]*\r?\n역할: ([^\r\n]+)\r?\n카드 id: ([A-Za-z0-9][A-Za-z0-9_-]*)\r?\n/.exec(body);
+  if (stalled && stalled[1] === roleId) return { cardId: stalled[2] };
   const [, metadata] = /^# Discord wake\r?\n\r?\n([^]*?)(?:\r?\n\r?\n|$)/.exec(body) ?? [];
   if (!metadata) return {};
   const field = name => new RegExp(`^${name}: (.*)$`, 'm').exec(metadata)?.[1]?.trim();
@@ -332,7 +334,7 @@ function workHeader(registry, role, readBody, now) {
     const reason = error instanceof SyntaxError ? '잘못된 JSON' : error.code ?? error.message;
     return `[장부 읽기 실패: ${reason.replace(/[\r\n]+/g, ' ')}]`;
   }
-  return wakeHeader(items, wakeSource(readBody().toString('utf8')), now);
+  return wakeHeader(items, wakeSource(readBody().toString('utf8'), role.id), now);
 }
 
 // Runs the delivery command on the original or on a private spool copy.
