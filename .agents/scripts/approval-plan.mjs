@@ -30,6 +30,7 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/gate-config-pin.js",
+	"scripts/lib/pid-lock.cjs",
 	".claude/hooks/lib/deploy-plan.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
@@ -74,6 +75,7 @@ let lib, commandHash, statePath;
 				mod.require = function (request) {
 					if (request === "./deploy-human-approval.js") return compiled[0].exports;
 					if (request === "./gate-config-pin.js" && compiled.length > 1) return compiled[1].exports;
+					if (request === "../../../scripts/lib/pid-lock.cjs" && compiled.length > 2) return compiled[2].exports;
 					return Module.prototype.require.call(this, request);
 				};
 			}
@@ -83,7 +85,7 @@ let lib, commandHash, statePath;
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[2].exports;
+		lib = compiled[3].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
 		throw error;
@@ -177,13 +179,9 @@ function loadPlan(p) {
 	const abs = path.resolve(p);
 	if (path.basename(abs) !== lib.PLAN_FILE || path.basename(path.dirname(abs)) !== "gates") die(`계획서는 .agents/progress/<작업>/gates/${lib.PLAN_FILE} 여야 합니다`);
 	const root = resolvePlanRoot(abs);
-	let plan;
-	try {
-		plan = JSON.parse(fs.readFileSync(abs, "utf8"));
-	} catch (e) {
-		die(`계획서를 읽지 못함: ${e.message}`);
-	}
-	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
+	const snapshot = lib.readPlanSnapshot(abs);
+	if (!snapshot) die("계획서를 읽지 못함");
+	return { abs, gatesDir: path.dirname(abs), root, ...snapshot };
 }
 
 function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
@@ -721,12 +719,13 @@ switch (cmd) {
 		}
 	}
 	case "preapprove": {
-		const { abs, plan, sha, root: planRoot } = loadPlan(args[0]);
+		const { abs, root: planRoot } = loadPlan(args[0]);
 		const session = opt(args, "--session");
 		if (!session) die("--session <rootSessionId> 가 필요합니다");
 		const r = await lib.preapproveStepCodes(abs, planRoot, session, process.env, Date.now());
 		if (!r.ok) die(`사전발급 거부: ${r.why}`, 1);
-		console.log(lib.renderReport(plan, sha, r.review));
+		console.log(r.report);
+		console.log(`승인 세션: ${session} / 계획서: ${abs}`);
 		console.log(`사전발급 코드(사용자 본인이 한 메시지로 승인): PLAN ${r.plan_code} ` + r.steps.map((s) => `${s.step} ${s.code}`).join(" "));
 		break;
 	}

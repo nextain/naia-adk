@@ -15,6 +15,7 @@ const { assessReadiness } = require("../lib/deploy-readiness.js");
 const { classifyProdMutations } = require("../lib/deploy-command-classifier.js");
 
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const ISSUED_APPROVAL_CODE = /\b(?:PLAN|STEP)-[0-9A-F]{64}\b/;
 
 function makeWorkspace(t) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sample-approval-plan-gate-test-"));
@@ -311,7 +312,7 @@ test("3a. 64KB 넘는 승인 양식도 잘리지 않고 JSON 으로 끝까지 �
 	const d = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath });
 	assert.ok(Buffer.byteLength(JSON.stringify(d)) > 65536, "시험 출력이 64KB 를 넘어야 함");
 	assert.equal(d.decision, "block");
-	assert.match(d.reason, /승인 코드:\s*PLAN-[A-Z0-9]{6}/);
+	assert.match(d.reason, /승인 코드:\s*PLAN-[0-9A-F]{64}/);
 });
 
 test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blocked and issues code)", (t) => {
@@ -325,7 +326,7 @@ test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blo
 	assert.ok(d1);
 	assert.equal(d1.decision, "block");
 	assert.match(d1.reason, /전체 계획 승인이 아직 없습니다/);
-	const planCodeMatch = d1.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	const planCodeMatch = d1.reason.match(/승인 코드:\s*(PLAN-[0-9A-F]{64})/);
 	assert.ok(planCodeMatch, "PLAN 승인 코드가 발급되어야 함");
 
 	// 2) PLAN 코드만 입력하고 STEP 코드가 없을 때: 단계 승인 필요로 차단되고 STEP 코드 발급
@@ -334,7 +335,7 @@ test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blo
 	assert.ok(d2);
 	assert.equal(d2.decision, "block");
 	assert.match(d2.reason, /단계 승인 필요/);
-	assert.match(d2.reason, /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.match(d2.reason, /단계 승인 코드:\s*STEP-[0-9A-F]{64}/);
 });
 
 test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 시 통과 및 1회 소진)", async (t) => {
@@ -347,9 +348,9 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
-	assert.match(pre.plan_code, /^PLAN-[A-Z0-9]{6}$/);
+	assert.match(pre.plan_code, /^PLAN-[0-9A-F]{64}$/);
 	const s1Code = pre.steps.find((s) => s.step === "s1")?.code;
-	assert.ok(s1Code && /^STEP-[A-Z0-9]{6}$/.test(s1Code));
+	assert.ok(s1Code && /^STEP-[0-9A-F]{64}$/.test(s1Code));
 
 	// 사람이 대화창에 PLAN 코드와 s1 STEP 코드를 입력
 	appendHumanTurn(transcriptPath, `승인: ${pre.plan_code} ${s1Code}`);
@@ -363,6 +364,120 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	assert.ok(secondAttempt);
 	assert.equal(secondAttempt.decision, "block");
 	assert.match(secondAttempt.reason, /단계 승인 필요/);
+});
+
+test("issued approvals verify only against their live plan, session and exact command scope", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	const { planFile, plan } = createValidPlan(root);
+	const { planSha, manifestSha } = writePassingReviewReceipt(root, planFile);
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const sessionId = "scope-session";
+	const now = Date.now();
+	const request = { root, file: planFile, plan, sha: planSha, manifest: manifestSha, sessionId };
+	const step = plan.scenario[0];
+	const scope = deployPlan.approvalScope(request, step);
+	const issue = () => deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now);
+	const first = await issue();
+	assert.ok(first.ok, first.why);
+	const { containsApprovalCode } = require("../lib/deploy-human-approval.js");
+	assert.ok(containsApprovalCode(`${first.plan_code} ${first.steps[0].code}`, first.steps[0].code));
+	assert.equal(containsApprovalCode(`${first.plan_code}0`, first.plan_code), false);
+	assert.equal(containsApprovalCode(first.plan_code, first.plan_code.slice(0, 11)), false);
+	const file = deployPlan.stateFile(env);
+	const state = JSON.parse(fs.readFileSync(file, "utf8"));
+	const row = state.challenges.find((item) => item.code === first.steps[0].code);
+	assert.ok(deployPlan.matchesIssuedApproval(row, scope));
+	for (const other of [
+		deployPlan.approvalScope(request),
+		deployPlan.approvalScope(request, plan.scenario[1]),
+		deployPlan.approvalScope({ ...request, sessionId: "next-session" }, step),
+		deployPlan.approvalScope({ ...request, sha: sha256("revised plan bytes") }, step),
+		deployPlan.approvalScope({ ...request, manifest: sha256("updated review inputs") }, step),
+		deployPlan.approvalScope({ ...request, file: path.join(root, "other", "gates", deployPlan.PLAN_FILE) }, step),
+		deployPlan.approvalScope({ ...request, root: stateDir }, step),
+		deployPlan.approvalScope(request, { ...step, commands: step.commands.map((cmd) => cmd + " ") }),
+	]) assert.equal(deployPlan.matchesIssuedApproval({ ...row, ...other }, other), false);
+	for (const changed of [
+		{ nonce: (row.nonce[0] === "0" ? "1" : "0") + row.nonce.slice(1) }, { createdAt: new Date(now - 1).toISOString() }, { preapprove: undefined },
+	]) assert.equal(deployPlan.matchesIssuedApproval({ ...row, ...changed }, scope), false);
+
+	assert.deepEqual((await issue()).steps, first.steps);
+	const renewed = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now + deployPlan.PLAN_APPROVAL_TTL_MS);
+	assert.notEqual(renewed.plan_code, first.plan_code);
+	assert.ok(renewed.steps.every((item, index) => item.code !== first.steps[index].code));
+	// An old pending request can be loaded for recovery, but needs a new human reply.
+	state.challenges = [{ kind: "plan", code: "PLAN-ABC123", planSha, sessionId, createdAt: row.createdAt }];
+	fs.writeFileSync(file, JSON.stringify(state));
+	const migrated = await issue();
+	assert.notEqual(migrated.plan_code, first.plan_code);
+	assert.match(migrated.plan_code, /^PLAN-[0-9A-F]{64}$/);
+	assert.equal((await deployPlan.preapproveStepCodes(planFile, root, "unknown", env, now)).ok, false);
+});
+
+test("one Discord decision covers the selected before, apply and restore steps across retries", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	const sessionId = "planned-restore";
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const author = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
+	writeGateConfig(root, { approver: { discordUserId: author } });
+	const step = (id, commands, extra = {}) => ({
+		id, title: `Sample ${id}`, commands, success_check: "Check sample result", on_failure: "Stop and report", ...extra,
+	});
+	const before = step("before", ["printf 'before state'"]);
+	const apply = step("apply", ["printf 'apply  setting'", "printf 'apply setting'"]);
+	const restore = step("restore", ["printf 'restore state'"], { branch: "rollback" });
+	const { planFile, gatesDir, plan } = createValidPlan(root, {
+		scenario: [before, apply, restore], rollback: { method: "Restore the recorded state", duration: "1 minute", step_ids: ["restore"] },
+	});
+	writePassingReviewReceipt(root, planFile);
+	const now = Date.now();
+	const batch = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, now);
+	assert.ok(batch.ok, batch.why);
+	assert.ok(batch.report.includes(JSON.stringify(apply.commands[0])));
+	const codes = [batch.plan_code, ...batch.steps.map((entry) => entry.code)];
+	fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({
+		approvals: codes.map((code) => ({ code, channelId: channel, messageId: message })),
+	}));
+	const decide = (command) => deployPlan.evaluate({
+		command, root, env, sessionId, services: plan.services, now, discordToken: "fixture-token",
+		// Each hook invocation retrieves the human reply from the simulated Discord API.
+		fetchImpl: async (url) => {
+			assert.equal(url, `https://discord.com/api/v10/channels/${channel}/messages/${message}`);
+			return { ok: true, json: async () => ({ id: message, channel_id: channel, timestamp: new Date(now).toISOString(), author: { id: author }, content: codes.join(" ") }) };
+		},
+	});
+	const recordSuccess = (id) => {
+		const evidence = path.join(stateDir, `${id}.txt`);
+		fs.writeFileSync(evidence, `Verified sample ${id}\n`);
+		const cli = spawnSync(process.execPath, [SCRIPT_PATH, "step-ok", planFile, id, "--evidence", evidence], { env: { ...process.env, ...env }, encoding: "utf8" });
+		assert.equal(cli.status, 0, cli.stderr);
+	};
+	assert.equal((await decide(before.commands[0])).allow, true);
+	recordSuccess(before.id);
+	for (const [index, command] of apply.commands.entries()) {
+		assert.equal((await decide(command)).allow, true);
+		const state = JSON.parse(fs.readFileSync(deployPlan.stateFile(env), "utf8"));
+		const admitted = state.challenges.find((row) => row.step === apply.id);
+		assert.deepEqual(admitted.executed, apply.commands.slice(0, index + 1).map(sha256));
+		assert.equal(admitted.status === "executed", index + 1 === apply.commands.length);
+	}
+	recordSuccess(apply.id);
+	assert.equal((await decide(restore.commands[0])).allow, true);
+	const retry = await decide(restore.commands[0]);
+	assert.equal(retry.audit.event, "step-approval-requested");
+	assert.ok(!retry.reason.includes(batch.steps.find((entry) => entry.step === restore.id).code));
+});
+
+test("a live approval lock keeps ownership while a slow human confirmation is pending", async (t) => {
+	const { stateDir } = makeWorkspace(t);
+	const env = { DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const result = await deployPlan.withStateLock(env, async () => {
+		const old = new Date(Date.now() - 10 * 60 * 1000);
+		fs.utimesSync(`${deployPlan.stateFile(env)}.lock`, old, old);
+		return deployPlan.withStateLock(env, () => "unexpected second holder", 0);
+	});
+	assert.equal(result, null);
+	assert.equal(await deployPlan.withStateLock(env, () => "next holder"), "next holder");
 });
 
 test("5. 계획을 바꾸면 코드 무효 (Modifying the plan after code issuance invalidates code and blocks)", async (t) => {
@@ -448,7 +563,7 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	// preapprove
 	const preRes = spawnSync(process.execPath, [workspaceScript, "preapprove", planFile, "--session", "cli-sess-1"], { cwd: root, env, encoding: "utf8" });
 	assert.equal(preRes.status, 0, preRes.stderr);
-	assert.match(preRes.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
+	assert.match(preRes.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[0-9A-F]{64} s1 STEP-[0-9A-F]{64} r1 STEP-[0-9A-F]{64}/);
 
 	// step-ok
 	const evFile = path.join(stateDir, "s1-ok.txt");
@@ -1182,13 +1297,13 @@ test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
 	const { planFile } = createValidPlan(root, { services: [service], scenario: [{ id: "s1", title: "Restart sample", commands: [command], success_check: "Check status", on_failure: "Report failure" }], rollback: { method: "Restart sample", duration: "1 minute", step_ids: ["s1"] } });
 	writePassingReviewReceipt(root, planFile);
 	const d1 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
-	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[0-9A-F]{64})/);
 	assert.ok(code, JSON.stringify(d1));
 	appendHumanTurn(transcriptPath, `계획 승인합니다 ${code[1]}`);
 	const d2 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
-	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[0-9A-F]{64}/);
 	assert.equal(d2.decision, "block");
-	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[0-9A-F]{64})/)[1];
 	appendHumanTurn(transcriptPath, `단계 승인합니다 ${stepCode}`);
 	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
 
@@ -1775,7 +1890,7 @@ test("an interrupted apply can retry from its original input with fresh STEP app
 	assert.match(f.hook(f.rollbackCmd).reason, /대상 시작 지문 불일치/);
 	const retry = f.hook(f.step1Cmd);
 	assert.match(retry.reason, /단계 승인 필요/);
-	const next = retry.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	const next = retry.reason.match(/단계 승인 코드:\s*(STEP-[0-9A-F]{64})(?![A-Za-z0-9_-])/)[1];
 	assert.notEqual(next, first);
 	f.approve(next);
 	f.run("s1");
@@ -2614,11 +2729,11 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	const dPlanAsk = runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" });
 	assert.equal(dPlanAsk?.decision, "block");
 	assert.match(dPlanAsk.reason, /PLAN-/);
-	appendHumanTurn(fNoRo.transcriptPath, `승인 ${dPlanAsk.reason.match(/PLAN-[A-Z0-9]{6}/)[0]}`);
+	appendHumanTurn(fNoRo.transcriptPath, `승인 ${dPlanAsk.reason.match(/PLAN-[0-9A-F]{64}/)[0]}`);
 	const dStepAsk = runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" });
 	assert.equal(dStepAsk?.decision, "block");
 	assert.match(dStepAsk.reason, /STEP-/);
-	appendHumanTurn(fNoRo.transcriptPath, `단계 승인 ${dStepAsk.reason.match(/STEP-[A-Z0-9]{6}/)[0]}`);
+	appendHumanTurn(fNoRo.transcriptPath, `단계 승인 ${dStepAsk.reason.match(/STEP-[0-9A-F]{64}/)[0]}`);
 	assert.equal(runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" }), null, "readOnlyScripts 없으면 기존 PLAN/STEP 승인으로 통과");
 });
 
@@ -2763,7 +2878,7 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 
 	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "cross-repo-sess-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(pre.status, 0, `preapprove failed:\n${pre.stdout}\n${pre.stderr}`);
-	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
+	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[0-9A-F]{64} s1 STEP-[0-9A-F]{64} r1 STEP-[0-9A-F]{64}/);
 
 	const evFile = path.join(stateDir, "s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\n");
@@ -3456,9 +3571,9 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	const issueAndApprove = (session) => {
 		for (let i = 0; i < 2; i++) {
 			const ask = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: session });
-			const codeMatch = ask && ask.reason.match(/\b((?:PLAN|STEP)-[A-Z0-9]{6})\b/);
+			const codeMatch = ask && ask.reason.match(ISSUED_APPROVAL_CODE);
 			assert.ok(codeMatch, `승인 코드 요청이 나와야 함(${i}): ${ask && ask.reason}`);
-			appendHumanTurn(transcriptPath, `승인합니다 ${codeMatch[1]}`);
+			appendHumanTurn(transcriptPath, `승인합니다 ${codeMatch[0]}`);
 		}
 	};
 	issueAndApprove(sessApproved);
@@ -3471,10 +3586,10 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	// 새 세션으로 PLAN·STEP 을 다시 발급·승인한 상태에서도 cwd=repoAStrict 이면 더 엄격한 쪽(cwd 정책)으로 막혀야 함
 	const sessStrict = "sess-cross-strict";
 	const askPlanStrict = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: sessStrict });
-	const planCodeStrict = askPlanStrict?.reason.match(/\b(PLAN-[A-Z0-9]{6})\b/);
+	const planCodeStrict = askPlanStrict?.reason.match(/\b(PLAN-[0-9A-F]{64})\b/);
 	if (planCodeStrict) appendHumanTurn(transcriptPath, `승인합니다 ${planCodeStrict[1]}`);
 	const askStepStrict = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: sessStrict });
-	const stepCodeStrict = askStepStrict?.reason.match(/\b(STEP-[A-Z0-9]{6})\b/);
+	const stepCodeStrict = askStepStrict?.reason.match(/\b(STEP-[0-9A-F]{64})\b/);
 	assert.ok(stepCodeStrict, `단계 승인 코드가 발급돼야 함: ${askStepStrict && askStepStrict.reason}`);
 	appendHumanTurn(transcriptPath, `승인합니다 ${stepCodeStrict[1]}`);
 	assert.equal(
@@ -3767,9 +3882,9 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 	writePassingReviewReceipt(repo, planFile);
 	for (let i = 0; i < 2; i++) {
 		const ask = runHook(planCmd, repo, "sess-sudo-approved");
-		const code = ask && ask.reason.match(/\b((?:PLAN|STEP)-[A-Z0-9]{6})\b/);
+		const code = ask && ask.reason.match(ISSUED_APPROVAL_CODE);
 		assert.ok(code, `승인 코드 요청이 나와야 함(${i}): ${ask && ask.reason}`);
-		appendHumanTurn(transcriptPath, `승인합니다 ${code[1]}`);
+		appendHumanTurn(transcriptPath, `승인합니다 ${code[0]}`);
 	}
 	assert.equal(runHook(planCmd, repo, "sess-sudo-approved"), null, "승인된 계획서의 sudo systemctl restart 명령은 통과해야 함");
 	assert.equal(runHook("sudo systemctl restart sample --no-block", repo, "sess-sudo-approved")?.decision, "block", "승인된 명령과 다른 글자가 붙으면 막혀야 함");

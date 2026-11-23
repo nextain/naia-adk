@@ -258,6 +258,9 @@ describe("본문 해석", () => {
     assert.equal(form.summary, "대시보드 대화창을 운영에 올립니다.")
     assert.equal(form.docUrl, "https://dashboard.example.com/d/a1b2c3")
     assert.equal(form.code, "PLAN-AB12CD STEP-EF34GH")
+    const scoped = `PLAN-${"F012".repeat(16)} STEP-${"A345".repeat(16)}`
+    assert.equal(parseApprovalForm(scoped).code, scoped)
+    assert.equal(parseApprovalForm(`${scoped}0`).code, null)
     assert.equal(parseApprovalForm(body, { plan_code: "PLAN-ZZZZZZ", step_code: "STEP-YYYYYY", status: "pending" }).code, "PLAN-ZZZZZZ STEP-YYYYYY")
   })
 

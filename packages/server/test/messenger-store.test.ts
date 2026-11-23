@@ -34,12 +34,13 @@ describe('messenger storage', () => {
   });
   it('allows only human approval of a form and posts its exact codes', () => {
     const s = store();
-    const request = s.createMessage('업무-요청',agent,`${form}\nPLAN-ABC123 STEP-DEF456`);
+    const codes = `PLAN-${'ABCD'.repeat(16)} STEP-${'1234'.repeat(16)}`;
+    const request = s.createMessage('업무-요청',agent,`${form}\n${codes}`);
     expect(request.approval?.status).toBe('pending');
     expect(() => s.decideApproval(request.id,agent,'approve')).toThrow('Human');
     const approved = s.decideApproval(request.id,human,'approve');
     expect(approved.message.approval?.status).toBe('approved');
-    expect(approved.codeMessage).toMatchObject({body:'PLAN-ABC123 STEP-DEF456',author_kind:'human',author_id:'owner'});
+    expect(approved.codeMessage).toMatchObject({body:codes,author_kind:'human',author_id:'owner'});
     expect(() => s.decideApproval(request.id,human,'approve')).toThrow('already');
     const ordinary = s.createMessage('업무-요청',agent,'PLAN-ABC123 STEP-DEF456');
     expect(() => s.decideApproval(ordinary.id,human,'approve')).toThrow('form');

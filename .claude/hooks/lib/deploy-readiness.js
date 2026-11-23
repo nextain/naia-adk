@@ -1002,7 +1002,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const files = new Map();
 	const fileHashes = new Map();
 	const { verifyTargetPreconditions } = require("./deploy-plan.js");
-	try { verifyTargetPreconditions(plan, root, entry); }
+	let targets;
+	try { targets = verifyTargetPreconditions(plan, root, entry); }
 	catch (e) { return no(`대상 파일 검사 실패: ${e.message}`); }
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);

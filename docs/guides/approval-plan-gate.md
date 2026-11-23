@@ -156,15 +156,17 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 
 ## 3. 승인 코드 발급 (`preapprove`)
 
-적대 리뷰를 통과한 계획서에 대해 전체 계획 코드(`PLAN-xxxxxx`)와 각 단계 코드(`STEP-xxxxxx`)를 발급받습니다.
+적대 리뷰를 통과한 계획서에 대해 전체 계획 코드(`PLAN-…`)와 각 단계 코드(`STEP-…`)를 발급받습니다.
 
 ```bash
 node .agents/scripts/approval-plan.mjs preapprove .agents/progress/<작업ID>/gates/deploy-plan.json --session <세션ID>
 ```
 
-- 이 명령은 보고문과 함께 `PLAN-xxxxxx` 및 단계별 `STEP-xxxxxx` 코드를 출력합니다.
+- 이 명령은 보고문과 함께 `PLAN-…` 및 단계별 `STEP-…` 코드를 출력합니다.
+- 사람은 접두사와 그 뒤의 64자리 값을 함께 복사해 답합니다. 코드는 저장소와 계획서 경로, 계획서 원본 및 검수 입력 목록의 SHA-256, 실행 세션, 전체 계획 또는 해당 단계의 명령 전문, 발급 시각과 이번 발급의 난수에 묶입니다. 보고문은 명령을 JSON 문자열로 표시하므로 따옴표 안의 공백과 줄바꿈도 확인할 수 있습니다.
+- `PLAN`과 사전발급한 `STEP`은 발급 시각부터 12시간, 실행할 때 따로 발급한 `STEP`은 2시간 동안 유효합니다. 같은 발급 방식으로 다시 요청하면 미사용 명령의 유효한 코드를 계속 쓸 수 있습니다. 이미 사용한 명령을 재시도하려면 새 단계 코드를 승인받습니다. 이전 여섯 자리 코드를 쓰던 열린 계획은 관문 실행기 변경으로 다시 검수하고 새 코드를 발급받습니다. 이전 기록만 남은 단계는 실제 운영 상태를 확인한 뒤 다음 조치를 결정하십시오.
 - 코드가 발급되었다고 해서 승인된 것이 아닙니다. 승인자(사람)가 직접 그 코드를 입력해야만 효력이 생깁니다.
-- 단계마다 따로 승인받으려면 `preapprove` 없이 바로 보고문(`node .agents/scripts/approval-plan.mjs report <계획서>`)을 올리고, 첫 실행 시도 때 관문이 발급하는 `PLAN-xxxxxx` / `STEP-xxxxxx` 코드를 순서대로 입력받을 수도 있습니다.
+- 단계마다 따로 승인받으려면 `preapprove` 없이 바로 보고문(`node .agents/scripts/approval-plan.mjs report <계획서>`)을 올리고, 첫 실행 시도 때 관문이 발급하는 `PLAN-…` / `STEP-…` 코드를 순서대로 입력받을 수도 있습니다.
 
 ---
 
@@ -178,7 +180,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 
 - **승인자에게 실행할 명령이나 스크립트를 복사·붙여넣기하게 넘기지 마십시오.**
 - 승인자는 보고문을 검토한 뒤 두 가지 방법 중 하나로 승인합니다:
-  1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-xxxxxx`와 허용할 단계의 `STEP-xxxxxx` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
+  1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-…`와 허용할 단계의 `STEP-…` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
   2. **디스코드 본인 메시지**: 승인자 본인이 디스코드에 코드를 남기고, `gates/deploy-approval-discord.json`에 채널·메시지 ID를 기록하면 관문이 디스코드 REST API로 직접 작성자 ID(`approver.discordUserId`)와 시각을 대조합니다.
 
 ---
@@ -194,8 +196,8 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
    - 고정 파일(`files`) 및 명령이 참조하는 모든 파일의 **현재 디스크 SHA-256 일치**
    - 적대 리뷰 영수증(`deploy-plan-review.json`)과 입력 매니페스트 해시 일치
    - 인스턴스 서비스 준비 상태(`config/deploy-gate.json` 및 `gates/deploy.json`)
-   - 사람의 `PLAN-xxxxxx` 및 해당 단계 `STEP-xxxxxx` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치, 와일드카드 금지)의 `readOnlyScripts`에 `{sha256, path, service}`가 리뷰 당시 영수증과 동일하게 묶여 있으며 대본 파일이 심볼릭 링크 없이 git 추적·HEAD 일치하고 명령이 허용된 정확한 꼴(`az vm run-command invoke ... --scripts @<등록 경로>` 또는 2토큰 `bash`/`sh <등록 경로>`)인 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
-2. **단계 성공 확인 기록 (`step-ok`)**: 다음 본 단계(`s2`)로 넘어가기 전에 반드시 앞 단계(`s1`)의 모든 명령이 실제로 실행(`status === "executed"`)되었고 성공 확인 출력 파일이 `step-ok`로 기록되어 있어야 합니다(`s1`을 실행하지 않고 `step-ok`만 먼저 부른 뒤 `s2`를 실행하는 단계 건너뛰기는 차단됩니다).
+   - 사람의 `PLAN-…` 및 해당 단계 `STEP-…` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치, 와일드카드 금지)의 `readOnlyScripts`에 `{sha256, path, service}`가 리뷰 당시 영수증과 동일하게 묶여 있으며 대본 파일이 심볼릭 링크 없이 git 추적·HEAD 일치하고 명령이 허용된 정확한 꼴(`az vm run-command invoke ... --scripts @<등록 경로>` 또는 2토큰 `bash`/`sh <등록 경로>`)인 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
+2. **단계 성공 확인 기록 (`step-ok`)**: 다음 본 단계(`s2`)를 시작하려면 관문이 앞 단계(`s1`)의 각 명령을 통과시킨 기록과 성공 확인 출력 파일이 필요합니다. 관문은 명령 원문별 SHA-256과 해당 단계의 사람 승인, 또는 그 명령의 읽기 전용 예외를 다시 확인합니다. 명령을 통과시킨 기록은 로컬 상태에 있으므로 이 파일의 소진 기록을 보존해야 합니다. 운영 결과는 실제 성공 확인 출력을 `step-ok`로 기록합니다.
    ```bash
    node .agents/scripts/approval-plan.mjs step-ok .agents/progress/<작업ID>/gates/deploy-plan.json s1 --evidence /tmp/s1-check.txt
    ```
