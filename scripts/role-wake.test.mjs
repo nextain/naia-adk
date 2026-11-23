@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
 import { ledgerPath } from './work-ledger/ledger.mjs';
 import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
+import { cardWakePublisher, escalationReason } from './work-ledger/card-wake.mjs';
 import { formatStalledCardWake } from './lib/stalled-cards.mjs';
 
 const NOW = Date.parse('2026-01-10T00:00:00Z');
@@ -71,6 +74,198 @@ function readAtDelivery(f) {
   };
   return received;
 }
+
+function ledgerWatcher(f, items, role = 'role-a') {
+  f.doc.wake_root = '.agents/work/l4/wake';
+  f.doc.delivery.max_per_run = 100;
+  f.write();
+  const inbox = path.join(f.root, f.doc.wake_root);
+  fs.mkdirSync(path.join(inbox, 'role-b'), { recursive: true });
+  const ledger = ledgerPath(f.root, role);
+  const save = () => writeWorkLedger(ledger, role, items);
+  save();
+  const config = path.join(f.dir, 'work-ledger.json');
+  fs.writeFileSync(config, JSON.stringify({ roles: [{ role, channels: [], human_ids: [] }] }));
+  const clock = path.join(f.dir, 'clock.cjs');
+  fs.writeFileSync(clock, 'Date.now = () => Number(process.env.LEDGER_FIXTURE_NOW);\n');
+  const cli = fileURLToPath(new URL('./work-ledger/ledger-watch.mjs', import.meta.url));
+  const scan = (minutes = 0) => {
+    const env = { ...process.env, ADK_FORBID_SYSTEM_RUNNER: '1', LEDGER_FIXTURE_NOW: String(NOW + minutes * 60_000) };
+    const output = execFileSync(process.execPath, ['--require', clock, cli, '--root', f.root, '--config', config], { env, encoding: 'utf8' });
+    const result = JSON.parse(output);
+    assert.equal(result.event, 'work-ledger-watch');
+    assert.deepEqual(result.errors, []);
+    return result.wakes;
+  };
+  const pending = () => fs.readdirSync(inbox).filter(name => name.endsWith('.md')).sort();
+  return { inbox, scan, save, pending };
+}
+
+test('independent watcher runs keep all 67 escalated cards pending once and the first consumer delivers each card', t => {
+  const f = setup(t);
+  const cards = Array.from({ length: 67 }, (_, i) => ledgerRow(i === 66 ? 'long'.repeat(90) : `work-${i}`, { status: 'escalated_human' }));
+  const { inbox, scan, pending, save } = ledgerWatcher(f, cards);
+  const ids = cards.map(card => card.id).sort();
+  for (const [i, minutes] of [0, 31, 62].entries()) {
+    assert.equal(scan(minutes).length, i === 0 ? 67 : 0);
+    const names = pending();
+    assert.equal(names.length, 67);
+    assert.deepEqual(names.map(name => fs.readFileSync(path.join(inbox, name), 'utf8').match(/^작업카드: (.+)$/m)[1]).sort(), ids);
+  }
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  fs.writeFileSync(path.join(inbox, '~notes-route-role-a.md'), 'Existing role note\n');
+  const firstLook = pump();
+  assert.equal(firstLook.baseline, 1);
+  assert.equal(firstLook.delivered, 67);
+  assert.equal(pump().delivered, 0);
+  for (const name of pending()) fs.unlinkSync(path.join(inbox, name));
+  assert.deepEqual(scan(3 * 24 * 60), []);
+  // Both a changed escalation and a later return to its earlier state are new episodes.
+  cards[0].note = 'new attempt'; save();
+  assert.equal(scan(3 * 24 * 60 + 1).length, 1);
+  cards[0].note = ''; save();
+  assert.equal(scan(3 * 24 * 60 + 2).length, 1);
+  cards[0].status = 'done'; save();
+  assert.deepEqual(scan(3 * 24 * 60 + 3), []);
+  cards[0].status = 'escalated_human'; save();
+  assert.equal(scan(3 * 24 * 60 + 4).length, 1);
+  assert.equal(pump().delivered, 3);
+  assert.equal(readLedger(registry, registry.roles[0]).size, 71);
+});
+
+test('a completed worker can publish new bytes during a handoff and after its receipt without replacing any notice', t => {
+  const f = setup(t);
+  const card = ledgerRow('worker-card', { due: '2030-01-01T00:00:00Z', worker: { name: 'writer', result: 'result.md', done_file: 'worker.done' } });
+  const { scan, save } = ledgerWatcher(f, [card]);
+  const result = path.join(f.root, card.worker.result), marker = path.join(f.root, card.worker.done_file);
+  fs.writeFileSync(result, 'first');
+  fs.writeFileSync(marker, 'complete');
+  fs.utimesSync(marker, new Date(NOW), new Date(NOW));
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  assert.equal(scan().length, 1);
+  const received = [];
+  f.deps.run = (bin, [, file]) => {
+    assert.equal(bin, '/opt/deliver');
+    received.push({ file, body: fs.readFileSync(file, 'utf8') });
+    if (received.length === 1) {
+      assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+      fs.writeFileSync(result, 'second');
+      fs.utimesSync(marker, new Date(NOW + 60_000), new Date(NOW + 60_000));
+      assert.equal(scan(1).length, 1);
+      assert.equal(fs.readFileSync(file, 'utf8'), received[0].body);
+    }
+  };
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 0);
+  // Temporary unavailability and unrelated card edits leave confirmed bytes intact.
+  fs.renameSync(result, `${result}.saved`);
+  assert.deepEqual(scan(2), []);
+  fs.renameSync(`${result}.saved`, result);
+  card.title = 'revised title'; save();
+  assert.deepEqual(scan(3), []);
+  fs.writeFileSync(result, 'third');
+  assert.equal(scan(4).length, 1);
+  assert.equal(pump().delivered, 1);
+  fs.utimesSync(marker, new Date(NOW + 5 * 60_000), new Date(NOW + 5 * 60_000));
+  assert.equal(scan(5).length, 1);
+  assert.equal(pump().delivered, 1);
+  assert.deepEqual(scan(24 * 60 + 2), []);
+  assert.equal(pump().delivered, 0);
+  assert.equal(new Set(received.map(r => r.file)).size, 4);
+  for (const [i, bytes] of ['first', 'second', 'third', 'third'].entries()) {
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    assert.ok(received[i].body.includes(`결과 SHA-256: ${sha}`));
+    assert.equal(fs.readFileSync(received[i].file, 'utf8'), received[i].body);
+  }
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].sort(), received.map(r => path.basename(r.file)).sort());
+});
+
+test('upgrade adopts old pending, delivered and archived card notices without rewriting their receipts', async t => {
+  const f = setup(t);
+  const cards = ['pending', 'consumed', 'archived'].map(id => ledgerRow(id, { status: 'escalated_human', result: 'prior-result.md' }));
+  const { inbox, scan, pending, save } = ledgerWatcher(f, cards);
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  const sent = {};
+  const oldNotice = async (card, at) => {
+    const stamp = new Date(at).toISOString().replace(/\D/g, '');
+    sent[JSON.stringify(['role-a', card.id, escalationReason])] = at;
+    await writeLedgerWake(inbox, { stamp, role: 'role-a', id: card.id, title: card.title, reason: escalationReason,
+      details: `출처: ${card.from.channel}/${card.from.msg_id}\n기한: ${card.due}\n결과: (없음)\n메모: (없음)` });
+    return path.join(inbox, `${stamp}-ledger-${card.id}-route-role-a.md`);
+  };
+  const consumed = await oldNotice(cards[1], NOW), archived = await oldNotice(cards[2], NOW);
+  assert.equal(pump().delivered, 2);
+  fs.unlinkSync(archived);
+  // Every already queued historical copy is retained for its existing consumer key.
+  const original = await oldNotice(cards[0], NOW), repeated = await oldNotice(cards[0], NOW + 1);
+  const receipts = path.join(registry.stateDir, 'delivered-role-a.jsonl');
+  const before = fs.readFileSync(receipts);
+  fs.writeFileSync(path.join(path.dirname(ledgerPath(f.root, 'role-a')), 'watch-state.json'), JSON.stringify({ version: 1, sent }));
+  assert.deepEqual(scan(62), []);
+  assert.deepEqual(pending(), [consumed, original, repeated].map(file => path.basename(file)).sort());
+  assert.deepEqual(fs.readFileSync(receipts), before);
+  assert.equal(pump().delivered, 2);
+  assert.deepEqual(scan(2 * 24 * 60), []);
+  cards[1].result = 'new-result.md'; save();
+  assert.equal(scan(2 * 24 * 60 + 1).length, 1);
+  assert.equal(pump().delivered, 1);
+});
+
+test('a cold box honors old handoffs and shares no receipt keys between compact events for a long role', t => {
+  const f = setup(t);
+  const role = 'r'.repeat(205);
+  f.doc.roles = { [role]: f.doc.roles['role-a'] };
+  const cards = ['first', 'second'].map(id => ledgerRow(id, { status: 'escalated_human' }));
+  const { inbox, pending, scan, save } = ledgerWatcher(f, cards, role);
+  assert.equal(scan().length, 2);
+  const names = pending();
+  assert.equal(names.length, 2);
+  assert.ok(names.every(name => name.startsWith('~') && Buffer.byteLength(name) <= 255));
+  f.doc.delivery.baseline_seen_file = path.join(f.dir, 'delivered-by-previous-instance');
+  fs.writeFileSync(f.doc.delivery.baseline_seen_file, path.join(inbox, names[0]) + '\n');
+  f.write();
+  const registry = f.load();
+  const pump = () => deliver(registry, f.deps).roles[role];
+  assert.equal(pump().delivered, 1);
+  assert.ok(f.state.runs[0][2].endsWith(names[1]));
+  cards[0].note = 'next attempt'; save();
+  assert.equal(scan(1).length, 1);
+  assert.equal(pump().delivered, 1);
+  assert.equal(pump().delivered, 0);
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].sort(), pending());
+});
+
+test('publication retries across watch-state commit and inbox rename never reissue a consumed event', async t => {
+  const f = setup(t);
+  const wakeDir = path.join(f.root, 'wake');
+  const wakes = [];
+  const empty = () => ({ card_events: {}, sent: {} });
+  const publisher = state => cardWakePublisher({ root: f.root, wakeDir, state, wakes, oldWakeFiles: [] });
+  const observation = id => ({ role: 'role-a', item: ledgerRow(id), reason: escalationReason, details: 'first attempt', revision: 'first' });
+  // A terminated watcher prepared a body without committing the corresponding head.
+  await publisher(empty()).observe(observation('abandoned'));
+  const committed = empty(), next = publisher(committed);
+  await next.flush();
+  assert.deepEqual(wakes, []);
+  await next.observe(observation('confirmed'));
+  // The next termination followed the state commit and preceded the inbox rename.
+  const recovered = publisher(structuredClone(committed));
+  await recovered.flush();
+  assert.deepEqual(wakes.map(wake => wake.id), ['confirmed']);
+  await recovered.flush(true);
+  const [name] = fs.readdirSync(wakeDir).filter(name => name.endsWith('.md'));
+  fs.unlinkSync(path.join(wakeDir, name));
+  await recovered.observe(observation('confirmed'));
+  await recovered.flush(true);
+  assert.deepEqual(wakes.map(wake => wake.id), ['confirmed']);
+  assert.deepEqual(fs.readdirSync(path.join(wakeDir, '.ledger-card-outbox')), []);
+});
 
 test('work-header delivery uses producer metadata, falls back to recent work, and leaves the original intact', t => {
   const f = setup(t);
@@ -879,4 +1074,710 @@ test('the example configuration is a valid registry', () => {
     { kind: 'wake-routes', roles: null },
     { kind: 'session-health', roles: ['role-a'] },
   ]);
+});
+
+test('wakes for the same discord message are delivered once, merged', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const box = path.join(f.root, 'wake');
+  const gw = path.join(box, '0001-100000000000000001-gw.md');
+  const route = path.join(box, '0002-100000000000000001-route-role-a.md');
+  const solo = path.join(box, '0003-100000000000000002-gw.md');
+  fs.writeFileSync(gw, '# Discord wake\nMessage ID: 100000000000000001\nbody one\n');
+  fs.writeFileSync(route, '[relay] https://discord.com/channels/1/2/100000000000000001\n');
+  fs.writeFileSync(solo, '# Discord wake\nMessage ID: 100000000000000002\nsolo\n');
+  for (const file of [gw, route, solo]) fs.utimesSync(file, new Date(NOW), new Date(NOW));
+  assert.deepEqual(deliver(registry, f.deps).roles, {
+    'role-a': { delivered: 2, failed: 0, pending: 0 },
+    'role-b': { delivered: 0, failed: 0, pending: 0 },
+  });
+  assert.equal(f.state.runs.length, 2);
+  assert.ok(f.state.runs[0][2].endsWith('.merged.md'));
+  assert.equal(f.state.runs[1][2], solo);
+  assert.deepEqual([...readLedger(registry, registry.roles[0])].filter(key => !key.startsWith('message:')).sort(), [gw, route, solo].map(file => path.basename(file)).sort());
+  deliver(registry, f.deps);
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('ledger cards with one source message keep separate delivery attempts', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const id of ['card-a', 'card-b']) {
+    const file = f.put('role-a', `0001-ledger-${id}-route-role-a.md`);
+    fs.writeFileSync(file, `[장부] ${id}\n출처: 100000000000000003/100000000000000001\n`);
+  }
+  const result = deliver(registry, f.deps).roles['role-a'];
+  assert.equal(result.delivered, 2);
+  assert.equal(result.pending, 0);
+  assert.equal(f.state.runs.length, 2);
+  assert.ok(f.state.runs.every(run => !run[2].endsWith('.merged.md')));
+});
+
+test('oversized duplicate groups deliver complete originals without truncation', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const files = ['0001-100000000000000001-gw.md', '0002-100000000000000001-route-role-a.md'].map(name => f.put('role-a', name));
+  const bodies = files.map((file, i) => `${i}`.repeat(20000));
+  files.forEach((file, i) => fs.writeFileSync(file, bodies[i]));
+  const received = [];
+  f.deps.run = (command, args) => received.push(fs.readFileSync(args[1], 'utf8'));
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 2);
+  assert.deepEqual(received, bodies);
+  assert.equal(readLedger(registry, registry.roles[0]).size, 2);
+});
+
+test('bounded delivery leaves no unattempted merged spool files', t => {
+  const f = setup(t);
+  f.doc.delivery.max_per_run = 1;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const id of ['100000000000000001', '100000000000000002']) {
+    f.put('role-a', `0001-${id}-gw.md`);
+    f.put('role-a', `0002-${id}-route-role-a.md`);
+  }
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 2);
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 0);
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+});
+
+test('failed merged delivery retains every member for retry and cleans its spool', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  const second = f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  f.state.failOn = '.merged.md';
+  const failed = deliver(registry, f.deps).roles['role-a'];
+  assert.deepEqual(failed, { delivered: 0, failed: 2, pending: 2 });
+  assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  assert.ok(fs.existsSync(first) && fs.existsSync(second));
+  assert.deepEqual(fs.readdirSync(path.join(f.dir, 'state', 'spool', 'role-a')), []);
+  f.state.now += 60000;
+  f.state.failOn = null;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(readLedger(registry, registry.roles[0]).size, 3);
+});
+
+test('a duplicate relay arriving in a later run is recorded without another input', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 1);
+  assert.ok(readLedger(registry, registry.roles[0]).has('0002-100000000000000001-route-role-a.md'));
+});
+
+test('cross-run message receipts survive retention of the original relay', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  fs.unlinkSync(first);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 0);
+  assert.equal(f.state.runs.length, 1);
+});
+
+test('oversized groups crossing the run limit preserve every original body', t => {
+  const f = setup(t);
+  f.doc.delivery.max_per_run = 1;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-100000000000000001-gw.md');
+  const second = f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  fs.writeFileSync(first, 'a'.repeat(20000));
+  fs.writeFileSync(second, 'b'.repeat(20000));
+  const received = [];
+  f.deps.run = (command, args) => received.push(fs.readFileSync(args[1], 'utf8'));
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 1);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].pending, 0);
+  assert.deepEqual(received, ['a'.repeat(20000), 'b'.repeat(20000)]);
+});
+
+
+test('a ledger notice remains deliverable after its source Discord message was delivered', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  const ledger = f.put('role-a', '0002-ledger-card-a-route-role-a.md');
+  fs.writeFileSync(ledger, '[장부] overdue card a\n출처: 100000000000000003/100000000000000001\n');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 2);
+  assert.equal(f.state.runs[1][2], ledger);
+});
+
+
+test('legacy successful filename receipts suppress a later relay after upgrade', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  fs.appendFileSync(path.join(f.dir, 'state', 'delivered-role-a.jsonl'), JSON.stringify({
+    file: '0001-100000000000000001-gw.md', at: new Date(NOW).toISOString(), status: 'delivered',
+  }) + '\n');
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(f.state.runs.length, 0);
+});
+
+test('legacy baseline rows leave new source-message relays deliverable', t => {
+  const f = setup(t);
+  const registry = f.load();
+  f.put('role-a', '0001-100000000000000001-gw.md');
+  deliver(registry, f.deps);
+  f.put('role-a', '0002-100000000000000001-route-role-a.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.equal(f.state.runs.length, 1);
+});
+
+
+test('real stalled ledger notices read their body before considering a filename id', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const names = [
+    '100000000000000004-stalled-adk-canonical-100000000000000005-route-role-a.md',
+    '100000000000000006-stalled-adk-canonical-100000000000000005-route-role-a.md',
+  ];
+  for (const name of names) {
+    const file = f.put('role-a', name);
+    fs.writeFileSync(file, '[장부] 멈춘 카드: 하네스북 기준 naia-adk 복구\n역할: alpha\n카드 id: adk-canonical-100000000000000005\n');
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('a ledger body overrides a filename that matches the direct relay format', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const stamp of ['0001', '0002']) {
+    const file = f.put('role-a', `${stamp}-100000000000000001-route-role-a.md`);
+    fs.writeFileSync(file, '[장부] overdue\n출처: 100000000000000003/100000000000000001\n');
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+  assert.equal(f.state.runs.length, 2);
+});
+
+test('notes referring to one source link retain their separate delivery attempts', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const name of ['0001-note.md', '0002-note.md']) {
+    const file = f.put('role-a', name);
+    fs.writeFileSync(file, `Evidence for ${name} https://discord.com/channels/1/2/100000000000000001\n`);
+    assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  }
+});
+
+test('merged relays preserve the matching-source work header and both original bodies', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  f.doc.roles['role-a'].ledger = 'custom.json';
+  f.write();
+  writeWorkLedger(path.join(f.root, 'custom.json'), 'role-a', [
+    ledgerRow('original'),
+    ledgerRow('recent', { from: { channel: '', msg_id: '-', quote: '' }, due: '2026-01-12T00:00:00Z' }),
+  ]);
+  const registry = f.load();
+  const received = readAtDelivery(f);
+  deliver(registry, f.deps);
+  const route = f.put('role-a', `0001-${ORIGINAL_MESSAGE}-route-role-a.md`);
+  const gw = f.put('role-a', `0002-${ORIGINAL_MESSAGE}-gw.md`);
+  const routeBody = 'Relay copy with no source metadata\n';
+  const gatewayBody = `# Discord wake\n\nRole: role-a\nChannel: general (${SOURCE_CHANNEL})\nAuthor: Human\nMessage ID: ${ORIGINAL_MESSAGE}\n\nOriginal request\n`;
+  fs.writeFileSync(route, routeBody);
+  fs.writeFileSync(gw, gatewayBody);
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.equal(received.length, 1);
+  assert.ok(received[0].body.startsWith('[내 장부 먼저]\n- original | open |'));
+  assert.ok(received[0].body.includes(routeBody) && received[0].body.includes(gatewayBody));
+  assert.equal(fs.readFileSync(route, 'utf8'), routeBody);
+  assert.equal(fs.readFileSync(gw, 'utf8'), gatewayBody);
+  assert.deepEqual(fs.readdirSync(path.join(registry.stateDir, 'spool', 'role-a')), []);
+});
+
+test('merged via relays retry with fresh work headers and preserve original receipt keys', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  const outside = path.join(f.dir, 'remote');
+  const ledger = path.join(f.root, 'custom.json');
+  f.doc.roles['role-a'].ledger = ledger;
+  f.doc.roles['role-a'].extra_boxes = [{ path: outside, via: ['/opt/read'] }];
+  f.write();
+  const names = [`0001-${ORIGINAL_MESSAGE}-gw.md`, `0002-${ORIGINAL_MESSAGE}-route-role-a.md`];
+  const bodies = [
+    `# Discord wake\n\nRole: role-a\nChannel: general (${SOURCE_CHANNEL})\nAuthor: Human\nMessage ID: ${ORIGINAL_MESSAGE}\n\nRequest\n`,
+    'Relayed request\n',
+  ];
+  let found = false, reads = 0;
+  const received = readAtDelivery(f);
+  const run = f.deps.run;
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/read' && args[0] === 'find') return found ? names.map(name => `${NOW / 1000}\t${name}\n`).join('') : '';
+    if (command === '/opt/read' && args[0] === 'cat') {
+      reads += 1;
+      return Buffer.from(bodies[names.indexOf(path.basename(args[1]))]);
+    }
+    return run(command, args, options);
+  };
+  const registry = f.load();
+  deliver(registry, f.deps);
+  found = true;
+  writeWorkLedger(ledger, 'role-a', [ledgerRow('first')]);
+  f.state.failOn = names[0];
+  assert.equal(deliver(registry, f.deps).roles['role-a'].failed, 2);
+  assert.equal(readLedger(registry, registry.roles[0]).has(path.join(outside, names[0])), false);
+  writeWorkLedger(ledger, 'role-a', [ledgerRow('second')]);
+  f.state.now += 61_000;
+  f.state.failOn = null;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(reads, 4);
+  assert.ok(received[0].body.startsWith('[내 장부 먼저]\n- first |'));
+  assert.ok(received[1].body.startsWith('[내 장부 먼저]\n- second |'));
+  for (const name of names) assert.equal(readLedger(registry, registry.roles[0]).has(path.join(outside, name)), true);
+  assert.deepEqual(fs.readdirSync(path.join(registry.stateDir, 'spool', 'role-a')), []);
+});
+
+test('grouped delivery keeps role routing and the configured busy observation', t => {
+  const f = setup(t);
+  f.doc.delivery.busy_probe = ['/opt/probe', '{role}'];
+  f.write();
+  const received = readAtDelivery(f);
+  const run = f.deps.run;
+  const probed = [];
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/probe') { probed.push(args[0]); return 'busy'; }
+    return run(command, args, options);
+  };
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const role of ['role-a', 'role-b']) {
+    for (const stamp of ['0001', '0002']) {
+      const file = path.join(f.root, 'wake', `${stamp}-${ORIGINAL_MESSAGE}-route-${role}.md`);
+      fs.writeFileSync(file, `Wake for ${role}\n`);
+    }
+  }
+  const result = deliver(registry, f.deps).roles;
+  for (const role of ['role-a', 'role-b']) assert.deepEqual(result[role], { delivered: 1, failed: 0, pending: 0, busy: true });
+  assert.deepEqual(probed, ['role-a', 'role-b']);
+  assert.equal(received.length, 2);
+  for (const attempt of received) {
+    assert.ok(attempt.body.includes(`Wake for ${attempt.role}`));
+    assert.ok(!attempt.body.includes(`Wake for ${attempt.role === 'role-a' ? 'role-b' : 'role-a'}`));
+  }
+});
+
+
+test('consumer exit 75 keeps originals pending, clears old failures and keeps the heartbeat healthy', t => {
+  const f = setup(t);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const first = f.put('role-a', '0001-111111111111111111-gw.md');
+  const second = f.put('role-a', '0002-111111111111111111-route-role-a.md');
+  const run = f.deps.run;
+  let status = 1, attempts = 0;
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/deliver') {
+      attempts += 1;
+      if (status) {
+        const error = new Error('consumer deferred or failed');
+        error.status = status;
+        throw error;
+      }
+    }
+    return run(command, args, options);
+  };
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 2, pending: 2 });
+  f.state.now += 61_000;
+  status = 75;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.deepEqual(readFailures(registry, registry.roles[0]), {});
+  assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  assert.ok(fs.existsSync(first) && fs.existsSync(second));
+  const heartbeat = JSON.parse(fs.readFileSync(path.join(registry.stateDir, 'deliver-heartbeat.json'), 'utf8'));
+  assert.equal(heartbeat.ok_at, new Date(f.state.now).toISOString());
+  assert.equal(main(['deliver', '--config', f.file], {}, f.deps, () => {}), 0);
+  assert.equal(attempts, 3, 'deferred inputs retry on the next pass without failure backoff');
+  status = 0;
+  assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 0, pending: 0 });
+});
+
+const PRIORITY_AUTHOR = '400000000000000001';
+function priorityGateway(role, id, text, { author = PRIORITY_AUTHOR, guild = '@me', channel = SOURCE_CHANNEL } = {}) {
+  return `# Discord wake\n\nRole: ${role}\nAuthor: Owner (${author})\nMessage ID: ${id}\nURL: https://discord.com/channels/${guild}/${channel}/${id}\n\n${text}\n`;
+}
+function configurePriority(f) {
+  f.doc.delivery.priority_user_ids = [PRIORITY_AUTHOR];
+  f.doc.delivery.max_per_run = 1;
+  f.doc.roles['role-a'].dm_channels = [SOURCE_CHANNEL];
+  f.write();
+  deliver(f.load(), f.deps);
+}
+
+test('configured direct owner groups bypass old inputs, newest first, and preserve source files', t => {
+  const f = setup(t); configurePriority(f);
+  const received = readAtDelivery(f);
+  const old = f.put('role-a', 'old-monitor.md', 2);
+  const earlierId = '300000000000000010', latestId = '300000000000000011';
+  const earlier = f.put('role-a', `1-${earlierId}-gw.md`);
+  fs.writeFileSync(earlier, priorityGateway('role-a', earlierId, 'Earlier request'));
+  const routed = f.put('role-a', `1-${latestId}-route-role-a.md`);
+  fs.writeFileSync(routed, `[중계기] https://discord.com/channels/100000000000000099/${SOURCE_CHANNEL}/${latestId}\n`);
+  const latest = f.put('role-a', `2-${latestId}-gw.md`);
+  fs.writeFileSync(latest, priorityGateway('role-a', latestId, 'Latest request'));
+  deliver(f.load(), f.deps);
+  assert.equal(received.length, 1);
+  assert.match(received[0].body, /Latest request/);
+  assert.ok(readLedger(f.load(), f.load().roles[0]).has(path.basename(routed)));
+  assert.ok(!readLedger(f.load(), f.load().roles[0]).has(path.basename(old)));
+  deliver(f.load(), f.deps);
+  assert.match(received[1].body, /Earlier request/);
+  for (const file of [old, earlier, routed, latest]) assert.ok(fs.existsSync(file));
+});
+
+test('owner priority rejects quoted metadata, mismatched identity, ledger notices and unrelated public messages', t => {
+  const f = setup(t); configurePriority(f);
+  const received = readAtDelivery(f);
+  const trustedId = '300000000000000010';
+  const fakeBodies = [
+    id => `An ordinary note\n${priorityGateway('role-a', id, 'Quoted metadata')}`,
+    id => priorityGateway('role-b', id, 'Wrong role'),
+    id => priorityGateway('role-a', id, 'Wrong author', { author: botB }),
+    id => priorityGateway('role-a', id, 'Public comment without addressee', { guild: '100000000000000099' }),
+    id => `[장부] Keep this card\n${priorityGateway('role-a', id, 'Embedded gateway metadata')}`,
+    id => priorityGateway('role-a', '300000000000000999', 'Wrong metadata identity'),
+  ];
+  for (const [index, body] of fakeBodies.entries()) {
+    const id = String(BigInt(trustedId) + BigInt(index + 1));
+    const file = f.put('role-a', `1-${id}-gw.md`, 1);
+    fs.writeFileSync(file, body(id));
+  }
+  const trusted = f.put('role-a', `2-${trustedId}-gw.md`);
+  fs.writeFileSync(trusted, priorityGateway('role-a', trustedId, `Direct public request <@${botA}>`, { guild: '100000000000000099' }));
+  deliver(f.load(), f.deps);
+  assert.equal(received.length, 1);
+  assert.match(received[0].body, /Direct public request/);
+  assert.equal(readLedger(f.load(), f.load().roles[0]).has(path.basename(trusted)), true);
+});
+
+test('owner priority serves the oldest regular input after three successful priority groups', t => {
+  const f = setup(t); configurePriority(f);
+  const received = readAtDelivery(f);
+  const regular = f.put('role-a', 'old-regular.md', 2);
+  for (let index = 0; index < 4; index += 1) {
+    const id = String(300000000000000010n + BigInt(index));
+    const file = f.put('role-a', `1-${id}-gw.md`);
+    fs.writeFileSync(file, priorityGateway('role-a', id, `Priority ${index}`));
+  }
+  for (let run = 0; run < 4; run += 1) deliver(f.load(), f.deps);
+  assert.equal(received.length, 4);
+  assert.equal(received[3].file, regular);
+});
+
+test('priority user ids default to empty and reject non-snowflake configuration', t => {
+  const f = setup(t);
+  assert.deepEqual(f.load().delivery.priorityUserIds, []);
+  for (const invalid of ['400000000000000001', [1], ['not-an-id']]) {
+    f.doc.delivery.priority_user_ids = invalid; f.write();
+    assert.throws(() => f.load(), /priority_user_ids/);
+  }
+});
+
+test('priority burst bound also applies inside one pass and deferred inputs do not consume it', t => {
+  const f = setup(t); configurePriority(f);
+  f.doc.delivery.max_per_run = 4; f.write();
+  const received = readAtDelivery(f);
+  const regular = f.put('role-a', 'old-regular.md', 2);
+  for (let index = 0; index < 4; index += 1) {
+    const id = String(300000000000000010n + BigInt(index));
+    const file = f.put('role-a', `1-${id}-gw.md`);
+    fs.writeFileSync(file, priorityGateway('role-a', id, `Priority ${index}`));
+  }
+  const run = f.deps.run;
+  f.deps.run = (command, args, options) => {
+    if (command === '/opt/deliver') { const error = new Error('busy'); error.status = 75; throw error; }
+    return run(command, args, options);
+  };
+  deliver(f.load(), f.deps);
+  assert.equal(fs.existsSync(path.join(f.doc.state_dir, 'priority-role-a.json')), false);
+  f.deps.run = run;
+  deliver(f.load(), f.deps);
+  assert.equal(received.length, 4);
+  assert.equal(received[3].file, regular);
+});
+
+test('late native acceptance advances the direct-request burst once and gives the oldest regular input its turn', t => {
+  const f = setup(t); configurePriority(f);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify'];
+  f.write();
+  const registry = f.load();
+  const regular = f.put('role-a', 'old-regular.md', 2);
+  const priorities = Array.from({ length: 4 }, (_, i) => {
+    const id = String(300000000000000010n + BigInt(i));
+    const file = f.put('role-a', `1-${id}-gw.md`);
+    fs.writeFileSync(file, priorityGateway('role-a', id, `Request ${i}`));
+    return path.basename(file);
+  }).reverse();
+  const received = [], accepted = new Set();
+  const saved = path.join(registry.stateDir, 'submissions/role-a.json');
+  const priorityFile = path.join(registry.stateDir, 'priority-role-a.json');
+  f.deps.run = (bin, args, options) => {
+    const env = options.env;
+    if (bin === '/opt/deliver') { received.push(path.basename(args[1])); return ''; }
+    assert.equal(bin, '/opt/verify');
+    if (!accepted.has(env.ADK_WAKE_ATTEMPT)) return '';
+    return JSON.stringify({ status: 'accepted', attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256,
+      role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'receiver', receipt: 'native-' + env.ADK_WAKE_ATTEMPT });
+  };
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  let last;
+  const expected = [...priorities.slice(0, 3), path.basename(regular), priorities[3]];
+  for (const [i, name] of expected.entries()) {
+    assert.equal(pump().deferred, 1);
+    assert.equal(pump().deferred, 1);
+    assert.deepEqual(received, expected.slice(0, i + 1));
+    assert.equal(received.at(-1), name);
+    if (i === 0) assert.equal(fs.existsSync(priorityFile), false);
+    last = JSON.parse(fs.readFileSync(saved, 'utf8'));
+    accepted.add(last.attempt);
+    assert.equal(pump().delivered, 1);
+    assert.equal(JSON.parse(fs.readFileSync(priorityFile, 'utf8')).streak, [1, 2, 3, 0, 1][i]);
+  }
+  // An interruption after both receipts were written can leave the attempt file behind.
+  fs.writeFileSync(saved, JSON.stringify(last));
+  assert.equal(pump().delivered, 0);
+  assert.equal(JSON.parse(fs.readFileSync(priorityFile, 'utf8')).streak, 1);
+  assert.deepEqual(received, expected);
+});
+
+test('separate pump and receiver processes confirm an accepted input once after presentation and restart', t => {
+  const f = setup(t);
+  const adapter = path.join(f.dir, 'interactive.mjs');
+  fs.writeFileSync(adapter, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { createHash } from 'node:crypto';
+    const [mode, dir, role, file] = process.argv.slice(2);
+    const rows = name => fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').trim().split('\\n').filter(Boolean).map(row => JSON.parse(row)) : [];
+    const append = (name, value) => fs.appendFileSync(path.join(dir, name), JSON.stringify(value) + '\\n');
+    if (mode === 'present') {
+      const attempt = JSON.parse(fs.readFileSync(path.join(dir, 'state/submissions', role + '.json'), 'utf8'));
+      const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (process.env.ADK_WAKE_ATTEMPT !== attempt.attempt || sha256 !== process.env.ADK_WAKE_PAYLOAD_SHA256) throw Error('Uncorrelated presentation');
+      const binding = { attempt: attempt.attempt, sha256, role, pane: process.env.ADK_WAKE_PANE };
+      if (fs.existsSync(path.join(dir, 'busy'))) {
+        append('decisions', { ...binding, status: 'rejected', session: 'local-session', receipt: 'before-input' });
+        process.exit(75);
+      }
+      append('presented', { ...binding, status: 'typed' });
+    } else if (mode === 'accept') {
+      const draft = rows('presented').at(-1);
+      append('native-inputs', { ...draft, status: 'accepted', session: 'local-session', receipt: 'input-' + (rows('native-inputs').length + 1) });
+    } else {
+      const receipt = [...rows('native-inputs'), ...rows('decisions')].find(r => r.attempt === process.env.ADK_WAKE_ATTEMPT);
+      console.log(JSON.stringify(receipt ?? rows('presented').at(-1)));
+    }
+  `);
+  f.doc.delivery.command = [process.execPath, adapter, 'present', f.dir, '{role}', '{file}'];
+  f.doc.roles['role-a'].verify_submission = [process.execPath, adapter, 'verify', f.dir, '{role}', '{pane}'];
+  f.write();
+  const script = fileURLToPath(new URL('./role-wake.mjs', import.meta.url));
+  const pump = () => JSON.parse(execFileSync(process.execPath, [script, 'deliver', '--config', f.file, '--role', 'role-a'], { encoding: 'utf8' })).roles['role-a'];
+  const accept = () => execFileSync(process.execPath, [adapter, 'accept', f.dir]);
+  const lines = name => fs.readFileSync(path.join(f.dir, name), 'utf8').trim().split('\n').map(row => JSON.parse(row));
+  pump();
+  f.put('role-a', '001-111111111111111111-gw.md');
+  f.put('role-a', '002-111111111111111111-route-role-a.md');
+  const busy = path.join(f.dir, 'busy');
+  fs.writeFileSync(busy, '');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.equal(fs.existsSync(path.join(f.dir, 'presented')), false);
+  fs.unlinkSync(busy);
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.notEqual(lines('decisions')[0].attempt, lines('presented')[0].attempt);
+  f.put('role-a', '003-111111111111111111-route-role-a.md');
+  f.put('role-a', '004-distinct.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 4, deferred: 2 });
+  assert.equal(lines('presented').length, 1);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'state/delivered-role-a.jsonl'), 'utf8'), '');
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 1, deferred: 1 });
+  const accepted = lines('state/delivered-role-a.jsonl').filter(row => row.status === 'delivered');
+  assert.equal(accepted.length, 2);
+  assert.ok(accepted.every(row => row.submission.receipt === 'input-1' && row.submission.sha256 === lines('presented')[0].sha256));
+  assert.equal(lines('presented').length, 2);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  f.put('role-a', '005-distinct-with-identical-text.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const [, second, third] = lines('presented');
+  assert.equal(second.sha256, third.sha256);
+  assert.notEqual(second.attempt, third.attempt);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(lines('presented').length, 3);
+  assert.equal(fs.existsSync(path.join(f.dir, 'state/submissions/role-a.json')), false);
+});
+
+test('uncertain verified inputs wait through timeouts and mismatched receipts; only terminal rejection permits another presentation', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  const registry = f.load();
+  let mode = 'timeout', presentations = 0, launched;
+  const run = f.deps.run;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver' && args[0] === 'role-a') {
+      presentations++;
+      launched = options.env.ADK_WAKE_ATTEMPT;
+      throw Object.assign(new Error('acknowledgement not yet available'), { status: 75 });
+    }
+    if (bin !== '/opt/verify') return run(bin, args, options);
+    assert.deepEqual(args, ['role-a', 'w1:p1']);
+    assert.equal(options.timeout, 5_000);
+    if (mode === 'timeout') throw Object.assign(new Error('verification deadline'), { code: 'ETIMEDOUT' });
+    if (mode === 'unreadable') return 'not JSON';
+    const env = options.env;
+    const answer = { status: 'accepted', role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'native-event',
+      attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256 };
+    if (mode === 'rejected') { answer.status = 'rejected'; mode = 'timeout'; }
+    else if (mode !== 'accepted') answer[mode] = '';
+    return JSON.stringify(answer);
+  };
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', '001.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const first = launched;
+  for (mode of ['timeout', 'unreadable', 'status', 'attempt', 'sha256', 'role', 'pane', 'session', 'receipt']) {
+    assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+    assert.equal(presentations, 1);
+    assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  }
+  delete f.doc.roles['role-a'].verify_submission;
+  f.write();
+  const disabled = deliver(f.load(), f.deps, { only: 'role-a' }).roles['role-a'];
+  assert.equal(disabled.pending, 1);
+  assert.match(disabled.error, /Restore verify_submission/);
+  assert.equal(presentations, 1);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  mode = 'rejected';
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  assert.equal(presentations, 2);
+  assert.notEqual(launched, first);
+  mode = 'accepted';
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(presentations, 2);
+  assert.equal(pump().delivered, 0);
+});
+
+test('a native acknowledgement survives interrupted ledger writes and clears earlier failure state', t => {
+  const f = setup(t);
+  let registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', 'one.md');
+  f.state.failOn = 'one.md';
+  assert.equal(pump().failed, 1);
+  f.state.failOn = null;
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify'];
+  f.write();
+  registry = f.load();
+  f.state.now += 61_000;
+  const ledger = path.join(registry.stateDir, 'delivered-role-a.jsonl');
+  let submissions = 0, verifications = 0;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver') { submissions++; return ''; }
+    assert.equal(bin, '/opt/verify');
+    verifications++;
+    const env = options.env;
+    // The native session accepted this input. Its delivery ledger then became unavailable.
+    fs.renameSync(ledger, `${ledger}.saved`);
+    fs.mkdirSync(ledger);
+    return JSON.stringify({ status: 'accepted', attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256,
+      role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'input-1' });
+  };
+  assert.equal(pump().aborted, true);
+  fs.rmdirSync(ledger);
+  fs.renameSync(`${ledger}.saved`, ledger);
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(readFailures(registry, registry.roles[0]), {});
+  assert.equal(JSON.parse(fs.readFileSync(ledger, 'utf8')).submission.receipt, 'input-1');
+  assert.equal(pump().delivered, 0);
+  assert.equal(submissions, 1);
+  assert.equal(verifications, 1);
+});
+
+test('common dispatcher and session receiver agree on rejected and accepted native receipts across processes', t => {
+  const f = setup(t), adapter = path.join(f.dir, 'receiver.mjs');
+  const receiver = new URL('./role-session-input.mjs', import.meta.url).href;
+  const library = new URL('./lib/role-session-input.mjs', import.meta.url).href;
+  fs.writeFileSync(adapter, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { main } from ${JSON.stringify(receiver)};
+    import { payloadHash } from ${JSON.stringify(library)};
+    const [mode, dir, role, file] = process.argv.slice(2);
+    const attempt = process.env.ADK_WAKE_ATTEMPT;
+    const native = path.join(dir, 'native-' + attempt + '.json');
+    let clock = 0;
+    const deps = {
+      now: () => clock, sleep: async ms => { clock += ms; },
+      inspect: async () => ({ foreground: [{ pid: 42, args: 'codex' }], processes: [],
+        screen: fs.existsSync(path.join(dir, 'busy')) ? '• Working (2m • esc\\n› Ask Codex to do anything' : '› Ask Codex to do anything' }),
+      native: async () => ({ process_start: '111', process_cwd: '/fixture', thread_id: 'fixture-thread', cwd: '/fixture',
+        state: 'idle', file_id: '1:2', byte_size: 100, next_cursor: { offset: 100 },
+        ...(fs.existsSync(native) ? { ack: JSON.parse(fs.readFileSync(native, 'utf8')) } : {}) }),
+      submit: async (_profile, text) => {
+        const ack = { thread_id: 'fixture-thread', offset: 110, payload_sha256: payloadHash(text) };
+        fs.appendFileSync(path.join(dir, 'presented'), JSON.stringify({ attempt, ack }) + '\\n');
+        if (!fs.existsSync(path.join(dir, 'uncertain'))) fs.writeFileSync(native, JSON.stringify(ack));
+      },
+    };
+    const args = [...(mode === 'verify' ? ['verify'] : []), '--config', path.join(dir, 'role-wake.json'), '--role', role,
+      ...(file ? ['--file', file] : [])];
+    process.exitCode = await main(args, deps);
+  `);
+  f.doc.roles['role-a'].session = { kind: 'codex-jsonl', pid: 42, process_start: '111', thread_id: 'fixture-thread', native_path: '/fixture/native.jsonl', cwd: '/fixture' };
+  f.doc.roles['role-a'].verify_submission = [process.execPath, adapter, 'verify', f.dir, '{role}'];
+  f.doc.delivery.command = [process.execPath, adapter, 'present', f.dir, '{role}', '{file}'];
+  f.write();
+  const script = fileURLToPath(new URL('./role-wake.mjs', import.meta.url));
+  const pump = () => JSON.parse(execFileSync(process.execPath, [script, 'deliver', '--config', f.file, '--role', 'role-a'], { encoding: 'utf8' })).roles['role-a'];
+  const presented = () => fs.existsSync(path.join(f.dir, 'presented')) ? fs.readFileSync(path.join(f.dir, 'presented'), 'utf8').trim().split('\n').map(JSON.parse) : [];
+  pump();
+  const first = f.put('role-a', '001-first.md');
+  fs.writeFileSync(path.join(f.dir, 'busy'), '');
+  assert.equal(pump().deferred, 1);
+  assert.equal(presented().length, 0);
+  fs.unlinkSync(path.join(f.dir, 'busy'));
+  assert.equal(pump().delivered, 1);
+  assert.equal(presented().length, 1);
+  assert.equal(fs.readFileSync(first, 'utf8'), 'wake\n');
+  f.put('role-a', '002-uncertain.md');
+  fs.writeFileSync(path.join(f.dir, 'uncertain'), '');
+  assert.equal(pump().deferred, 1);
+  assert.equal(pump().deferred, 1);
+  assert.equal(presented().length, 2);
+  const late = presented().at(-1);
+  fs.writeFileSync(path.join(f.dir, `native-${late.attempt}.json`), JSON.stringify(late.ack));
+  assert.equal(pump().delivered, 1);
+  assert.equal(presented().length, 2);
+  const rows = fs.readFileSync(path.join(f.doc.state_dir, 'delivered-role-a.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(rows.filter(row => row.status === 'delivered').every(row => typeof row.submission.receipt === 'string'));
+  assert.equal(pump().pending, 0);
 });

@@ -162,7 +162,7 @@ test("overdue open and waiting_human repeat wake rules, 30 minute dedup and inde
     ["기한 넘음"],
   );
 });
-test("done file wakes unread worker regardless of status, touch acknowledges", async () => {
+test("unread worker results acknowledge touch but do not wake done or dropped cards", async () => {
   const root = await setup();
   await edit(root, (l) => {
     l.items[0].worker = {
@@ -195,9 +195,56 @@ test("done file wakes unread worker regardless of status, touch acknowledges", a
   });
   assert.equal(
     (await watch({ root, config, now: now + 32 * 60000 })).wakes.length,
-    1,
+    0,
   );
+  await edit(root, (l) => { l.items[0].status = "dropped"; });
+  assert.equal((await watch({ root, config, now: now + 33 * 60000 })).wakes.length, 0);
 });
+
+test("closing a worker card preserves pending events; reopening publishes changed result once", async () => {
+  const root = await setup();
+  await edit(root, (l) => {
+    l.items[0].due = "2030-01-01T00:00:00Z";
+    l.items[0].worker = { name: "worker", result: "result.md", done_file: "worker.done" };
+  });
+  await writeFile(path.join(root, "result.md"), "first result");
+  await writeFile(path.join(root, "worker.done"), "done");
+  await utimes(path.join(root, "worker.done"), new Date(now - 1000), new Date(now - 1000));
+  const inbox = path.join(root, ".agents/work/l4/wake");
+  const pending = async () => Object.fromEntries(await Promise.all((await readdir(inbox)).filter(name => name.endsWith(".md"))
+    .map(async name => [name, await readFile(path.join(inbox, name), "utf8")])));
+  const first = await watch({ root, config, now });
+  assert.equal(first.wakes.filter(w => w.reason === "일꾼 끝, 결과 안 읽음").length, 1);
+  const original = await pending();
+  await edit(root, (l) => { l.items[0].status = "done"; });
+  await writeFile(path.join(root, "result.md"), "later result");
+  await utimes(path.join(root, "worker.done"), new Date(now + 1000), new Date(now + 1000));
+  for (const [status, minutes] of [["done", 31], ["dropped", 62]]) {
+    await edit(root, (l) => { l.items[0].status = status; });
+    assert.equal((await watch({ root, config, now: now + minutes * 60000 })).wakes.length, 0);
+    assert.deepEqual(await pending(), original);
+  }
+  await edit(root, (l) => { l.items[0].status = "open"; });
+  assert.equal((await watch({ root, config, now: now + 63 * 60000 })).wakes.filter(w => w.reason === "일꾼 끝, 결과 안 읽음").length, 1);
+  const updated = await pending();
+  assert.equal(Object.keys(updated).length, 2);
+  for (const [name, body] of Object.entries(original)) assert.equal(updated[name], body);
+  assert.equal((await watch({ root, config, now: now + 94 * 60000 })).wakes.length, 0);
+});
+
+for (const status of ["waiting_human", "escalated_human"]) {
+  test(`a worker result remains observable while its card is ${status}`, async () => {
+    const root = await setup();
+    await edit(root, (l) => {
+      l.items[0].status = status;
+      l.items[0].worker = { name: "worker", result: "result.md", done_file: "worker.done" };
+    });
+    await writeFile(path.join(root, "worker.done"), "done");
+    await utimes(path.join(root, "worker.done"), new Date(now - 1000), new Date(now - 1000));
+    assert.equal((await watch({ root, config, now })).wakes.filter(w => w.reason === "일꾼 끝, 결과 안 읽음").length, 1);
+    assert.equal((await watch({ root, config, now: now + 31 * 60000 })).wakes.filter(w => w.reason === "일꾼 끝, 결과 안 읽음").length, 0);
+  });
+}
 test("all channels checked, registered messages and role replies excluded", async () => {
   const root = await setup();
   const conf = { roles: [{ ...config.roles[0], channels: ["one", "two"] }] };

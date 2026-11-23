@@ -1,0 +1,22 @@
+{
+  "work": "closed-worker-wake",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md"],
+    "detail": "Closed cards do not publish new unread-result notices; waiting cards and previously published pending notices retain their existing behavior."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "reason": "The shared work-ledger guide documents the status boundary and preservation rule."
+  },
+  "validation": {
+    "base": "357a2b633b42eaa5537c4142a4871eeb90f500e2",
+    "targeted_tests": { "passed": 4, "failed": 0 },
+    "combined_tests": { "passed": 325, "failed": 0 },
+    "regressions": "Two closed-card scenarios fail before the guard. Waiting-human and escalated-human result observation already passes and remains covered. Reopening after changed result bytes adds one event without deleting the original pending event."
+  }
+}

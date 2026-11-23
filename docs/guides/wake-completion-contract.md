@@ -26,6 +26,11 @@ or certify delivery to a session.
 | 6. Confirm reply | Discord send receipt ID referencing original human message | failed send retries only when known rejected; uncertain send needs reconciliation |
 | 7. Close | reply evidence linked to request; remaining work/result recorded separately | ACK/heartbeat is not task completion; failed checks retain open work |
 
+Interactive roles using the common delivery pump can configure a read-only
+verifier for stage 5. A receiver acknowledgement identifies the attempt, exact
+payload, role, pane and receiving session. A late acknowledgement completes
+the saved attempt after a restart. [Role wake registry](role-wake-registry.md#verify-interactive-submissions)
+
 Restart and compression must reload the same entrypoint and durable obligations.
 A channel cursor is an observation boundary, not a completion flag. Persist
 pending work before advancing it. A restart must neither discard pending work
