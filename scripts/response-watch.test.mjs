@@ -102,6 +102,27 @@ test('rejected sends retry and never become successful receipts', async () => {
   let state = await run(10); assert.equal(Object.values(state.channels['10/30'].pending['2'].stages)[0].status, 'rejected');
   remote.failPost = false; state = await run(11); assert.equal(Object.values(state.channels['10/30'].pending['2'].stages)[0].status, 'confirmed');
 });
+test('an exact late reply cancels its failed owner notice while an unanswered request retries on a quiet poll', async () => {
+  const { remote, run } = await fixture();
+  await run();
+  remote.messages.push(human(2), human(3));
+  await run(10);
+  remote.failPost = true;
+  await run(30);
+  remote.messages.push(human(4, { author: { id: '20', bot: true }, message_reference: { message_id: '2' },
+    timestamp: new Date(epoch + 31 * 60000).toISOString() }));
+  const afterReply = await run(31);
+  assert.deepEqual(Object.keys(afterReply.channels['10/30'].pending), ['3']);
+  assert.equal(afterReply.channels['10/30'].pending['3'].stages['10/30/3/escalate'].status, 'rejected');
+  assert.deepEqual(remote.posts.slice(4).map(post => post.content.split('/').at(-1)), ['3']);
+
+  const attempts = remote.posts.length;
+  remote.failPost = false;
+  const quiet = await run(32);
+  assert.equal(quiet.channels['10/30'].pending['3'].stages['10/30/3/escalate'].status, 'confirmed');
+  await run(33);
+  assert.deepEqual(remote.posts.slice(attempts).map(post => post.content.split('/').at(-1)), ['3']);
+});
 test('overlap and corrupt state fail closed', async () => {
   const { config, run } = await fixture(); await writeFile(`${config.stateFile}.lock`, 'existing');
   await assert.rejects(run(), /EEXIST/);
