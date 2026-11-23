@@ -82,8 +82,9 @@ An uncertain retry reconciles the saved payload and never pastes again.
 stdout is `{status,attempt,sha256,role,pane,session,receipt,reason,code}`. Accepted
 means the same attempt and actual payload have native user-input evidence in
 the same bound session. Rejected means no submission occurred and retry is
-safe. Unknown exits 75 and preserves the original. The receipt joins source
-and formatted-payload digests, first-attempt time and native thread/offset.
+safe. Unknown exits 75 and preserves the original. The receipt is a compact `codex-jsonl:THREAD:OFFSET:PAYLOAD_SHA256` reference
+(or `not-submitted:KEY_SHA256` for rejected). The separate `evidence` object joins
+source and formatted-payload digests, first-attempt time and native thread/offset.
 
 ## Observations and limits
 
@@ -96,7 +97,9 @@ lock prevents concurrent input and recovers empty, torn, dead or recycled locks.
 A native probe reads at most a 64 KiB header and 512 KiB event window. Before
 submission, the tail must contain a current native task-state event; otherwise
 it defers until a subsequent completion/state event becomes visible. After
-submission it reads incrementally from the saved offset. Split append records
+submission it reads incrementally from the saved offset. Read-only verification
+traverses from that offset to a fixed EOF snapshot in bounded windows, so an ACK
+after the first window is found without repeatedly probing only that window. Split append records
 retain their starting offset; an unfinished record exceeding 512 KiB is an
 explicit read error. No entire large log is repeatedly parsed.
 

@@ -108,7 +108,7 @@ test('readonly verify projects canonical dispatcher attempt and native receipt',
   const file = attemptFile(h.stateDir, 'author', 'source-a'), before = await fs.readFile(file, 'utf8');
   const result = await verifyInput({ role: 'author', key: 'source-a', transportSha256: 'transporthash', profile, stateDir: h.stateDir }, h.deps);
   assert.equal(result.status, 'accepted'); assert.equal(result.attempt, 'source-a'); assert.equal(result.sha256, 'transporthash');
-  assert.equal(result.receipt.payload_sha256, payloadHash('hello')); assert.equal(await fs.readFile(file, 'utf8'), before);
+  assert.equal(result.evidence.payload_sha256, payloadHash('hello')); assert.equal(await fs.readFile(file, 'utf8'), before);
   assert.equal((await verifyInput({ role: 'author', key: 'source-a', transportSha256: 'wrong', profile, stateDir: h.stateDir }, h.deps)).code, 75);
 });
 

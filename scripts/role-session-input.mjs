@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,8 @@ export async function nativeSnapshot(session, hash, query = {}) {
     result.byte_size = stat.size;
     if (query.file_id && query.file_id !== result.file_id) throw Object.assign(new Error(), { code: 'native_rotated' });
     const limit = 512 * 1024;
+    const end = query.end_offset ?? stat.size;
+    if (!Number.isSafeInteger(end) || end < 0 || end > stat.size) throw Object.assign(new Error(), { code: 'native_truncated' });
     const prefix = Buffer.alloc(Math.min(64 * 1024, stat.size));
     const headerRead = await file.read(prefix, 0, prefix.length, 0);
     const newline = prefix.subarray(0, headerRead.bytesRead).indexOf(10);
@@ -33,14 +35,14 @@ export async function nativeSnapshot(session, hash, query = {}) {
     result.thread_id = header.payload?.id;
     result.cwd = header.payload?.cwd;
     const offset = query.cursor?.offset ?? Math.max(0, stat.size - limit);
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > stat.size) throw Object.assign(new Error(), { code: 'native_truncated' });
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > end) throw Object.assign(new Error(), { code: 'native_truncated' });
     let partial = false;
     if (offset) {
       const previous = Buffer.alloc(1);
       await file.read(previous, 0, 1, offset - 1);
       partial = previous[0] !== 10;
     }
-    const bytes = Buffer.alloc(Math.min(limit, stat.size - offset));
+    const bytes = Buffer.alloc(Math.min(limit, end - offset));
     const read = await file.read(bytes, 0, bytes.length, offset);
     result.bytes_read = headerRead.bytesRead + read.bytesRead;
     const data = bytes.subarray(0, read.bytesRead);
@@ -117,7 +119,9 @@ export function hostDependencies({ paneBin = 'herdr', run = (bin, args, options 
 
 export async function main(argv = process.argv.slice(2), dependencies, env = process.env) {
   if (argv[0] === 'native-snapshot') {
-    const request = JSON.parse(await fs.readFile('/dev/stdin', 'utf8'));
+    // Child stdin may be a socket or another uid's pipe. Read the inherited fd
+    // rather than reopening /dev/stdin, which can fail with ENXIO/EACCES.
+    const request = JSON.parse(readFileSync(0, 'utf8'));
     process.stdout.write(JSON.stringify(await nativeSnapshot(request.session, request.hash, request.query)) + '\n');
     return 0;
   }

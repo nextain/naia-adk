@@ -41,3 +41,19 @@ The existing dispatcher retains ownership of routing, priority, file retention
 and source delivery receipts. The consumer returns 75 for normal deferral. It
 creates no task, starts no worker and changes no model. Live activation and
 reconciliation of a pre-existing composer draft require instance evidence.
+
+## Validation evidence
+
+The receiver's 30 local regressions cover two installation profiles, busy and
+human-draft deferral, PID/thread/cwd mismatches, old and delayed native ACKs,
+changed headers before and after submission, uncertain retry without repeated
+paste, stale lock recovery, split JSONL writes, bounded large-log reads,
+fixed-EOF read-only verification and child-process stdin pipes. They run without
+starting any model or sending input to a live role.
+
+A real read-only probe of two existing instance sessions resolved their distinct
+foreground processes, thread/cwd bindings and native files. Both returned busy
+75 without input; the second account used an explicit read prefix. This is
+preflight evidence, not a claim that live common-transport delivery has yet been
+acknowledged. Live activation and the first native user ACK remain instance
+acceptance steps.

@@ -89,3 +89,28 @@ test('probe never submits or creates attempt state for a busy native session', a
   assert.equal(await main(['probe', '--config', config, '--role', 'writer'], deps, {}), 75);
   assert.equal((await fs.readdir(f.dir)).includes('role-input'), false);
 });
+
+test('readonly verify traverses beyond its first bounded window to fixed EOF', async t => {
+  const { deliverInput, verifyInput, attemptFile } = await import('./lib/role-session-input.mjs');
+  const f = await fixture(t), profile = { pane_id: 'w2:p6', session: f.session };
+  let submitted = 0;
+  const deps = { now: () => 0, sleep: async () => {},
+    inspect: async () => ({ foreground: [{ pid: process.pid, args: 'codex' }], processes: [], screen: '› Ask Codex to do anything' }),
+    native: (session, hash, agent, query) => nativeSnapshot(session, hash, query), submit: async () => { submitted++; } };
+  const options = { role: 'writer', key: 'fixed-attempt', transportSha256: 'raw-hash', profile, stateDir: f.dir };
+  assert.equal((await deliverInput({ ...options, text: 'user payload', ackTimeoutMs: 0 }, deps)).code, 75);
+  await fs.appendFile(f.file, row('response_item', { role: 'assistant', content: 'x'.repeat(700) }).repeat(1200));
+  await fs.appendFile(f.file, row('response_item', { role: 'user', content: [{ type: 'input_text', text: 'user payload' }] }));
+  const record = attemptFile(f.dir, 'writer', 'fixed-attempt'), before = await fs.readFile(record, 'utf8');
+  const verified = await verifyInput(options, deps);
+  assert.equal(verified.status, 'accepted'); assert.equal(submitted, 1);
+  assert.match(verified.receipt, /^codex-jsonl:own-thread:/);
+  assert.equal(await fs.readFile(record, 'utf8'), before);
+});
+
+test('native child reads inherited pipe fd without reopening /dev/stdin', async t => {
+  const f = await fixture(t);
+  const deps = hostDependencies();
+  const answer = await deps.native({ ...f.session, read_prefix: ['/usr/bin/env'] }, 'none', null);
+  assert.equal(answer.error, undefined); assert.equal(answer.thread_id, 'own-thread');
+});

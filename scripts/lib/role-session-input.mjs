@@ -167,21 +167,38 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
   const projection = { status: 'unknown', attempt: key, sha256: transportSha256,
     role, pane: profile.pane_id, session: profile.session?.thread_id ?? null, receipt: null };
   const before = await readAttempt(attemptFile(stateDir, role, key));
-  if (!before) return { ...projection, status: 'rejected', reason: 'not_submitted', code: 0 };
+  const rejected = () => ({ ...projection, status: 'rejected', reason: 'not_submitted', receipt: `not-submitted:${payloadHash(key)}`, code: 0 });
+  if (!before) return rejected();
   if (!transportSha256 || before.transport_sha256 !== transportSha256) return { ...projection, reason: 'transport_payload_changed', code: 75 };
-  if (!['submitting', 'submitted_unconfirmed', 'accepted'].includes(before.status)) return { ...projection, status: 'rejected', reason: 'not_submitted', code: 0 };
+  if (!['submitting', 'submitted_unconfirmed', 'accepted'].includes(before.status)) return rejected();
   const inspected = await deps.inspect(profile);
   const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
   if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
-  const native = await deps.native(profile.session, before.payload_hash, agent,
+  let native = await deps.native(profile.session, before.payload_hash, agent,
     { cursor: before.native_cursor, file_id: before.native_file_id });
-  const invalid = validateBinding(profile.session, agent, native);
-  if (invalid || native.file_id !== before.native_file_id) return { ...projection, reason: invalid ?? 'native_rotated', code: 75 };
+  const check = snapshot => validateBinding(profile.session, agent, snapshot) ??
+    (snapshot.file_id !== before.native_file_id ? 'native_rotated' : null);
+  let invalid = check(native);
+  if (invalid) return { ...projection, reason: invalid, code: 75 };
+  // Verification has no writable cursor. Traverse only the bytes present at
+  // this first snapshot's EOF, one bounded window at a time. New appends wait
+  // for the next verification; a partial line never advances the cursor.
+  const end = native.byte_size;
+  while (before.status !== 'accepted' && !native.ack && native.next_cursor?.offset < end) {
+    const offset = native.next_cursor.offset;
+    const next = await deps.native(profile.session, before.payload_hash, agent,
+      { cursor: { offset }, file_id: before.native_file_id, end_offset: end });
+    invalid = check(next);
+    if (invalid) return { ...projection, reason: invalid, code: 75 };
+    native = next;
+    if (!native.ack && !(native.next_cursor?.offset > offset)) break;
+  }
   const ack = before.status === 'accepted' ? before.native_evidence : native.ack;
   if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash) {
     return { ...projection, reason: 'native_ack_pending', code: 75 };
   }
-  return { ...projection, status: 'accepted', code: 0, reason: 'submitted_ack', receipt: {
+  return { ...projection, status: 'accepted', code: 0, reason: 'submitted_ack',
+    receipt: `codex-jsonl:${ack.thread_id}:${ack.offset}:${before.payload_hash}`, evidence: {
     source_sha256: before.source_sha256, payload_sha256: before.payload_hash,
     first_at: before.first_at, native_user_ack: ack,
   } };
