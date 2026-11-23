@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { acquireLock } from '../role-wake.mjs';
@@ -75,6 +76,32 @@ export function attemptFile(stateDir, role, key) {
 async function readAttempt(file) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+
+// Before receiver records included a pane, the dispatcher recorded it on the
+// same attempt. Consult that original entry only for already-presented input.
+async function originalPaneMatches(record, stateDir, profile) {
+  if (Object.hasOwn(record, 'pane_id') || Object.hasOwn(record, 'canonical_attempt') ||
+      !['submitting', 'submitted_unconfirmed', 'accepted'].includes(record.status) ||
+      !record.native_file_id || !Number.isSafeInteger(record.native_after_offset) || record.native_after_offset < 0 ||
+      !/^[a-f0-9]{64}$/.test(record.payload_hash) || !/^[a-f0-9]{64}$/.test(record.transport_sha256)) return false;
+  const directory = profile.active_mentions?.dispatcher_state_dir ?? stateDir;
+  if (typeof directory !== 'string' || !path.isAbsolute(directory)) return false;
+  const file = path.join(directory, 'submissions', record.role + '.json');
+  let handle;
+  try {
+    if (await fs.realpath(file) !== file) return false;
+    handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = await handle.stat();
+    if (!stat.isFile() || (stat.mode & 0o022)) return false;
+    const entry = JSON.parse(await handle.readFile('utf8'));
+    return entry.role === record.role && entry.pane === profile.pane_id && entry.attempt === record.source_key &&
+      entry.sha256 === record.transport_sha256 && (!record.source_message_id || record.source_message_id === entry.messageId);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function lockRole(stateDir, role) {
@@ -213,7 +240,12 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     const rejected = () => ({ ...projection, status: 'rejected', reason: 'not_submitted', receipt: `not-submitted:${payloadHash(key)}`, code: 0 });
     if (!before) return { ...projection, reason: 'attempt_unrecorded', code: 75 };
     if (!transportSha256 || before.transport_sha256 !== transportSha256) return { ...projection, reason: 'transport_payload_changed', code: 75 };
-    if (before.role !== role || before.source_key !== key || before.pane_id !== profile.pane_id || before.thread_id !== profile.session?.thread_id) {
+    if (before.role !== role || before.source_key !== key || before.thread_id !== profile.session?.thread_id) {
+      return { ...projection, reason: 'attempt_binding_mismatch', code: 75 };
+    }
+    const legacy = before.pane_id === undefined;
+    const paneMatches = legacy ? await originalPaneMatches(before, stateDir, profile) : before.pane_id === profile.pane_id;
+    if (!paneMatches) {
       return { ...projection, reason: 'attempt_binding_mismatch', code: 75 };
     }
     if (before.status === 'not_submitted') return before.canonical_attempt === true ? rejected()
@@ -223,8 +255,10 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
     if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
     const turn = before.active_turn_id ? { expected_turn_id: before.active_turn_id } : {};
+    const cursor = legacy ? { offset: before.native_after_offset } : before.native_cursor;
+    const cachedReceipt = !legacy && before.status === 'accepted';
     let native = await deps.native(profile.session, before.payload_hash, agent,
-      { cursor: before.native_cursor, file_id: before.native_file_id, ...turn });
+      { cursor, file_id: before.native_file_id, ...turn });
     const check = snapshot => validateBinding(profile.session, agent, snapshot) ??
       (snapshot.file_id !== before.native_file_id ? 'native_rotated' : null);
     let invalid = check(native);
@@ -233,7 +267,7 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
     // this first snapshot's EOF, one bounded window at a time. New appends wait
     // for the next verification; a partial line never advances the cursor.
     const end = native.byte_size;
-    while (before.status !== 'accepted' && !native.ack && native.next_cursor?.offset < end) {
+    while (!cachedReceipt && !native.ack && native.next_cursor?.offset < end) {
       const offset = native.next_cursor.offset;
       const next = await deps.native(profile.session, before.payload_hash, agent,
         { cursor: { offset }, file_id: before.native_file_id, end_offset: end, ...turn });
@@ -242,7 +276,7 @@ export async function verifyInput({ role, key, transportSha256, profile, stateDi
       native = next;
       if (!native.ack && !(native.next_cursor?.offset > offset)) break;
     }
-    const ack = before.status === 'accepted' ? before.native_evidence : native.ack;
+    const ack = cachedReceipt ? before.native_evidence : native.ack;
     if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash ||
         (before.active_turn_id && ack.turn_id !== before.active_turn_id)) {
       return { ...projection, reason: before.active_transport ? 'steer_waiting_native' : 'native_ack_pending', code: 75 };

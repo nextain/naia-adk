@@ -93,6 +93,13 @@ returns unknown 75, preserving the original. The receipt is a compact `codex-jso
 (or `not-submitted:KEY_SHA256` for rejected). The separate `evidence` object joins
 source and formatted-payload digests, first-attempt time and native thread/offset.
 
+During an upgrade, a receiver record written before pane IDs were stored can
+use the dispatcher's original pending record to establish the pane. The role,
+attempt and transport digest must also match. Verification reads the same
+session file from the original send offset to find the matching user input.
+Keep both journals until the dispatcher records the receipt. If either history
+is insufficient, the item stays pending and the receiver sends no new input.
+
 ## Observations and limits
 
 Private attempt records under `state_dir/role-input/` keep first/last attempt
