@@ -81,3 +81,10 @@ test('prepare invalid argv never starts an observer and observer launch failure 
   assert.equal(failed.code,75);assert.equal(failed.result.reason,'registration_observer_unavailable');assert.equal(calls,1);
   assert.ok(!JSON.stringify(failed).includes('private'));
 });
+
+test('prepare metadata flags cannot be borrowed from the planned native argv',async t=>{
+  const f=await fixture(t);let calls=0;f.deps.observer=async()=>{calls++;};
+  await assert.rejects(capture(()=>main(['prepare','--role','writer','--launcher-pid','20','--',
+    ...f.argv,'--config',f.config],f.deps)),{code:'registration_arguments_invalid'});
+  assert.equal(calls,0);
+});
