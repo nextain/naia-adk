@@ -165,7 +165,7 @@ await runApprovedApprovalPlan(options, process.argv.slice(2));
 const decision = await withGateConfig(options, () => evaluate(context));
 ```
 
-The registration must contain at least one gate. Use a distinct existing site root and a distinct ID for each entry. An ID starts with a lowercase ASCII letter and permits up to 63 further lowercase letters, digits, underscores or hyphens. The existing configuration approval must verify independently for each site's `.claude/deploy/config.json`. Its `review_models` and `planReview` select that gate's reviewers. A site with `readOnlyScripts` in `config/deploy-gate.json` must match its committed policy bytes. A reviewed read-only exception requires the same pinned file, digest and service in the plan repository and every registered gate.
+The registration must contain at least one gate. Use a distinct existing site root and a distinct ID for each entry. An ID starts with a lowercase ASCII letter and permits up to 63 further lowercase letters, digits, underscores or hyphens. The existing configuration approval must verify independently for each site's `.claude/deploy/config.json`. Its `review_models` and `planReview` select that gate's reviewers. A site with `readOnlyScripts` in `config/deploy-gate.json` must match its committed policy bytes. A reviewed read-only exception requires the same pinned file, digest and service in the plan repository and every registered gate. The gate computes that intersection from passing receipts. A pending or failed review grants no exception.
 
 Run the installation's usual CLI once per operation. This example uses an installation wrapper named `site-approval-plan.mjs`.
 

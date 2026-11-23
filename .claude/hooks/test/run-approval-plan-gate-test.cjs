@@ -4209,6 +4209,9 @@ if (process.argv[2] === "fixture-read-only") {
 	assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
 	assert.match(rejected.stdout + rejected.stderr, /secondary/);
 	assert.equal(run(["check", planFile]).status, 1);
+	const pendingReads = run(["fixture-read-only"]);
+	assert.equal(pendingReads.status, 0, pendingReads.stderr);
+	assert.deepEqual(JSON.parse(pendingReads.stdout), []);
 	const read = id => JSON.parse(fs.readFileSync(path.join(gatesDir, "reviews", id, deployPlan.REVIEW_FILE)));
 	assert.deepEqual(ids.map(id => read(id).reviewers[0].model), ["fixture-primary", "fixture-secondary"]);
 	const accepted = run(review);

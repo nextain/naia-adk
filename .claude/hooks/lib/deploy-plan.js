@@ -1273,7 +1273,10 @@ function reviewProblems(gatesDir, sha, root) {
 		const reviewers = results.flatMap(([id, r]) => r.reviewers.map(row => ({ ...row, id: `${id}/${row.id}` })));
 		const summary = results.flatMap(([id, r]) => r.summary.map(row => ({ ...row, reviewer: `${id}/${row.reviewer}` })));
 		const manifests = results.map(([id, r]) => [id, r.input_manifest_sha256]);
-		return { ok: !problems.length, problems, reviewers, summary, findings: profiles.map(p => `gates/reviews/${p.id}/deploy-plan-review-findings.md`),
+		const verifiedLists = results.map(([, result]) => result.read_only_scripts);
+		const sharedReads = problems.length ? [] : verifiedLists[0].filter(row => verifiedLists.every(items =>
+			items.some(item => item.path === row.path && item.service === row.service && item.sha256 === row.sha256 && item.script_sha256 === row.script_sha256)));
+		return { ok: !problems.length, problems, reviewers, summary, read_only_scripts: sharedReads, findings: profiles.map(p => `gates/reviews/${p.id}/deploy-plan-review-findings.md`),
 			input_manifest_sha256: problems.length ? null : sha256(JSON.stringify(["gate-reviews/v1", manifests])) };
 	} catch (error) {
 		return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null };
@@ -1284,20 +1287,12 @@ function selectedReviewProblems(gatesDir, sha, base) {
 	catch (error) { return { ok: false, problems: [error.message], reviewers: [], summary: [], input_manifest_sha256: null }; }
 }
 function reviewedReadOnlyScripts(gatesDir, root) {
-	const profiles = registeredReviewProfiles(root, true);
-	const read = () => {
-		const dir = reviewRecordDirectory(gatesDir);
-		const rec = readJson(resultFile(dir, REVIEW_FILE));
-		const profile = reviewProfileBinding(path.join(gatesDir, PLAN_FILE), root);
-		if (!rec || (profile ? rec.review_profile?.scope_sha256 !== profile.scope_sha256 || rec.review_profile.id !== profile.id : rec.review_profile !== undefined)) return [];
-		return validateReadOnlyBindingRecords(rec.read_only_scripts).items;
-	};
-	if (!profiles.length) {
+	if (!gateConfigContext.getStore()?.profiles) {
 		const record = readJson(path.join(gatesDir, REVIEW_FILE));
 		return record?.review_profile === undefined && Array.isArray(record?.read_only_scripts) ? record.read_only_scripts : [];
 	}
-	const lists = profiles.map(profile => withReviewProfile(root, profile.id, read));
-	return lists[0].filter(row => lists.every(items => items.some(item => item.path === row.path && item.service === row.service && item.sha256 === row.sha256 && item.script_sha256 === row.script_sha256)));
+	const snapshot = readPlanSnapshot(path.join(gatesDir, PLAN_FILE));
+	return snapshot ? (reviewProblems(gatesDir, snapshot.sha, root).read_only_scripts || []) : [];
 }
 function singleReviewProblems(gatesDir, sha, base) {
 	let MODELS;
@@ -1314,6 +1309,7 @@ function singleReviewProblems(gatesDir, sha, base) {
 	const problems = [];
 	const reviewers = [];
 	let manifest = null;
+	let reviewedReads = [];
 	const finish = () => {
 		if (!isRotationRecord(rec)) {
 			const author = rec?.author_model || plan?.author_model;
@@ -1323,7 +1319,7 @@ function singleReviewProblems(gatesDir, sha, base) {
 				}
 			}
 		}
-		return { ok: problems.length === 0, problems, reviewers, input_manifest_sha256: manifest, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
+		return { ok: problems.length === 0, problems, reviewers, input_manifest_sha256: manifest, ...(profile && !problems.length ? { read_only_scripts: reviewedReads } : {}), summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
 	if (rec && (profile ? rec.review_profile?.id !== profile.id || rec.review_profile.scope_sha256 !== profile.scope_sha256 || rec.plan !== path.relative(base, file) : rec.review_profile !== undefined)) problems.push("Review record differs from the registered gate policy or plan scope");
 	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
@@ -1340,6 +1336,7 @@ function singleReviewProblems(gatesDir, sha, base) {
 	if (profile && plan && rec) {
 		const current = planReadOnlyScriptsBinding(plan, base);
 		if (!current.ok || !Array.isArray(rec.read_only_scripts) || JSON.stringify(roOpt?.readOnlyScripts) !== JSON.stringify(current.items)) problems.push("Reviewed allowlist differs from the current gate policy");
+		else reviewedReads = current.items;
 	}
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, roOpt)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
