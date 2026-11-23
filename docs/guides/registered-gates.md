@@ -89,3 +89,11 @@ exact-definition config/batchWrite are separate operator steps; no blanket trust
 or provider protection bypass is implied. A native session must start in the
 instance cwd. Read-only installer tests and rendered-command tests do not prove
 native hook execution. The host startup environment remains a trusted prerequisite.
+
+
+The POSIX registered installer requires a real native Node22.15+ executable at
+`/usr/bin/node`; this fixed host prerequisite is not selected through PATH or
+hook input. The Linux CI job installs the exact setup-node ELF there as root0755
+and verifies equal SHA256 and version before running the registered installer
+fixtures. A missing fixed runtime is an unsupported registered installation,
+not a reason to skip its acceptance tests or render a different command.
