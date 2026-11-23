@@ -30,7 +30,7 @@ only; the script is the same on every server.
 | `delivery.priority_user_ids` | Optional Discord user ids whose direct requests may precede older inputs. Defaults to `[]`. |
 | `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
 | `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
-| `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). Each entry `{ kind, path, roles? }` accepts an optional non-empty string array `roles` listing the role ids that view covers: when set, `role is missing` checks only those ids and any unknown id in `roles` is an error; when omitted, every registry role is required. Every row present in the file—even outside `roles`—is still checked against the registry for unknown roles and mismatched fields (`bot_id`, etc.). |
+| `role_views` | Each entry names a tool's `kind` and absolute config `path`. The optional non-empty `roles` list declares the roles expected in that file. For `l4-roles`, `wake-routes`, `liveness`, `session-health` and `bot-mention-wake`, omitting the list expects every registry role. For `ledger-watch` and `card-watch`, the registered file can cover a subset. Every row present is checked for unknown roles and mismatched fields. |
 
 The role block keeps the keys the pane liveness tool already reads (`user`,
 `find`, `tool`, `restart_cmd`, `wait`), so that tool can read the registry
@@ -109,6 +109,36 @@ The registry therefore requires a consumer that runs outside the session:
   read. An `observe` script only warns.
 
 ## Work ledger at delivery
+
+### Check open cards against registered watchers
+
+`node scripts/role-wake.mjs check --config /path/to/role-wake.json --json`
+compares open task cards in the owner's JSON ledgers with the watcher
+configurations registered in `role_views`. It reads the registry's explicit
+`roles.<id>.ledger` or the standard `.agents/work/ledger/<id>.json`. A standard
+ledger containing open cards remains visible when its role drops out of the registry.
+Closed cards, waiting cards and worker records keep their existing behavior.
+
+Register the configuration used by the scheduled command. Each watcher can
+serve a subset of roles. An owner can delegate a single card.
+
+| View kind | Configuration checked |
+| --- | --- |
+| `ledger-watch` | Set `path` to the config used by `ledger-watch.mjs`. The view's optional absolute `root` is the command's `--root` and defaults to the registry root. The watcher reads the standard per-role ledger and writes addressed wakes under `.agents/work/l4/wake`. |
+| `session-health` | Set `path` to the session observer's config. The checker uses its role, workspace, JSON ledger location and wake directory, including defaults resolved through `workLedgerConfig`. |
+| `card-watch` | For an installation-specific watcher, register a file describing the settings its running command consumes. It supplies `role`, `card`, and absolute `workspace`, `ledgerFile` and `wakeDir`. The declaration covers exactly that card. |
+
+A matching source reads the same owner ledger and writes to a box accepted
+for that role. A scoped watcher's workspace comes from the standard owner
+ledger location, even when the pane starts in a different directory. For a
+custom ledger location the registry's `find.cwd` supplies the workspace. An unused config file
+or another installation's same-named role provides no coverage. The JSON
+result includes counts for readable open cards and matches by registered
+config. Missing matches list the card IDs. Unreadable owner ledgers and
+invalid registered inputs are error findings. A successful match verifies
+configuration. Confirm actual receipt with a wake from the running installation.
+
+### Include work in a delivered wake
 
 With `delivery.workHeader` enabled and a ledger configured for the role,
 `deliver` places the header and a blank line before the original body in a

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
@@ -41,11 +41,23 @@ export function validateWorkLedgerConfig(raw) {
  * Reused by both session-health/stalled-cards and the dashboard/server ledger API.
  */
 export async function readWorkLedgerMeta(config) {
+  const ledgerConfig = config.workLedgerConfig
+    ? validateWorkLedgerConfig(JSON.parse(await readFile(config.workLedgerConfig, "utf8")))
+    : null;
+  return resolveLedgerMeta(config, ledgerConfig);
+}
+
+export function readWorkLedgerMetaSync(config) {
+  const ledgerConfig = config.workLedgerConfig
+    ? validateWorkLedgerConfig(JSON.parse(readFileSync(config.workLedgerConfig, "utf8")))
+    : null;
+  return resolveLedgerMeta(config, ledgerConfig);
+}
+
+function resolveLedgerMeta(config, ledgerConfig) {
   if (!config.workLedgerConfig && !config.workLedgerDir) return null;
-  let ledgerConfig = null;
   let root = config.workLedgerRoot ?? null;
   if (config.workLedgerConfig) {
-    ledgerConfig = validateWorkLedgerConfig(JSON.parse(await readFile(config.workLedgerConfig, "utf8")));
     if (!root) {
       const explicitRoot = typeof ledgerConfig.ledger_root === "string" && ledgerConfig.ledger_root.trim()
         ? ledgerConfig.ledger_root.trim()

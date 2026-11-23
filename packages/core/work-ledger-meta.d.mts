@@ -57,6 +57,7 @@ export function readWorkLedgerMeta(config: {
   workLedgerRoot?: string;
   workLedgerDir?: string;
 }): Promise<WorkLedgerMeta | null>;
+export function readWorkLedgerMetaSync(config: Parameters<typeof readWorkLedgerMeta>[0]): WorkLedgerMeta | null;
 export function resolveWorkLedgerLocation(
   adkRoot: string,
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,

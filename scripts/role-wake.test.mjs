@@ -6,6 +6,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readWorkLedgerMeta, readWorkLedgerMetaSync } from '../packages/core/work-ledger-meta.mjs';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
 import { ledgerPath } from './work-ledger/ledger.mjs';
 import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
@@ -980,6 +981,161 @@ test('role_views with roles scopes missing checks while still checking rows and 
   assert.deepEqual(fmt(compareViews(f.load())), ['error|role-view-drift|role-b|session-health|role is missing']);
 });
 
+test('open-card watch reports a role omitted from a valid partial observer and accepts a registered delegate', t => {
+  const f = setup(t);
+  const owner = 'role-b';
+  const file = ledgerPath(f.root, owner);
+  writeWorkLedger(file, owner, [ledgerRow('first'), ledgerRow('second'), ledgerRow('closed', { status: 'done' })]);
+  const health = path.join(f.dir, 'session-health.json');
+  const observer = id => ({
+    id, workspace: f.root, window: id, adapter: { kind: 'tmux' },
+    ledgerFile: ledgerPath(f.root, id), wakeDir: path.join(f.root, 'wake', id === 'role-a' ? '' : id),
+  });
+  const saveHealth = roles => fs.writeFileSync(health, JSON.stringify({
+    stateFile: path.join(f.dir, 'state'), reportFile: path.join(f.dir, 'report'),
+    baselineRepo: f.root, baselineSha: 'a'.repeat(40), roles,
+  }));
+  const findings = () => {
+    f.write();
+    let result;
+    const status = main(['check', '--config', f.file, '--json'], {}, f.deps, text => { result = JSON.parse(text); });
+    return { status, findings: result.findings.filter(item => item.code.startsWith('open-card-')), summary: result.openCardWatches };
+  };
+  f.doc.role_views = [{ kind: 'session-health', path: health, roles: ['role-a'] }];
+  saveHealth([observer('role-a')]);
+  deliver(f.load(), f.deps);
+  const reduced = findings();
+  assert.equal(reduced.status, 1);
+  assert.deepEqual(reduced.findings.map(item => [item.code, item.role, item.cards]),
+    [['open-card-unwatched', owner, ['first', 'second']]]);
+
+  const scoped = path.join(f.dir, 'card-watch.json');
+  const delegate = { role: owner, card: 'first', workspace: f.root, ledgerFile: file, wakeDir: path.join(f.root, 'wake', owner) };
+  fs.writeFileSync(scoped, JSON.stringify({ ...delegate, openCards: [{ id: 'second' }] }));
+  f.doc.role_views.push({ kind: 'card-watch', path: scoped });
+  const partial = findings();
+  assert.deepEqual(partial.findings[0].cards, ['second']);
+  assert.equal(partial.summary.open, 2);
+  assert.deepEqual(partial.summary.matches, [{ role: owner, kind: 'card-watch', config: scoped, count: 1, card: 'first' }]);
+
+  const anotherRoot = path.join(f.dir, 'other');
+  const wrong = ledgerPath(anotherRoot, owner);
+  writeWorkLedger(wrong, owner, [ledgerRow('first'), ledgerRow('second')]);
+  fs.writeFileSync(scoped, JSON.stringify({ ...delegate, workspace: anotherRoot, ledgerFile: wrong }));
+  assert.deepEqual(findings().findings[0].cards, ['first', 'second']);
+  fs.writeFileSync(scoped, JSON.stringify(delegate));
+  f.doc.role_views[0].roles.push(owner);
+  saveHealth([observer('role-a'), { ...observer(owner), ledgerFile: wrong }]);
+  assert.deepEqual(findings().findings[0].cards, ['second']);
+  saveHealth([observer('role-a'), { ...observer(owner), wakeDir: f.dir }]);
+  assert.deepEqual(findings().findings[0].cards, ['second']);
+  saveHealth([observer('role-a'), { ...observer(owner), workspace: anotherRoot }]);
+  assert.deepEqual(findings().findings[0].cards, ['second']);
+  saveHealth([observer('role-a'), observer(owner)]);
+  const covered = findings();
+  assert.equal(covered.status, 0);
+  assert.deepEqual(covered.findings, []);
+  assert.equal(covered.summary.configured, 2);
+
+  // A session observer with an invalid ledger source cannot supply coverage.
+  const config = JSON.parse(fs.readFileSync(health, 'utf8'));
+  fs.writeFileSync(health, JSON.stringify({ ...config, workLedgerConfig: path.join(f.dir, 'absent.json') }));
+  const invalid = findings();
+  assert.equal(invalid.status, 1);
+  assert.ok(invalid.findings.some(item => item.code === 'open-card-watch-unavailable'));
+  assert.equal(invalid.summary.configured, 1);
+  saveHealth([observer('role-a'), observer(owner)]);
+
+  // The pane can start above the owner's workspace. Its explicit personal
+  // ledger and extra wake box still route only the delegated personal card.
+  const extra = path.join(f.dir, 'personal-wake');
+  fs.mkdirSync(extra);
+  f.doc.roles[owner].find.cwd = f.dir;
+  f.doc.roles[owner].ledger = wrong;
+  f.doc.roles[owner].extra_boxes = [{ path: extra }];
+  fs.writeFileSync(scoped, JSON.stringify({ ...delegate, workspace: anotherRoot, ledgerFile: wrong, wakeDir: extra }));
+  const personal = findings();
+  assert.equal(personal.summary.configured, 1);
+  assert.deepEqual(personal.findings[0].cards, ['second']);
+  assert.equal(personal.summary.matches[0].card, 'first');
+
+  f.doc.roles[owner].ledger = path.join(f.dir, 'missing.json');
+  assert.equal(findings().findings[0].code, 'open-card-ledger-unavailable');
+});
+
+test('open-card watch reads the registered direct watcher root and tolerates a role with only closed cards', t => {
+  const f = setup(t);
+  f.doc.wake_root = '.agents/work/l4/wake';
+  fs.mkdirSync(path.join(f.root, f.doc.wake_root, 'role-b'), { recursive: true });
+  const file = path.join(f.dir, 'active-ledger-watch.json');
+  const save = roles => fs.writeFileSync(file, JSON.stringify({ version: 1, roles: roles.map(role => ({ role })) }));
+  writeWorkLedger(ledgerPath(f.root, 'role-a'), 'role-a', [ledgerRow('only-open')]);
+  writeWorkLedger(ledgerPath(f.root, 'role-b'), 'role-b', [ledgerRow('cancelled', { status: 'dropped' })]);
+  f.doc.role_views = [{ kind: 'ledger-watch', path: file }];
+  save(['role-a']);
+  f.write();
+  deliver(f.load(), f.deps);
+  const check = () => main(['check', '--config', f.file, '--json'], {}, f.deps, () => {});
+  assert.equal(check(), 0);
+  save(['role-b']);
+  assert.equal(check(), 1);
+  // An unused default config is not a registered observer.
+  const dormant = path.join(f.root, 'config', 'work-ledger.json');
+  fs.mkdirSync(path.dirname(dormant), { recursive: true });
+  fs.writeFileSync(dormant, JSON.stringify({ roles: [{ role: 'role-a' }] }));
+  assert.equal(check(), 1);
+  save(['role-a']);
+  f.doc.role_views[0].root = path.join(f.dir, 'other');
+  f.write();
+  assert.equal(check(), 1);
+  delete f.doc.role_views[0].root;
+  f.write();
+  writeWorkLedger(ledgerPath(f.root, 'unregistered'), 'unregistered', [ledgerRow('not-in-registry')]);
+  const report = [];
+  assert.equal(main(['check', '--config', f.file, '--json'], {}, f.deps, text => report.push(JSON.parse(text))), 1);
+  assert.ok(report[0].findings.some(item => item.role === 'unregistered' && item.cards?.includes('not-in-registry')));
+});
+
+test('open-card watch CLI checks one registered watcher, metadata paths and an unreadable ledger', async t => {
+  const f = setup(t);
+  const id = 'role-a';
+  delete f.doc.roles['role-b'];
+  delete f.doc.roles[id].wait;
+  f.doc.retired_roots = [];
+  const command = path.join(f.dir, 'fixture-pane');
+  const foreground = { result: { process_info: { foreground_processes: [{ argv: ['claude'], pid: 1 }] } } };
+  fs.writeFileSync(command, '#!/bin/sh\necho \'' + JSON.stringify(foreground) + '\'\n', { mode: 0o700 });
+  f.doc.pane.bin = command;
+  const metadata = path.join(f.root, 'config', 'work-ledger.json');
+  fs.mkdirSync(path.dirname(metadata), { recursive: true });
+  fs.writeFileSync(metadata, JSON.stringify({ roles: [{ role: id, wake_dir: 'wake' }] }));
+  /** @type {Parameters<typeof import('../packages/core/work-ledger-meta.d.mts').readWorkLedgerMetaSync>[0]} */
+  const source = { workLedgerConfig: metadata };
+  assert.deepEqual(readWorkLedgerMetaSync(source), await readWorkLedgerMeta(source));
+  const health = path.join(f.dir, 'health.json');
+  const role = { id, workspace: f.root, window: id, adapter: { kind: 'tmux' } };
+  fs.writeFileSync(health, JSON.stringify({ roles: [role], ...source,
+    reportFile: path.join(f.dir, 'report'), stateFile: path.join(f.dir, 'state'),
+    baselineRepo: f.root, baselineSha: 'a'.repeat(40) }));
+  f.doc.role_views = [{ kind: 'session-health', path: health }];
+  f.write();
+  f.state.now = Date.now();
+  deliver(f.load(), f.deps);
+  const file = ledgerPath(f.root, id);
+  writeWorkLedger(file, id, [ledgerRow('only-open')]);
+  const argv = [fileURLToPath(new URL('./role-wake.mjs', import.meta.url)), 'check', '--config', f.file, '--json'];
+  const result = JSON.parse(execFileSync(process.execPath, argv, { encoding: 'utf8' }));
+  assert.equal(result.openCardWatches.configured, 1);
+  assert.equal(result.openCardWatches.open, 1);
+  assert.deepEqual(result.findings, []);
+  fs.writeFileSync(file, '{');
+  assert.throws(() => execFileSync(process.execPath, argv), error => {
+    assert.equal(error.status, 1);
+    assert.equal(JSON.parse(error.stdout).findings[0].code, 'open-card-ledger-unavailable');
+    return true;
+  });
+});
+
 test('watch --repair restarts a stopped delivery run and notifies once per period', t => {
   const f = setup(t, { notify: { command: ['/opt/notify', '{text}'], repeat_seconds: 600 } });
   const registry = f.load();
@@ -1072,6 +1228,7 @@ test('the example configuration is a valid registry', () => {
   assert.deepEqual(registry.roles.map(role => role.id), ['role-a', 'role-b']);
   assert.deepEqual(registry.roleViews.map(view => ({ kind: view.kind, roles: view.roles })), [
     { kind: 'wake-routes', roles: null },
+    { kind: 'ledger-watch', roles: null },
     { kind: 'session-health', roles: ['role-a'] },
   ]);
 });
