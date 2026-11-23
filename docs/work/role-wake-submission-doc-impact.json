@@ -1,0 +1,22 @@
+{
+  "work": "role-wake-submission",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-wake-registry.md", "docs/guides/wake-completion-contract.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-wake-registry.md"],
+    "detail": "Installers can select verification per interactive role and test reconciliation against the receiver's native accepted-input events."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "reason": "The common completion contract and adapter guide contain the reusable procedure."
+  },
+  "validation": {
+    "source_patch_sha256": "f1f6126ee8a28d303cf1ee2a00bd172dd53090f730699d442b3145e714d5cf26",
+    "combined_tests": { "passed": 312, "failed": 0 },
+    "cross_process_contract": "The common dispatcher invokes the actual common receiver main/library with canonical attempt environment: busy rejection retries safely; accepted input records a string receipt; uncertain input verifies a late native ACK without another presentation.",
+    "preservation": "Existing owner priority, ordinary FIFO burst allowance, producer event identity and the shared PID/start lock remain covered by the combined regression suite."
+  }
+}

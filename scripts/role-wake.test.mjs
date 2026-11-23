@@ -1517,3 +1517,267 @@ test('priority burst bound also applies inside one pass and deferred inputs do n
   assert.equal(received.length, 4);
   assert.equal(received[3].file, regular);
 });
+
+test('late native acceptance advances the direct-request burst once and gives the oldest regular input its turn', t => {
+  const f = setup(t); configurePriority(f);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify'];
+  f.write();
+  const registry = f.load();
+  const regular = f.put('role-a', 'old-regular.md', 2);
+  const priorities = Array.from({ length: 4 }, (_, i) => {
+    const id = String(300000000000000010n + BigInt(i));
+    const file = f.put('role-a', `1-${id}-gw.md`);
+    fs.writeFileSync(file, priorityGateway('role-a', id, `Request ${i}`));
+    return path.basename(file);
+  }).reverse();
+  const received = [], accepted = new Set();
+  const saved = path.join(registry.stateDir, 'submissions/role-a.json');
+  const priorityFile = path.join(registry.stateDir, 'priority-role-a.json');
+  f.deps.run = (bin, args, options) => {
+    const env = options.env;
+    if (bin === '/opt/deliver') { received.push(path.basename(args[1])); return ''; }
+    assert.equal(bin, '/opt/verify');
+    if (!accepted.has(env.ADK_WAKE_ATTEMPT)) return '';
+    return JSON.stringify({ status: 'accepted', attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256,
+      role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'receiver', receipt: 'native-' + env.ADK_WAKE_ATTEMPT });
+  };
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  let last;
+  const expected = [...priorities.slice(0, 3), path.basename(regular), priorities[3]];
+  for (const [i, name] of expected.entries()) {
+    assert.equal(pump().deferred, 1);
+    assert.equal(pump().deferred, 1);
+    assert.deepEqual(received, expected.slice(0, i + 1));
+    assert.equal(received.at(-1), name);
+    if (i === 0) assert.equal(fs.existsSync(priorityFile), false);
+    last = JSON.parse(fs.readFileSync(saved, 'utf8'));
+    accepted.add(last.attempt);
+    assert.equal(pump().delivered, 1);
+    assert.equal(JSON.parse(fs.readFileSync(priorityFile, 'utf8')).streak, [1, 2, 3, 0, 1][i]);
+  }
+  // An interruption after both receipts were written can leave the attempt file behind.
+  fs.writeFileSync(saved, JSON.stringify(last));
+  assert.equal(pump().delivered, 0);
+  assert.equal(JSON.parse(fs.readFileSync(priorityFile, 'utf8')).streak, 1);
+  assert.deepEqual(received, expected);
+});
+
+test('separate pump and receiver processes confirm an accepted input once after presentation and restart', t => {
+  const f = setup(t);
+  const adapter = path.join(f.dir, 'interactive.mjs');
+  fs.writeFileSync(adapter, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { createHash } from 'node:crypto';
+    const [mode, dir, role, file] = process.argv.slice(2);
+    const rows = name => fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').trim().split('\\n').filter(Boolean).map(row => JSON.parse(row)) : [];
+    const append = (name, value) => fs.appendFileSync(path.join(dir, name), JSON.stringify(value) + '\\n');
+    if (mode === 'present') {
+      const attempt = JSON.parse(fs.readFileSync(path.join(dir, 'state/submissions', role + '.json'), 'utf8'));
+      const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (process.env.ADK_WAKE_ATTEMPT !== attempt.attempt || sha256 !== process.env.ADK_WAKE_PAYLOAD_SHA256) throw Error('Uncorrelated presentation');
+      const binding = { attempt: attempt.attempt, sha256, role, pane: process.env.ADK_WAKE_PANE };
+      if (fs.existsSync(path.join(dir, 'busy'))) {
+        append('decisions', { ...binding, status: 'rejected', session: 'local-session', receipt: 'before-input' });
+        process.exit(75);
+      }
+      append('presented', { ...binding, status: 'typed' });
+    } else if (mode === 'accept') {
+      const draft = rows('presented').at(-1);
+      append('native-inputs', { ...draft, status: 'accepted', session: 'local-session', receipt: 'input-' + (rows('native-inputs').length + 1) });
+    } else {
+      const receipt = [...rows('native-inputs'), ...rows('decisions')].find(r => r.attempt === process.env.ADK_WAKE_ATTEMPT);
+      console.log(JSON.stringify(receipt ?? rows('presented').at(-1)));
+    }
+  `);
+  f.doc.delivery.command = [process.execPath, adapter, 'present', f.dir, '{role}', '{file}'];
+  f.doc.roles['role-a'].verify_submission = [process.execPath, adapter, 'verify', f.dir, '{role}', '{pane}'];
+  f.write();
+  const script = fileURLToPath(new URL('./role-wake.mjs', import.meta.url));
+  const pump = () => JSON.parse(execFileSync(process.execPath, [script, 'deliver', '--config', f.file, '--role', 'role-a'], { encoding: 'utf8' })).roles['role-a'];
+  const accept = () => execFileSync(process.execPath, [adapter, 'accept', f.dir]);
+  const lines = name => fs.readFileSync(path.join(f.dir, name), 'utf8').trim().split('\n').map(row => JSON.parse(row));
+  pump();
+  f.put('role-a', '001-111111111111111111-gw.md');
+  f.put('role-a', '002-111111111111111111-route-role-a.md');
+  const busy = path.join(f.dir, 'busy');
+  fs.writeFileSync(busy, '');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.equal(fs.existsSync(path.join(f.dir, 'presented')), false);
+  fs.unlinkSync(busy);
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 2, deferred: 2 });
+  assert.notEqual(lines('decisions')[0].attempt, lines('presented')[0].attempt);
+  f.put('role-a', '003-111111111111111111-route-role-a.md');
+  f.put('role-a', '004-distinct.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 4, deferred: 2 });
+  assert.equal(lines('presented').length, 1);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'state/delivered-role-a.jsonl'), 'utf8'), '');
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 1, deferred: 1 });
+  const accepted = lines('state/delivered-role-a.jsonl').filter(row => row.status === 'delivered');
+  assert.equal(accepted.length, 2);
+  assert.ok(accepted.every(row => row.submission.receipt === 'input-1' && row.submission.sha256 === lines('presented')[0].sha256));
+  assert.equal(lines('presented').length, 2);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  f.put('role-a', '005-distinct-with-identical-text.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const [, second, third] = lines('presented');
+  assert.equal(second.sha256, third.sha256);
+  assert.notEqual(second.attempt, third.attempt);
+  accept();
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 0 });
+  assert.equal(lines('presented').length, 3);
+  assert.equal(fs.existsSync(path.join(f.dir, 'state/submissions/role-a.json')), false);
+});
+
+test('uncertain verified inputs wait through timeouts and mismatched receipts; only terminal rejection permits another presentation', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  const registry = f.load();
+  let mode = 'timeout', presentations = 0, launched;
+  const run = f.deps.run;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver' && args[0] === 'role-a') {
+      presentations++;
+      launched = options.env.ADK_WAKE_ATTEMPT;
+      throw Object.assign(new Error('acknowledgement not yet available'), { status: 75 });
+    }
+    if (bin !== '/opt/verify') return run(bin, args, options);
+    assert.deepEqual(args, ['role-a', 'w1:p1']);
+    assert.equal(options.timeout, 5_000);
+    if (mode === 'timeout') throw Object.assign(new Error('verification deadline'), { code: 'ETIMEDOUT' });
+    if (mode === 'unreadable') return 'not JSON';
+    const env = options.env;
+    const answer = { status: 'accepted', role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'native-event',
+      attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256 };
+    if (mode === 'rejected') { answer.status = 'rejected'; mode = 'timeout'; }
+    else if (mode !== 'accepted') answer[mode] = '';
+    return JSON.stringify(answer);
+  };
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', '001.md');
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  const first = launched;
+  for (mode of ['timeout', 'unreadable', 'status', 'attempt', 'sha256', 'role', 'pane', 'session', 'receipt']) {
+    assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+    assert.equal(presentations, 1);
+    assert.equal(readLedger(registry, registry.roles[0]).size, 0);
+  }
+  delete f.doc.roles['role-a'].verify_submission;
+  f.write();
+  const disabled = deliver(f.load(), f.deps, { only: 'role-a' }).roles['role-a'];
+  assert.equal(disabled.pending, 1);
+  assert.match(disabled.error, /Restore verify_submission/);
+  assert.equal(presentations, 1);
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify', '{role}', '{pane}'];
+  f.write();
+  mode = 'rejected';
+  assert.deepEqual(pump(), { delivered: 0, failed: 0, pending: 1, deferred: 1 });
+  assert.equal(presentations, 2);
+  assert.notEqual(launched, first);
+  mode = 'accepted';
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.equal(presentations, 2);
+  assert.equal(pump().delivered, 0);
+});
+
+test('a native acknowledgement survives interrupted ledger writes and clears earlier failure state', t => {
+  const f = setup(t);
+  let registry = f.load();
+  const pump = () => deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'];
+  pump();
+  f.put('role-a', 'one.md');
+  f.state.failOn = 'one.md';
+  assert.equal(pump().failed, 1);
+  f.state.failOn = null;
+  f.doc.roles['role-a'].verify_submission = ['/opt/verify'];
+  f.write();
+  registry = f.load();
+  f.state.now += 61_000;
+  const ledger = path.join(registry.stateDir, 'delivered-role-a.jsonl');
+  let submissions = 0, verifications = 0;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver') { submissions++; return ''; }
+    assert.equal(bin, '/opt/verify');
+    verifications++;
+    const env = options.env;
+    // The native session accepted this input. Its delivery ledger then became unavailable.
+    fs.renameSync(ledger, `${ledger}.saved`);
+    fs.mkdirSync(ledger);
+    return JSON.stringify({ status: 'accepted', attempt: env.ADK_WAKE_ATTEMPT, sha256: env.ADK_WAKE_PAYLOAD_SHA256,
+      role: env.ADK_WAKE_ROLE, pane: env.ADK_WAKE_PANE, session: 'session', receipt: 'input-1' });
+  };
+  assert.equal(pump().aborted, true);
+  fs.rmdirSync(ledger);
+  fs.renameSync(`${ledger}.saved`, ledger);
+  assert.deepEqual(pump(), { delivered: 1, failed: 0, pending: 0 });
+  assert.deepEqual(readFailures(registry, registry.roles[0]), {});
+  assert.equal(JSON.parse(fs.readFileSync(ledger, 'utf8')).submission.receipt, 'input-1');
+  assert.equal(pump().delivered, 0);
+  assert.equal(submissions, 1);
+  assert.equal(verifications, 1);
+});
+
+test('common dispatcher and session receiver agree on rejected and accepted native receipts across processes', t => {
+  const f = setup(t), adapter = path.join(f.dir, 'receiver.mjs');
+  const receiver = new URL('./role-session-input.mjs', import.meta.url).href;
+  const library = new URL('./lib/role-session-input.mjs', import.meta.url).href;
+  fs.writeFileSync(adapter, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { main } from ${JSON.stringify(receiver)};
+    import { payloadHash } from ${JSON.stringify(library)};
+    const [mode, dir, role, file] = process.argv.slice(2);
+    const attempt = process.env.ADK_WAKE_ATTEMPT;
+    const native = path.join(dir, 'native-' + attempt + '.json');
+    let clock = 0;
+    const deps = {
+      now: () => clock, sleep: async ms => { clock += ms; },
+      inspect: async () => ({ foreground: [{ pid: 42, args: 'codex' }], processes: [],
+        screen: fs.existsSync(path.join(dir, 'busy')) ? '• Working (2m • esc\\n› Ask Codex to do anything' : '› Ask Codex to do anything' }),
+      native: async () => ({ process_start: '111', process_cwd: '/fixture', thread_id: 'fixture-thread', cwd: '/fixture',
+        state: 'idle', file_id: '1:2', byte_size: 100, next_cursor: { offset: 100 },
+        ...(fs.existsSync(native) ? { ack: JSON.parse(fs.readFileSync(native, 'utf8')) } : {}) }),
+      submit: async (_profile, text) => {
+        const ack = { thread_id: 'fixture-thread', offset: 110, payload_sha256: payloadHash(text) };
+        fs.appendFileSync(path.join(dir, 'presented'), JSON.stringify({ attempt, ack }) + '\\n');
+        if (!fs.existsSync(path.join(dir, 'uncertain'))) fs.writeFileSync(native, JSON.stringify(ack));
+      },
+    };
+    const args = [...(mode === 'verify' ? ['verify'] : []), '--config', path.join(dir, 'role-wake.json'), '--role', role,
+      ...(file ? ['--file', file] : [])];
+    process.exitCode = await main(args, deps);
+  `);
+  f.doc.roles['role-a'].session = { kind: 'codex-jsonl', pid: 42, process_start: '111', thread_id: 'fixture-thread', native_path: '/fixture/native.jsonl', cwd: '/fixture' };
+  f.doc.roles['role-a'].verify_submission = [process.execPath, adapter, 'verify', f.dir, '{role}'];
+  f.doc.delivery.command = [process.execPath, adapter, 'present', f.dir, '{role}', '{file}'];
+  f.write();
+  const script = fileURLToPath(new URL('./role-wake.mjs', import.meta.url));
+  const pump = () => JSON.parse(execFileSync(process.execPath, [script, 'deliver', '--config', f.file, '--role', 'role-a'], { encoding: 'utf8' })).roles['role-a'];
+  const presented = () => fs.existsSync(path.join(f.dir, 'presented')) ? fs.readFileSync(path.join(f.dir, 'presented'), 'utf8').trim().split('\n').map(JSON.parse) : [];
+  pump();
+  const first = f.put('role-a', '001-first.md');
+  fs.writeFileSync(path.join(f.dir, 'busy'), '');
+  assert.equal(pump().deferred, 1);
+  assert.equal(presented().length, 0);
+  fs.unlinkSync(path.join(f.dir, 'busy'));
+  assert.equal(pump().delivered, 1);
+  assert.equal(presented().length, 1);
+  assert.equal(fs.readFileSync(first, 'utf8'), 'wake\n');
+  f.put('role-a', '002-uncertain.md');
+  fs.writeFileSync(path.join(f.dir, 'uncertain'), '');
+  assert.equal(pump().deferred, 1);
+  assert.equal(pump().deferred, 1);
+  assert.equal(presented().length, 2);
+  const late = presented().at(-1);
+  fs.writeFileSync(path.join(f.dir, `native-${late.attempt}.json`), JSON.stringify(late.ack));
+  assert.equal(pump().delivered, 1);
+  assert.equal(presented().length, 2);
+  const rows = fs.readFileSync(path.join(f.doc.state_dir, 'delivered-role-a.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(rows.filter(row => row.status === 'delivered').every(row => typeof row.submission.receipt === 'string'));
+  assert.equal(pump().pending, 0);
+});
