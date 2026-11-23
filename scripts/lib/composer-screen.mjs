@@ -47,9 +47,12 @@ function styledChars(raw) {
         else if (value === 22) dim = false;
         else if (value === 39) fg = null;
         else if (value >= 30 && value <= 37 || value >= 90 && value <= 97) fg = String(value);
-        else if (value === 38) {
+        else if ([38, 48, 58].includes(value)) {
           const count = values[index + 1] === 2 ? 4 : values[index + 1] === 5 ? 2 : 0;
-          if (count && index + count < values.length) { fg = values.slice(index, index + count + 1).join(';'); index += count; }
+          if (count && index + count < values.length) {
+            if (value === 38) fg = values.slice(index, index + count + 1).join(';');
+            index += count;
+          }
         }
       }
     }

@@ -31,3 +31,9 @@ test('unknown styled hints defer explicitly and a different neutral palette also
   assert.equal(classifyComposerScreen(fixture('/new-hint from a later release'), 'muse'), 'unknown');
   assert.equal(classifyComposerScreen(fixture('/goal pins a session objective').replaceAll('103;108;116', '128;128;128'), 'muse'), 'idle');
 });
+
+test('RGB/indexed background and underline colors never turn human text into a dim hint', () => {
+  for (const color of ['48;2;10;20;30', '48;5;2', '58;2;10;20;30', '58;5;2']) {
+    assert.equal(classifyComposerScreen(fixture('/goal pins a session objective', white + `\x1b[${color}m`), 'muse'), 'draft', color);
+  }
+});

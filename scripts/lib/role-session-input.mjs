@@ -82,18 +82,24 @@ async function lockRole(stateDir, role) {
 }
 
 export async function deliverInput({ role, key, text, sourceMessageId = null, sourceSha256 = null,
-  transportSha256 = null, profile, stateDir, ackTimeoutMs = 5000, pollMs = 200 }, deps) {
+  transportSha256 = null, canonicalAttempt = false, profile, stateDir, ackTimeoutMs = 5000, pollMs = 200 }, deps) {
   const release = await lockRole(stateDir, role);
   if (!release) return { code: 75, reason: 'receiver_locked' };
   try {
     const file = attemptFile(stateDir, role, key);
     const before = await readAttempt(file);
     const fixedPayload = ['submitting', 'submitted_unconfirmed', 'accepted'].includes(before?.status);
-    const hash = fixedPayload ? before.payload_hash : payloadHash(text);
+    const terminalNotSubmitted = before?.canonical_attempt === true && before.status === 'not_submitted';
+    const immutable = fixedPayload || terminalNotSubmitted;
+    const hash = immutable ? before.payload_hash : payloadHash(text);
     const record = { ...before, role, source_key: key, source_message_id: sourceMessageId,
-      source_sha256: fixedPayload ? before.source_sha256 : sourceSha256 ?? before?.source_sha256 ?? null,
-      transport_sha256: transportSha256 ?? before?.transport_sha256 ?? null,
-      payload_hash: fixedPayload ? before.payload_hash : hash,
+      status: immutable ? before.status : 'not_submitted',
+      canonical_attempt: before?.canonical_attempt ?? canonicalAttempt,
+      pane_id: immutable ? before.pane_id : profile.pane_id,
+      thread_id: immutable ? before.thread_id : profile.session?.thread_id ?? null,
+      source_sha256: immutable ? before.source_sha256 : sourceSha256 ?? before?.source_sha256 ?? null,
+      transport_sha256: immutable ? before.transport_sha256 : transportSha256 ?? before?.transport_sha256 ?? null,
+      payload_hash: hash,
       first_at: before?.first_at ?? new Date(deps.now()).toISOString() };
     const finish = async (code, reason, extra = {}) => {
       Object.assign(record, extra, { reason, last_at: new Date(deps.now()).toISOString() });
@@ -104,6 +110,7 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
         reason, first_at: record.first_at, last_at: record.last_at,
         native_user_ack: record.native_evidence ?? null, attempt_path: file };
     };
+    if (terminalNotSubmitted) return finish(75, 'attempt_terminal');
     if (fixedPayload && before.source_sha256 && sourceSha256 && before.source_sha256 !== sourceSha256) return finish(75, 'source_changed');
     if (fixedPayload && before.transport_sha256 && transportSha256 && before.transport_sha256 !== transportSha256) {
       record.transport_sha256 = before.transport_sha256;
@@ -141,7 +148,7 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
     await finish(75, 'native_ack_pending');
     try { await deps.submit(profile, text); }
     catch (error) {
-      if (error.code === 'ENOENT') return finish(1, 'transport_unavailable', { status: 'rejected' });
+      if (error.code === 'ENOENT') return finish(1, 'transport_unavailable', { status: 'not_submitted' });
       return finish(75, 'native_ack_pending', { status: 'submitted_unconfirmed', transport_error: error.code ?? 'unconfirmed' });
     }
     const deadline = deps.now() + ackTimeoutMs;
@@ -166,40 +173,49 @@ export async function deliverInput({ role, key, text, sourceMessageId = null, so
 export async function verifyInput({ role, key, transportSha256, profile, stateDir }, deps) {
   const projection = { status: 'unknown', attempt: key, sha256: transportSha256,
     role, pane: profile.pane_id, session: profile.session?.thread_id ?? null, receipt: null };
-  const before = await readAttempt(attemptFile(stateDir, role, key));
-  const rejected = () => ({ ...projection, status: 'rejected', reason: 'not_submitted', receipt: `not-submitted:${payloadHash(key)}`, code: 0 });
-  if (!before) return rejected();
-  if (!transportSha256 || before.transport_sha256 !== transportSha256) return { ...projection, reason: 'transport_payload_changed', code: 75 };
-  if (!['submitting', 'submitted_unconfirmed', 'accepted'].includes(before.status)) return rejected();
-  const inspected = await deps.inspect(profile);
-  const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
-  if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
-  let native = await deps.native(profile.session, before.payload_hash, agent,
-    { cursor: before.native_cursor, file_id: before.native_file_id });
-  const check = snapshot => validateBinding(profile.session, agent, snapshot) ??
-    (snapshot.file_id !== before.native_file_id ? 'native_rotated' : null);
-  let invalid = check(native);
-  if (invalid) return { ...projection, reason: invalid, code: 75 };
-  // Verification has no writable cursor. Traverse only the bytes present at
-  // this first snapshot's EOF, one bounded window at a time. New appends wait
-  // for the next verification; a partial line never advances the cursor.
-  const end = native.byte_size;
-  while (before.status !== 'accepted' && !native.ack && native.next_cursor?.offset < end) {
-    const offset = native.next_cursor.offset;
-    const next = await deps.native(profile.session, before.payload_hash, agent,
-      { cursor: { offset }, file_id: before.native_file_id, end_offset: end });
-    invalid = check(next);
+  const release = await lockRole(stateDir, role);
+  if (!release) return { ...projection, reason: 'receiver_locked', code: 75 };
+  try {
+    const before = await readAttempt(attemptFile(stateDir, role, key));
+    const rejected = () => ({ ...projection, status: 'rejected', reason: 'not_submitted', receipt: `not-submitted:${payloadHash(key)}`, code: 0 });
+    if (!before) return { ...projection, reason: 'attempt_unrecorded', code: 75 };
+    if (!transportSha256 || before.transport_sha256 !== transportSha256) return { ...projection, reason: 'transport_payload_changed', code: 75 };
+    if (before.role !== role || before.source_key !== key || before.pane_id !== profile.pane_id || before.thread_id !== profile.session?.thread_id) {
+      return { ...projection, reason: 'attempt_binding_mismatch', code: 75 };
+    }
+    if (before.status === 'not_submitted') return before.canonical_attempt === true ? rejected()
+      : { ...projection, reason: 'legacy_nonterminal_attempt', code: 75 };
+    if (!['submitting', 'submitted_unconfirmed', 'accepted'].includes(before.status)) return { ...projection, reason: 'attempt_phase_unknown', code: 75 };
+    const inspected = await deps.inspect(profile);
+    const agent = resolveAgentProcess(inspected.foreground, inspected.processes);
+    if (!agent) return { ...projection, reason: 'unknown_agent', code: 75 };
+    let native = await deps.native(profile.session, before.payload_hash, agent,
+      { cursor: before.native_cursor, file_id: before.native_file_id });
+    const check = snapshot => validateBinding(profile.session, agent, snapshot) ??
+      (snapshot.file_id !== before.native_file_id ? 'native_rotated' : null);
+    let invalid = check(native);
     if (invalid) return { ...projection, reason: invalid, code: 75 };
-    native = next;
-    if (!native.ack && !(native.next_cursor?.offset > offset)) break;
-  }
-  const ack = before.status === 'accepted' ? before.native_evidence : native.ack;
-  if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash) {
-    return { ...projection, reason: 'native_ack_pending', code: 75 };
-  }
-  return { ...projection, status: 'accepted', code: 0, reason: 'submitted_ack',
-    receipt: `codex-jsonl:${ack.thread_id}:${ack.offset}:${before.payload_hash}`, evidence: {
-    source_sha256: before.source_sha256, payload_sha256: before.payload_hash,
-    first_at: before.first_at, native_user_ack: ack,
-  } };
+    // Verification has no writable cursor. Traverse only the bytes present at
+    // this first snapshot's EOF, one bounded window at a time. New appends wait
+    // for the next verification; a partial line never advances the cursor.
+    const end = native.byte_size;
+    while (before.status !== 'accepted' && !native.ack && native.next_cursor?.offset < end) {
+      const offset = native.next_cursor.offset;
+      const next = await deps.native(profile.session, before.payload_hash, agent,
+        { cursor: { offset }, file_id: before.native_file_id, end_offset: end });
+      invalid = check(next);
+      if (invalid) return { ...projection, reason: invalid, code: 75 };
+      native = next;
+      if (!native.ack && !(native.next_cursor?.offset > offset)) break;
+    }
+    const ack = before.status === 'accepted' ? before.native_evidence : native.ack;
+    if (!ack || ack.offset < before.native_after_offset || ack.thread_id !== profile.session.thread_id || ack.payload_sha256 !== before.payload_hash) {
+      return { ...projection, reason: 'native_ack_pending', code: 75 };
+    }
+    return { ...projection, status: 'accepted', code: 0, reason: 'submitted_ack',
+      receipt: `codex-jsonl:${ack.thread_id}:${ack.offset}:${before.payload_hash}`, evidence: {
+      source_sha256: before.source_sha256, payload_sha256: before.payload_hash,
+      first_at: before.first_at, native_user_ack: ack,
+    } };
+  } finally { await release(); }
 }

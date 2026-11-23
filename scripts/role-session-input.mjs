@@ -154,7 +154,7 @@ export async function main(argv = process.argv.slice(2), dependencies, env = pro
   const bytes = verify ? null : await fs.readFile(file);
   const transportSha256 = env.ADK_WAKE_PAYLOAD_SHA256 ?? (bytes && createHash('sha256').update(bytes).digest('hex'));
   const result = verify ? await verifyInput({ role, key, transportSha256, profile: resolved, stateDir }, deps)
-    : await deliverInput({ role, key, transportSha256, text: bytes.toString('utf8'),
+    : await deliverInput({ role, key, transportSha256, canonicalAttempt: Boolean(env.ADK_WAKE_ATTEMPT), text: bytes.toString('utf8'),
       sourceSha256: value('--source-sha256'), sourceMessageId: value('--source-message-id'), profile: resolved, stateDir,
     }, deps);
   process.stdout.write(JSON.stringify({ role, ...result }) + '\n');

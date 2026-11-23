@@ -15,7 +15,9 @@ A known hint or sufficiently long clipped prefix is treated as empty only when
 its ANSI foreground matches the input border's neutral color, or its text is
 rendered dim. There is no fixed color requirement. Human input rendered in the
 normal text color remains a draft, even when its words equal a known hint.
-Arbitrary slash commands are never treated as empty.
+Arbitrary slash commands are never treated as empty. ANSI extended background
+and underline colors are consumed independently; their numeric color components
+do not alter foreground or dim state.
 
 Unstyled captures cannot prove a new Muse hint is empty. Unknown text rendered
 with placeholder style returns `unknown`, so a future tool-version or catalog

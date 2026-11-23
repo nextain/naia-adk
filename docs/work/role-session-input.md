@@ -44,7 +44,7 @@ reconciliation of a pre-existing composer draft require instance evidence.
 
 ## Validation evidence
 
-The receiver's 30 local regressions cover two installation profiles, busy and
+The receiver's 34 local regressions cover two installation profiles, busy and
 human-draft deferral, PID/thread/cwd mismatches, old and delayed native ACKs,
 changed headers before and after submission, uncertain retry without repeated
 paste, stale lock recovery, split JSONL writes, bounded large-log reads,
@@ -57,3 +57,9 @@ foreground processes, thread/cwd bindings and native files. Both returned busy
 preflight evidence, not a claim that live common-transport delivery has yet been
 acknowledged. Live activation and the first native user ACK remain instance
 acceptance steps.
+
+The negative-proof contract requires an explicit durable terminal phase. An
+absent record never proves that no sender is running. A shared role mutex
+serializes read-only verification with sender preflight; canonical rejected
+attempts cannot later submit. Two-installation concurrent fixtures cover this
+case alongside missing/legacy/terminal/fresh-attempt state transitions.

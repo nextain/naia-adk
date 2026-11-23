@@ -123,3 +123,46 @@ test('foreign native ACK and wrong process id cannot acknowledge input', async t
 test('payload hashing preserves actual bytes including CRLF', () => {
   assert.notEqual(payloadHash('a\r\nb'), payloadHash('a\nb'));
 });
+
+test('missing journal is unknown rather than negative submission proof', async t => {
+  const h = await harness(t);
+  const answer = await verifyInput({ role: 'author', key: 'missing', transportSha256: 'transporthash', profile, stateDir: h.stateDir }, h.deps);
+  assert.equal(answer.status, 'unknown'); assert.equal(answer.code, 75); assert.equal(answer.reason, 'attempt_unrecorded');
+});
+
+test('canonical not-submitted is terminal; fresh attempt can resume safely', async t => {
+  const h = await harness(t); h.screen = '• Working (2m • esc\n› Ask Codex to do anything';
+  const options = { role: 'author', key: 'source-a', transportSha256: 'transporthash', profile, stateDir: h.stateDir };
+  await h.call({ canonicalAttempt: true });
+  assert.equal((await verifyInput(options, h.deps)).status, 'rejected');
+  h.screen = idle;
+  assert.equal((await h.call({ canonicalAttempt: true })).reason, 'attempt_terminal');
+  assert.equal((await verifyInput(options, h.deps)).status, 'rejected'); assert.equal(h.count(), 0);
+  assert.equal((await h.call({ canonicalAttempt: true, key: 'fresh-attempt' })).code, 0); assert.equal(h.count(), 1);
+});
+
+test('legacy fresh retry is allowed but cannot issue terminal negative proof', async t => {
+  const h = await harness(t); h.screen = '› human draft';
+  await h.call();
+  const answer = await verifyInput({ role: 'author', key: 'source-a', transportSha256: 'transporthash', profile, stateDir: h.stateDir }, h.deps);
+  assert.equal(answer.status, 'unknown'); assert.equal(answer.reason, 'legacy_nonterminal_attempt');
+  h.screen = idle; assert.equal((await h.call()).code, 0); assert.equal(h.count(), 1);
+});
+
+test('concurrent verification during preflight never reports rejected on either installation', async t => {
+  for (const suffix of ['one', 'two']) {
+    const h = await harness(t), paneProfile = { ...profile, pane_id: `instance-${suffix}:pane` };
+    let unblock, entered;
+    const gate = new Promise(resolve => { unblock = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    const original = h.deps.inspect;
+    h.deps.inspect = async current => { entered(); await gate; return original(current); };
+    const delivery = h.call({ profile: paneProfile, canonicalAttempt: true });
+    await started;
+    const options = { role: 'author', key: 'source-a', transportSha256: 'transporthash', profile: paneProfile, stateDir: h.stateDir };
+    const during = await verifyInput(options, h.deps);
+    assert.equal(during.status, 'unknown'); assert.equal(during.code, 75); assert.equal(during.reason, 'receiver_locked');
+    unblock(); assert.equal((await delivery).code, 0);
+    assert.equal((await verifyInput(options, h.deps)).status, 'accepted'); assert.equal(h.count(), 1);
+  }
+});

@@ -71,18 +71,25 @@ actual formatted payload digest. No independent attempt nonce is generated.
 Without these environment fields, a standalone invocation uses `--key` (or the
 input path) and the input-file digest. The role and pane must agree with config.
 
-Before submission, a busy session may retry with updated work/context headers.
+A dispatcher attempt that is deferred before submission records an explicit
+`not_submitted` phase. That canonical attempt is terminal: it can never submit
+later. The dispatcher verifies its rejection and creates a fresh attempt for a
+retry, which may carry updated work/context headers.
 After submission begins, the stored actual payload remains fixed. The receiver
 uses Herdr's atomic `agent prompt ... --wait --until working` operation and then
 checks for a matching native `response_item` user record after the attempt's
 baseline offset. Old identical messages do not acknowledge a new attempt.
 An uncertain retry reconciles the saved payload and never pastes again.
 
-`verify` is read-only: it never submits input or writes attempt records. Its
+`verify` is read-only with respect to input, native files and attempt records.
+It uses the same temporary role mutex as delivery so an in-flight sender cannot
+be mistaken for an absent or rejected attempt. Its
 stdout is `{status,attempt,sha256,role,pane,session,receipt,reason,code}`. Accepted
 means the same attempt and actual payload have native user-input evidence in
-the same bound session. Rejected means no submission occurred and retry is
-safe. Unknown exits 75 and preserves the original. The receipt is a compact `codex-jsonl:THREAD:OFFSET:PAYLOAD_SHA256` reference
+the same bound session. Rejected requires an explicit persisted canonical `not_submitted` phase and
+means that terminal attempt never submitted; retry requires a fresh attempt id.
+A missing journal, held role mutex or unknown phase is not negative proof and
+returns unknown 75, preserving the original. The receipt is a compact `codex-jsonl:THREAD:OFFSET:PAYLOAD_SHA256` reference
 (or `not-submitted:KEY_SHA256` for rejected). The separate `evidence` object joins
 source and formatted-payload digests, first-attempt time and native thread/offset.
 
@@ -110,3 +117,24 @@ or a separate operator recovery; it must not silently re-paste. The original
 cause of individual legacy PTY key loss is not established by this adapter.
 
 Validation and use-case mapping: [work contract](../work/role-session-input.md).
+
+## Attempt-state matrix and upgrades
+
+| Persisted state | Verification | Further input under the same canonical attempt |
+| --- | --- | --- |
+| No record or unknown/old phase | Unknown 75 | No inference of non-submission |
+| Sender currently holds role mutex | Unknown 75 | Serialized behind sender |
+| Explicit canonical `not_submitted` | Rejected reference | Never; use a fresh attempt |
+| `submitting` or `submitted_unconfirmed` | Unknown 75 until exact native ACK | Never repeated |
+| Accepted native ACK | Accepted reference | Never repeated |
+
+Without `ADK_WAKE_ATTEMPT`, a standalone file invocation may retry a pre-submit
+deferral under the same `--key`. Such a legacy, nonterminal attempt can receive
+an accepted native ACK but cannot issue a rejected proof for the dispatcher.
+Use canonical environment fields for distributed delivery.
+
+Older journals lacking explicit phase/binding fields stay unknown after upgrade.
+Do not silently migrate absence into rejection. An operator must preserve the
+original and old records, establish the actual prior consumer version and its
+pre-submission evidence, then reconcile that specific attempt. Native ACK
+evidence takes precedence when input may already have been received.
