@@ -14,6 +14,7 @@
     "Use git for source control and track tasks via work documents in docs/work/ (document ID = work ID, front matter 마일스톤: and 기한:, and ## 할 일 table).",
     "Each agent seat is a folder agents/<id>-adk/ with index.md inside (agents/<id>-adk/index.md).",
     "Require explicit human approval before production changes, billing/payments, or external communications.",
-    "Never mix memory, credentials, or data across different groups."
+    "Never mix memory, credentials, or data across different groups.",
+    "Before starting work assigned on a messenger, reply to the original in the requester’s language, mention them, and state the task and an ETA. Report the result in the same thread and keep unfinished work open."
   ]
 }
