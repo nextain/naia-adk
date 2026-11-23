@@ -89,3 +89,19 @@ test('a different Node provider cannot authorize its Codex worker as the role fr
     processes:[{pid:f.session.pid,ppid:wrapper,args:'codex'}],screen:'› Ask Codex to do anything'});
   assert.equal((await f.call()).answer.reason,'unsupported');assert.equal(f.submits(),0);
 });
+
+test('registered native foreground membership is independent of unrelated sibling order',async t=>{
+  for(const reverse of [false,true]){
+    const f=await fixture(t),unrelated={pid:process.pid+100000,args:'codex'};
+    const target={pid:f.session.pid,args:'codex'};
+    f.deps.inspect=async()=>({foreground:reverse?[target,unrelated]:[unrelated,target],processes:[],screen:'› Ask Codex to do anything'});
+    assert.equal((await f.call()).code,0);assert.equal(f.submits(),1);
+  }
+});
+
+test('registered native child wins over an earlier foreground worker under its Node wrapper',async t=>{
+  const f=await fixture(t),wrapper=process.pid+100000,worker=process.pid+100001;
+  f.deps.inspect=async()=>({foreground:[{pid:worker,args:'codex'},{pid:wrapper,argv:['node','/fixture/codex.js']}],
+    processes:[{pid:f.session.pid,ppid:wrapper,args:'codex'},{pid:worker,ppid:f.session.pid,args:'codex'}],screen:'› Ask Codex to do anything'});
+  assert.equal((await f.call()).code,0);assert.equal(f.submits(),1);
+});
