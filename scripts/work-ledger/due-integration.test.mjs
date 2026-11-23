@@ -109,7 +109,7 @@ test('fallback distinguishes changed due and supports long ids', async t => {
   assert.equal((await watch({ root, config, runner: f.runner, now })).wakes.length, 1);
   await changeLedger(root, 'a', l => { l.items[0].due = second; });
   assert.equal((await watch({ root, config, runner: f.runner, now: now + 1000 })).wakes.length, 1);
-  assert.equal((await readdir(path.join(root, '.agents/work/l4/wake'))).length, 2);
+  assert.equal((await readdir(path.join(root, '.agents/work/l4/wake'))).filter(name => name.endsWith('.md')).length, 2);
 });
 
 test('custom config is passed to the scheduled fire and controls post-fire command', async t => {
@@ -239,7 +239,7 @@ test('switching timer mode preserves a recorded fallback for the same due', asyn
   assert.equal((await watch({ root, config: { roles: config.roles }, now, runner: f.runner })).wakes.length, 1);
   await approveFixture(root, config);
   assert.equal((await watch({ root, config, now: now + 60000, runner: f.runner })).wakes.length, 0);
-  assert.equal((await watch({ root, config, now: now + 30 * 60000, runner: f.runner })).wakes.length, 1);
+  assert.equal((await watch({ root, config, now: now + 30 * 60000, runner: f.runner })).wakes.length, 0);
   assert.equal((await watch({ root, config: { roles: config.roles }, now: now + 31 * 60000, runner: f.runner })).wakes.length, 0);
 });
 

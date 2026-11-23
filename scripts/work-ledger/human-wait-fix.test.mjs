@@ -37,7 +37,7 @@ async function setup(t, messages, threads = [], conf = config(), failures = {}) 
 }
 async function wakeBodies(root) {
   const dir = path.join(root, '.agents/work/l4/wake');
-  return Promise.all((await readdir(dir)).map(async (name) => ({ name, body: await readFile(path.join(dir, name), 'utf8') })));
+  return Promise.all((await readdir(dir)).filter(name => name.endsWith('.md')).map(async (name) => ({ name, body: await readFile(path.join(dir, name), 'utf8') })));
 }
 
 test('radio 80 minute incident: unrelated bot followups and bot collaboration retain one human wake', async (t) => {

@@ -301,8 +301,9 @@ function receiptLock(root, file) {
 }
 
 // Both writers take the ledger lock before the receipt lock. Persist the
-// receipt before emitting so a crash after delivery cannot duplicate the wake.
-export async function dueWake({ root, role, id, due, now = Date.now(), source = 'timer', lastSent, emit }) {
+// claim before emitting; sent is recorded only after publication. The watcher
+// stages its existing outbox before a claim and recovers it after interruption.
+export async function dueWake({ root, role, id, due, now = Date.now(), source = 'timer', lastSent, emit, observe }) {
   safeName(role); safeName(id);
   if (!validDate(due) || !Number.isFinite(now) || !['timer', 'watch'].includes(source)) throw new Error('Invalid due wake');
   await assertLedgerOwner(root);
@@ -319,15 +320,19 @@ export async function dueWake({ root, role, id, due, now = Date.now(), source = 
       let receipt;
       try { receipt = JSON.parse(await readFile(file, 'utf8')); }
       catch (error) { if (error instanceof SyntaxError) receipt = { status: 'claimed' }; else if (error.code !== 'ENOENT') throw error; }
+      // Only the watcher supplies this callback. It stages the existing durable
+      // card outbox while the original ledger -> receipt lock order is held.
+      if (source === 'watch' && observe) await observe(item, receipt);
       if (source === 'timer' && receipt) return false;
       if (source === 'watch') {
         const sent = receipt?.status === 'sent' && Number.isFinite(receipt.at) ? receipt.at : undefined;
         const previous = receipt?.status === 'failed' ? -Infinity : Math.max(Number.isFinite(lastSent) ? lastSent : -Infinity, sent ?? -Infinity);
         if (now - previous < 30 * 60000) return false;
       }
-      await atomicJson(file, { role, id, due, status: 'sent', at: now });
+      await atomicJson(file, { role, id, due, status: 'claimed', at: now });
       try { await emit(item, receipt?.status); }
       catch (error) { await atomicJson(file, { role, id, due, status: 'claimed', at: now }); throw error; }
+      await atomicJson(file, { role, id, due, status: 'sent', at: now });
       return true;
     });
   }); } catch (error) {

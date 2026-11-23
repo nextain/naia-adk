@@ -87,7 +87,7 @@ test('reconciliation rereads a ledger changed while listing timers', async t => 
   assert.equal(armed, later);
 });
 
-test('lock timeout records failed and watch uses due-time reason despite recent fallback', { timeout: 20000 }, async t => {
+test('lock timeout records failed and watch repairs the receipt without repeating its existing deadline event', { timeout: 20000 }, async t => {
   const { root } = await setup(t); await add(root); const at = Date.parse(due) + 1000;
   await withLock(ledgerPath(root, 'a'), async () => {
     await assert.rejects(fire({ root, config: cfg, role: 'a', id: 'job', due, now: at }), /Lock/);
@@ -96,8 +96,8 @@ test('lock timeout records failed and watch uses due-time reason despite recent 
   const key = JSON.stringify(['a', 'job', '기한 넘음', due]);
   await writeFile(path.join(root, '.agents/work/ledger/watch-state.json'), JSON.stringify({ version: 1, sent: { [key]: at - 1000 }, thread_cursors: {}, mentions: {} }));
   const result = await watch({ root, config: cfg, now: at, runner: async () => '' });
-  assert.equal(result.wakes[0].reason, '정한 시각');
-  assert.match(await readFile(path.join(root, '.agents/work/l4/wake', (await readdir(path.join(root, '.agents/work/l4/wake')))[0]), 'utf8'), /정한 시각/);
+  assert.deepEqual(result.wakes, []);
+  assert.equal(JSON.parse(await readFile(receiptPath(root, 'a', 'job', due))).status, 'sent');
 });
 
 test('wake filename collision uses a different file without overwriting', async t => {
