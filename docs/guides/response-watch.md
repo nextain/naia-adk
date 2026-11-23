@@ -93,6 +93,13 @@ remove only the exact failed stage when absence is established. Preserve the
 source request and cursor. Uncertain site failure/recovery notices follow the
 same reconciliation rule.
 
+Each successful poll reads replies before retrying outstanding notices, including
+polls with no new requests. An exact reply from the assigned bot removes the
+notice for that source message. Other unanswered requests remain eligible. A
+delivery adapter that holds or batches notices must keep their source message
+and assigned role until send time, recheck each against the latest replies,
+and drain due notices on its regular timer even when no new work arrives.
+
 A state-file `.lock` excludes concurrent real runners. After a crash it may
 remain deliberately. Inspect its PID/start time, confirm that exact process is
 gone and no other timer/cron runner owns the state, then back up the state and
