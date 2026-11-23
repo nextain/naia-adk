@@ -22,6 +22,7 @@ only; the script is the same on every server.
 | `roles.<id>.extra_boxes` | More boxes of the same role outside `root`: `[{ "path": "/abs", "via": ["sudo", "-n"] }]`. `via` is the command prefix that can read a box another account owns; without it the box is read directly. |
 | `roles.<id>.dm_channels`, `dm_users` | DM rooms whose REST catch-up by [bot-mention-wake](bot-mention-wake.md) is checked: by room id, or by the id of the person on the other side when the room id is not known. |
 | `roles.<id>.wait` | Optional in-session wait script, checked under the pane's own process tree. `mode: "nudge"` (default) marks a script the role depends on; `"observe"` is recorded only. |
+| `roles.<id>.verify_submission` | Optional read-only command that checks the receiving session's acceptance of an interactive input. Its argument array supports `{role}` and `{pane}`. See “Verify interactive submissions” below. |
 | `delivery.command` | Instance command that puts one wake file in front of a role (`{role}`, `{file}`). |
 | `delivery.workHeader` | Set to `true` to prepend the role's work ledger summary to a private delivery copy. Defaults to `false`. |
 | `delivery.busy_probe` | Optional command array with `{role}` and `{pane}` placeholders. At the start of a role's delivery attempts it may report `busy` or `idle` on stdout. The delivery summary records `true`, `false`, or `null` when the probe fails, times out after five seconds, or returns another value. Delivery proceeds in each case. |
@@ -114,13 +115,47 @@ liveness wakes, drive notifications (`drive.notify.command`), and the Gateway
 router use their own delivery paths. The optional busy probe records status
 while the configured delivery command handles queuing.
 
-The delivery command's successful exit is the recorded handover boundary.
-A process killed after sending input and before writing its receipt can leave
-an uncertain delivery. Consumer acknowledgements remain part of instance
-acceptance. The per-run limit bounds attempts during one pass and does not
-provide busy-session backpressure or a backlog rate limit. Repeated ledger
-notices and accumulated inputs therefore require separate producer and
-instance delivery controls.
+For roles using the delivery command alone, a successful exit records a
+handover. A process killed between sending and recording the handover can
+leave an uncertain delivery. The per-run limit bounds attempts in one pass.
+
+## Verify interactive submissions
+
+On an interactive role whose adapter can observe accepted input, set
+`"verify_submission": ["/private/adapter", "verify", "{role}", "{pane}"]`
+in that role's registry entry. The delivery command keeps its `{role}` and
+`{file}` arguments. The pump passes both commands `ADK_WAKE_ATTEMPT`,
+`ADK_WAKE_PAYLOAD_SHA256`, `ADK_WAKE_ROLE`, and `ADK_WAKE_PANE`. The digest
+covers the exact private copy handed over, including any work header or
+merged messages. The pump saves the attempt before calling the delivery command.
+
+The verifier reads the receiver's native input history or acknowledgement
+store. On exit 0 it can return one JSON object with `status` equal to
+`accepted`, the matching `attempt`, `sha256`, `role` and `pane`, and opaque
+`session` and `receipt` identifiers. Before typing, persist the receiving
+session identity and its native input cursor alongside the attempt. Use a
+native correlation ID, or a newly accepted user input beyond that cursor
+whose payload and origin uniquely match this attempt. Retain that mapping
+across restarts. A displayed draft, successful keystroke, or unrelated turn leaves
+the attempt pending. Use identifiers free of message content. The identifier
+fields accept 1–256 ASCII letters, digits, or `_.:@+/-`.
+
+If the adapter finds a busy pane **before it types**, record a terminal
+`rejected` decision for this attempt and exit 75. The verifier returns the
+same correlated fields with that decision and its receipt. The next pump
+pass may present the work when the pane is ready. Report `rejected` only
+when this attempt cannot still produce an accepted input. After typing or a
+timeout, return no conclusive receipt until the receiving session settles
+the attempt. The verifier may exit 75 while waiting. The pump keeps the
+originals pending and checks again on the next pass without repeating input.
+An absent history entry alone is insufficient for a terminal rejection.
+
+Accepted receipts are kept with the original filenames in the delivery
+ledger. An unresolved attempt stays in `state_dir/submissions/<role>.json`.
+Keep its verifier available through configuration changes. During installation,
+test busy-to-idle delivery, a late native receipt after a pump restart, and
+two successive inputs with the same text. Check the native receipt IDs
+against the delivery ledger. [Wake completion contract](wake-completion-contract.md)
 
 ## DM rooms
 

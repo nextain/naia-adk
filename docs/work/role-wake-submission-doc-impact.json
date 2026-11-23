@@ -1,0 +1,16 @@
+{
+  "work": "role-wake-submission",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-wake-registry.md", "docs/guides/wake-completion-contract.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/role-wake-registry.md"],
+    "detail": "Installers can select verification per interactive role and test reconciliation against the receiver's native accepted-input events."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "reason": "The common completion contract and adapter guide contain the reusable procedure."
+  }
+}
