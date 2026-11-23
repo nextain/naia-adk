@@ -23,8 +23,9 @@ export async function launchObserver({role,profile,config,launchId,timeoutMs}) {
 }
 
 export async function main(argv=process.argv.slice(2),deps=registrationHost(),stdin=()=>readFileSync(0,'utf8')) {
-  const value=key=>{const at=argv.indexOf(key);return at<0?null:argv[at+1];};
-  const action=argv[0];
+  const action=argv[0],boundary=argv.indexOf('--');
+  const options=action==='prepare'&&boundary>=0?argv.slice(0,boundary):argv;
+  const value=key=>{const at=options.indexOf(key);return at<0?null:options[at+1];};
   let role,profile;
   if(action==='resolve-stdin'){
     ({role,profile}=JSON.parse(stdin()));
@@ -39,7 +40,6 @@ export async function main(argv=process.argv.slice(2),deps=registrationHost(),st
   let result;
   if(action==='intent'||action==='prepare'){
     const launcherPid=Number(value('--launcher-pid'));
-    const boundary=argv.indexOf('--');
     const arguments_=action==='prepare'?(boundary<0?[]:argv.slice(boundary+1)):JSON.parse(stdin());
     for(let attempt=0;attempt<3;attempt++){
       result=await beginRegistration({role,profile,launcherPid,argv:arguments_},deps);
