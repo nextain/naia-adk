@@ -97,4 +97,3 @@ export async function roleSessionFlowFixture(t,mode,{ownerRpc=false}={}){
   return {dir,lease,data,meta,native,text,input,audit,send,verify,profile,registry,save,serverState,ownerAudit,
     count:async()=>{try{return (await fs.readFile(audit,'utf8')).trim().split('\n').length;}catch(error){if(error.code==='ENOENT')return 0;throw error;}}};
 }
-
