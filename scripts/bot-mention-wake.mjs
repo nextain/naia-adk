@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gatewayMention, originFile } from './lib/active-mention.mjs';
 import { DiscordGatewaySession } from '../.agents/skills/manage-discord-sessions/helper/discord-gateway.mjs';
 
 const snowflake = value => typeof value === 'string' && /^\d{17,20}$/.test(value);
@@ -39,7 +40,9 @@ export function loadConfig(file, env = process.env) {
     ids.add(role.id); bots.add(role.botUserId); dirs.add(wakeDir);
     const token = (role.tokenFile ? fs.readFileSync(path.resolve(base, role.tokenFile), 'utf8') : env[role.tokenEnv])?.trim();
     if (!token || token.length < 16) throw new Error('credential unavailable');
-    return { id: role.id, botUserId: role.botUserId, wakeDir, token, dmChannelIds, dmUserIds, dmCatchupMs, ack };
+    const originDir = role.activeMentionOriginDir;
+    if (originDir !== undefined && (typeof originDir !== 'string' || !path.isAbsolute(originDir) || originDir === wakeDir || originDir.startsWith(wakeDir + path.sep))) throw new Error('activeMentionOriginDir must be an absolute Gateway-owned directory outside the wake box');
+    return { id: role.id, botUserId: role.botUserId, wakeDir, token, dmChannelIds, dmUserIds, dmCatchupMs, ack, ...(originDir && { activeMentionOriginDir: originDir }) };
   });
 }
 
@@ -112,6 +115,13 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
     const clean = value => safe(value).replace(/[\r\n]/g, ' ');
     const guild = data.guild_id ?? '@me';
     const body = `# Discord wake\n\nRole: ${role.id}\nGuild: ${clean(state.guilds[guild] ?? (direct ? 'DM' : guild))} (${guild})\nChannel: ${clean(state.channels[data.channel_id] ?? data.channel_id)} (${data.channel_id})\nAuthor: ${clean(data.author?.global_name ?? data.author?.username ?? 'unknown')} (${clean(data.author?.id)})\nMessage ID: ${data.id}\nURL: https://discord.com/channels/${guild}/${data.channel_id}/${data.id}\n\n${safe(data.content).slice(0, 1_000)}\n`;
+    const origin = role.activeMentionOriginDir && gatewayMention(role, data, body);
+    if (origin) {
+      const file = originFile(role.activeMentionOriginDir, role.id, data.id);
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      if (fs.realpathSync(path.dirname(file)) !== path.dirname(file)) throw new Error('invalid Gateway origin directory');
+      atomic(file, JSON.stringify(origin) + '\n');
+    }
     state.pending = { id: data.id, filename: `${now()}-${data.id}-gw.md`, body };
     persist(); finishPending();
     void acknowledge(data);

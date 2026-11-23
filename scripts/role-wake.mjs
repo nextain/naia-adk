@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
+import { activeMentionPolicy, readGatewayMention } from './lib/active-mention.mjs';
 import { isCardEventWakeBody, isCardEventWakeName } from './work-ledger/card-wake.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
@@ -110,8 +111,10 @@ export function loadRegistry(file) {
     const ledger = role.ledger === undefined ? null : typeof role.ledger === 'string' && role.ledger.trim() ? path.resolve(root, role.ledger) : fail(`role ${id}: ledger must be a path`);
     const verifySubmission = role.verify_submission ?? null;
     if (role.verify_submission !== undefined && (!delivery || !Array.isArray(verifySubmission) || !verifySubmission.length || !verifySubmission.every(part => typeof part === 'string' && part))) fail(`role ${id}: verify_submission requires delivery and a command array`);
+    const activeMentions = role.active_mentions === undefined ? null : activeMentionPolicy(role.active_mentions);
+    if (activeMentions && (!verifySubmission || !delivery?.priorityUserIds.length || !SNOWFLAKE.test(role.bot_id ?? ''))) fail(`role ${id}: active_mentions requires bot_id, priority_user_ids and verify_submission`);
     const routedWakeDir = wakeDir !== wakeRoot && routeIds.length > 1 && !extraBoxes.some(box => box.dir === wakeRoot) ? wakeRoot : null;
-    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait, ledger, routeIds, routedWakeDir, verifySubmission };
+    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait, ledger, routeIds, routedWakeDir, verifySubmission, activeMentions };
   });
   const paneBin = doc.pane?.bin;
   if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
@@ -659,7 +662,17 @@ function deliverRole(registry, role, deps, now, at) {
         entry = { ...handover.members[0], file: mergedFile, box: null, body: handover.body, sourceBody: handover.sourceBody };
       }
       const prepare = role.verifySubmission && (payload => {
+        let origin = null;
+        if (role.activeMentions && handover.messageId) {
+          for (const member of handover.members) {
+            if (!member.name.endsWith(`-${handover.messageId}-gw.md`)) continue;
+            const digest = createHash('sha256').update(readWakeBody(member, deps)).digest('hex');
+            origin = readGatewayMention(role.activeMentions, role.id, role.botId, registry.delivery.priorityUserIds, handover.messageId, digest);
+            if (origin) break;
+          }
+        }
         const attempt = { role: role.id, pane: role.paneId, attempt: randomUUID(), sha256: createHash('sha256').update(payload).digest('hex'),
+          ...(origin && { gateway_wake_sha256: origin.wake_sha256 }),
           keys, messageId: handover.messageId ?? null, at,
           ...(registry.delivery.priorityUserIds.length && { priorityStreakAfter: handover.priorityId ? priorityStreak + 1 : 0 }) };
         atomic(submissionFile, JSON.stringify(attempt));

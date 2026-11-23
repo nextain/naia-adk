@@ -166,3 +166,81 @@ test('only definite pane API prequeue errors carry a negative transport proof', 
     });
   }
 });
+
+test('an active steer requires a same-turn native user item and reconciles once after restart', async t => {
+  const { deliverInput, verifyInput } = await import('./lib/role-session-input.mjs');
+  const f = await fixture(t), turn = 'turn-a', profile = { pane_id: 'w2:p6', session: f.session };
+  const text = 'Local cross-channel request', key = 'attempt-local';
+  const options = { role: 'writer', key, transportSha256: payloadHash(text), profile, stateDir: f.dir };
+  const { activeDispatch } = await import('./lib/active-mention.mjs');
+  const author = '400000000000000001', message = '200000000000000001';
+  profile.bot_id = '100000000000000001';
+  profile.active_mentions = { origin_dir: path.join(f.dir, 'gateway'), home_channels: ['300000000000000001'] };
+  const proof = { schema: 'discord-human-mention/v1', role: 'writer', bot: profile.bot_id, author, message,
+    guild: '500000000000000001', channel: '300000000000000002', wake_sha256: payloadHash(text) };
+  await fs.mkdir(path.join(profile.active_mentions.origin_dir, 'writer'), { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(profile.active_mentions.origin_dir, 'writer', message + '.json'), JSON.stringify(proof), { mode: 0o600 });
+  await fs.mkdir(path.join(f.dir, 'submissions'), { mode: 0o700 });
+  await fs.writeFile(path.join(f.dir, 'submissions', 'writer.json'), JSON.stringify({ attempt: key, role: 'writer', pane: profile.pane_id,
+    messageId: message, sha256: options.transportSha256, gateway_wake_sha256: proof.wake_sha256 }));
+  const mention = activeDispatch({ state_dir: f.dir, delivery: { priority_user_ids: [author] } }, 'writer', profile, key, text, options.transportSha256);
+  assert.deepEqual(mention, proof);
+  const item = turnId => row('event_msg', { type: 'item_completed', thread_id: f.session.thread_id, turn_id: turnId,
+    item: { type: 'UserMessage', id: 'native-item', content: [{ type: 'text', text }] } });
+  await fs.appendFile(f.file, row('event_msg', { type: 'task_started', turn_id: turn }));
+  let steers = 0;
+  const deps = { now: () => 1, sleep: async () => {},
+    inspect: async () => ({ foreground: [{ pid: process.pid, args: 'codex' }], processes: [], screen: '› My own unsent draft' }),
+    native: (session, hash, agent, query) => nativeSnapshot(session, hash, query),
+    submit: () => assert.fail('active delivery must not touch the composer'),
+    steer: async (_profile, expected, input) => {
+      assert.equal(expected, turn); assert.equal(input, text); steers++;
+      return { method: 'turn/steer', turn_id: turn };
+    } };
+  const call = (input = {}) => deliverInput({ ...options, text, canonicalAttempt: true, ackTimeoutMs: 0, ...input }, deps);
+  assert.equal((await call({ key: 'priority-only', activeMention: proof })).reason, 'screen_busy');
+  const pending = await call({ activeMention: mention });
+  assert.equal(pending.code, 75); assert.equal(pending.status, 'uncertain');
+  assert.equal(JSON.parse(await fs.readFile(pending.attempt_path)).active_transport.turn_id, turn);
+  await fs.appendFile(f.file, item('a-different-turn'));
+  assert.equal((await verifyInput(options, deps)).status, 'unknown');
+  assert.equal((await call({ activeMention: mention })).code, 75);
+  await fs.appendFile(f.file, item(turn));
+  const accepted = await verifyInput(options, deps);
+  assert.equal(accepted.status, 'accepted'); assert.equal(accepted.evidence.native_user_ack.item_id, 'native-item');
+  assert.equal(accepted.evidence.native_user_ack.turn_id, turn); assert.equal(steers, 1);
+});
+
+test('the protected Unix adapter reads the owning thread and steers only its expected active turn', async t => {
+  const { createServer } = await import('node:http');
+  const { WebSocketServer } = await import('ws');
+  const { steerActiveTurn } = await import('./lib/codex-active-turn.mjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-turn-'));
+  const socket = path.join(dir, 'endpoint'), alias = path.join(dir, 'current');
+  const server = createServer();
+  const endpoint = new WebSocketServer({ server });
+  await new Promise(resolve => server.listen(socket, resolve));
+  await fs.chmod(socket, 0o600);
+  await fs.symlink(socket, alias);
+  t.after(async () => { endpoint.close(); await new Promise(resolve => server.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); });
+  const thread = { id: 'thread-local', cwd: dir, path: path.join(dir, 'native.jsonl'), status: { type: 'active' } };
+  const steers = [];
+  endpoint.on('connection', client => client.on('message', raw => {
+    const message = JSON.parse(raw);
+    if (message.method === 'initialized') return;
+    const results = { initialize: {}, 'thread/read': { thread }, 'thread/turns/list': { data: [{ id: 'active-turn', status: 'inProgress' }] } };
+    if (message.method === 'turn/steer') {
+      steers.push(message.params);
+      client.send(JSON.stringify({ id: message.id, result: { turnId: 'active-turn' } }));
+    } else {
+      assert.ok(Object.hasOwn(results, message.method));
+      client.send(JSON.stringify({ id: message.id, result: results[message.method] }));
+    }
+  }));
+  const profile = { active_mentions: { app_server: { socket_path: alias } }, session: { thread_id: thread.id, native_path: thread.path, cwd: dir } };
+  assert.equal(await steerActiveTurn(profile, null), 'active-turn');
+  await assert.rejects(steerActiveTurn(profile, 'previous-turn', 'keep pending'), { notSubmitted: true });
+  const receipt = await steerActiveTurn(profile, 'active-turn', 'current request');
+  assert.deepEqual(receipt, { method: 'turn/steer', turn_id: 'active-turn' });
+  assert.deepEqual(steers, [{ threadId: thread.id, expectedTurnId: 'active-turn', input: [{ type: 'text', text: 'current request', text_elements: [] }] }]);
+});

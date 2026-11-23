@@ -1781,3 +1781,42 @@ test('common dispatcher and session receiver agree on rejected and accepted nati
   assert.ok(rows.filter(row => row.status === 'delivered').every(row => typeof row.submission.receipt === 'string'));
   assert.equal(pump().pending, 0);
 });
+
+test('an active mention requires its private Gateway origin and the current exact pump attempt', async t => {
+  const { gatewayMention, originFile, activeDispatch } = await import('./lib/active-mention.mjs');
+  const f = setup(t); configurePriority(f);
+  const id = '300000000000000012', guild = '100000000000000099';
+  const role = f.doc.roles['role-a'], dir = path.join(f.dir, 'trusted-gateway');
+  role.verify_submission = ['/opt/verify'];
+  role.active_mentions = { origin_dir: dir, home_channels: ['300000000000000030'] };
+  f.write();
+  const body = priorityGateway('role-a', id, `Please look <@${botA}>`, { guild });
+  fs.writeFileSync(f.put('role-a', `1-${id}-gw.md`), body);
+  const dispatches = [];
+  const profile = { ...role, pane_id: role.find.pane_id };
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver') {
+      const text = fs.readFileSync(args[1], 'utf8'), env = options.env;
+      const check = (target = profile, bytes = text) => activeDispatch(f.doc, 'role-a', target,
+        env.ADK_WAKE_ATTEMPT, bytes, env.ADK_WAKE_PAYLOAD_SHA256);
+      dispatches.push(check());
+      const rendered = { ...profile, active_mentions: { ...role.active_mentions, format_command: [process.execPath, '-e', "process.stdin.on('data', bytes => process.stdout.write('Header\\n'+bytes))"] } };
+      const formatted = activeDispatch(f.doc, 'role-a', rendered, env.ADK_WAKE_ATTEMPT, 'Header\n' + text, env.ADK_WAKE_PAYLOAD_SHA256, args[1]);
+      assert.deepEqual(formatted, check());
+      assert.equal(check(profile, text + 'different'), null);
+      assert.equal(check({ ...profile, active_mentions: { ...role.active_mentions, home_channels: [SOURCE_CHANNEL] } }), null);
+    } else if (bin === '/opt/verify') {
+      const e = options.env;
+      return JSON.stringify({ status: 'rejected', attempt: e.ADK_WAKE_ATTEMPT, sha256: e.ADK_WAKE_PAYLOAD_SHA256, role: e.ADK_WAKE_ROLE, pane: e.ADK_WAKE_PANE, session: 'test-thread', receipt: 'not-submitted:test' });
+    }
+    return '';
+  };
+  deliver(f.load(), f.deps);
+  assert.deepEqual(dispatches, [null]);
+  const event = { id, guild_id: guild, channel_id: SOURCE_CHANNEL, author: { id: PRIORITY_AUTHOR }, mentions: [{ id: botA }], content: `Please look <@${botA}>` };
+  const proof = gatewayMention({ id: 'role-a', botUserId: botA }, event, body);
+  const file = originFile(dir, 'role-a', id);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, JSON.stringify(proof), { mode: 0o600 });
+  deliver(f.load(), f.deps);
+  assert.deepEqual(dispatches[1], proof);
+});

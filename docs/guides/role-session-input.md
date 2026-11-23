@@ -160,3 +160,29 @@ before queueing input and records terminal `not_submitted`. Other failures,
 including an unstructured exit or timeout, remain uncertain. The journal keeps
 only the safe API error code and exit status, never raw stderr or error messages.
 Older uncertain attempts are never reset just because this adapter changed.
+
+## Explicit mentions during an active Codex turn
+
+A role may accept an explicitly addressed human Discord message from outside its home channels while the same Codex turn is working. This mode requires the credentialed Gateway, the dispatcher and the receiver to agree on the source. Ordinary priority still controls delivery order. A priority flag, a quoted mention and a Markdown header cannot authorize active input.
+
+In the private bot-mention Gateway configuration, set the role's `activeMentionOriginDir` to a canonical absolute directory outside the wake box. Give the authenticated Gateway exclusive write access. The dispatcher and receiver need read access. The owner of the root, role subdirectory and record must agree. Group and world writes are rejected. An incoming guild message must have a human author, the bot's user ID in Discord's structured mention list and the explicit bot mention in its text. On receipt the Gateway writes a record containing identity fields and a digest of the exact wake bytes before it publishes the wake. The proof contains no message body. Retain proofs while pending messages may still need them.
+
+Configure the same role's existing `bot_id`, `verify_submission` and the dispatcher's `delivery.priority_user_ids`. Register the same policy in the CLI receiver. This example uses a private Unix socket.
+
+```json
+{
+  "active_mentions": {
+    "origin_dir": "/private/gateway-origin",
+    "home_channels": ["300000000000000001"],
+    "app_server": { "socket_path": "/private/codex/app-server.sock" }
+  }
+}
+```
+
+The normal dispatcher and receiver can share their private `state_dir`. If the receiver keeps its own state directory, set `active_mentions.dispatcher_state_dir` to the dispatcher's private directory. The receiver checks the pending attempt, pane, role, original gateway digest and exact submitted bytes. It also rechecks the Gateway record and configured human IDs. The standard dispatcher can add its work header or group copies of the original message. If a private wrapper reformats the payload, register its deterministic, read-only formatter as `active_mentions.format_command`, an argv array starting with an absolute executable. It receives the original on stdin and emits the formatted UTF-8 bytes on stdout. The wrapper passes the original dispatcher spool filename with `--source-file` and its formatted file with `--file`. The receiver matches both digests before granting active input. An unavailable or differing rendering retains the wake for ordinary idle delivery.
+
+Use the existing owning Codex app-server endpoint. Its Unix domain socket and any Codex-created alias must reside in directories owned by the socket owner. Both directories must restrict writes to that owner, and either the socket or its directory must exclude other users. The adapter uses the project's locked `ws` package to connect directly to that socket. An installation with an authenticated loopback app server can instead register `app_server.url` such as `ws://127.0.0.1:4500` and an absolute `app_server.token_file` containing its capability token. Keep the token file private. The receiver does not start or resume a session.
+
+The adapter reads thread identity, working directory, rollout path and the latest in-progress turn. It calls `turn/steer` with that thread and its expected turn ID. The operation leaves the terminal composer untouched, including an unsent human draft. A matching RPC response is recorded in the private attempt journal. Delivery is accepted only after the native rollout records a new `UserMessage` with the submitted digest, same thread, same turn and a native item ID. An interrupted or unconfirmed transport retains its attempt for read-only reconciliation after restart. Without a verified Gateway origin, an available owning endpoint or an eligible active turn, the original remains in the local wake queue under the usual idle delivery rules.
+
+The active transport was exercised with Codex 0.170.0 and a disposable private terminal session. Sites must confirm their deployed role and owning endpoint, including whether the installed CLI exposes this protocol. Other providers continue through their installed receiver.
