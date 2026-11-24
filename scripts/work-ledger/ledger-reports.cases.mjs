@@ -13,7 +13,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { main, readLedger, ledgerPath, changeLedger, wakeHeader } from "./ledger.mjs";
-import { watch } from "./ledger-watch.mjs";
+import { watch, effectiveReportEveryMin } from "./ledger-watch.mjs";
 import { startWorkerRun } from "./worker-run.mjs";
 import { dueWake } from "./due-timer.mjs";
 import { tick as drive } from "./drive.mjs";
@@ -95,6 +95,53 @@ test("config report applies after add and unrecorded replies do not close human 
       .filter((w) => w.reason === "장부에 없는 사람 글")
       .map((w) => w.role),
     ["reviewer"],
+  );
+});
+
+test("report cadence keeps legacy every_min and selects day/night windows", () => {
+  const report = {
+    every_min: 60,
+    day_every_min: 120,
+    night_every_min: 180,
+    night_hours: [0, 9],
+    timezone: "Asia/Seoul",
+  };
+  assert.equal(effectiveReportEveryMin({ ...report, night_hours: undefined }, Date.parse("2026-11-08T03:00:00Z")), 120);
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T00:00:00Z")), 180);
+  assert.equal(effectiveReportEveryMin({ every_min: 60 }, Date.parse("2026-11-08T00:00:00Z")), 60);
+  assert.throws(() => effectiveReportEveryMin({ every_min: 60, timezone: "Not/AZone" }, Date.now()), /timezone/i);
+  assert.throws(() => effectiveReportEveryMin({ every_min: 60, night_hours: [24, 2] }, Date.now()), /night_hours/i);
+  assert.throws(() => effectiveReportEveryMin({ every_min: 60, night_every_min: -1 }, Date.now()), /night_every_min/i);
+});
+
+test("report cadence handles midnight crossing and watch thresholds", async () => {
+  const report = { day_every_min: 120, night_every_min: 180, night_hours: [22, 6], timezone: "UTC" };
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T21:59:00Z")), 120);
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T22:00:00Z")), 180);
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T05:59:00Z")), 180);
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T06:00:00Z")), 120);
+  const root = await setup();
+  await edit(root, (ledger) => {
+    ledger.report = {
+      ...ledger.report,
+      last_at: new Date(Date.parse("2026-11-08T00:00:00Z")).toISOString(),
+    };
+  });
+  const config = { roles: [{ role: "secretary", report: { ...report, channel: "reports" } }] };
+  assert.equal((await watch({ root, config, now: Date.parse("2026-11-08T01:59:00Z") })).wakes.filter(w => w.reason === "정기 보고 시각").length, 0);
+  assert.equal((await watch({ root, config, now: Date.parse("2026-11-08T03:00:00Z") })).wakes.filter(w => w.reason === "정기 보고 시각").length, 1);
+});
+
+test("report CLI stores day/night cadence options", async () => {
+  const root = await setup();
+  await main([
+    "report", "--root", root, "--role", "secretary", "--channel", "reports", "--msg-id", "sent",
+    "--day-every-min", "120", "--night-every-min", "180", "--night-hours", "0-9", "--timezone", "Asia/Seoul",
+  ]);
+  const saved = await readLedger(root, "secretary");
+  assert.deepEqual(
+    { day_every_min: saved.report.day_every_min, night_every_min: saved.report.night_every_min, night_hours: saved.report.night_hours, timezone: saved.report.timezone },
+    { day_every_min: 120, night_every_min: 180, night_hours: [0, 9], timezone: "Asia/Seoul" },
   );
 });
 test("schema corruption wakes instead of accepting partial worker", async () => {
@@ -432,4 +479,3 @@ test("HTTP status survives a failed error body read", async () => {
   });
   await assert.rejects(adapter.messages("denied", now), /channel denied: HTTP 403.*stream interrupted/);
 });
-
