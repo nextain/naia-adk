@@ -93,3 +93,31 @@ receipts, silent first successful baseline and one alert per stage per missed
 occurrence. Proposals, manual and unverified rows stay outside execution checks.
 
 Maintain the [work ledger](work-ledger.md) for one-off instructions and repairs.
+
+## Day/night report cadence
+
+The report configuration supports legacy `every_min` and optional day/night
+intervals. `day_every_min` and `night_every_min` are positive minute values;
+an omitted value falls back to `every_min`. Set `night_hours` to a
+`[startHour, endHour]` pair using local time in `timezone` (an IANA time zone,
+default `UTC`). A range crossing midnight uses `hour >= startHour || hour <
+endHour`; otherwise it uses `startHour <= hour < endHour`.
+
+```json
+{
+  "report": {
+    "every_min": 60,
+    "day_every_min": 120,
+    "night_every_min": 180,
+    "night_hours": [0, 9],
+    "timezone": "UTC"
+  }
+}
+```
+
+```sh
+node scripts/work-ledger/ledger.mjs report --role <role> --channel <channel> --msg-id <message-id> \
+  --day-every-min 120 --night-every-min 180 --night-hours 0-9 --timezone UTC
+```
+
+Invalid intervals, hour ranges, and time zones are rejected rather than ignored.

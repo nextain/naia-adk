@@ -305,6 +305,12 @@ export function validateLedger(ledger, role) {
       typeof ledger.report.last_msg_id !== "string")
   )
     throw new Error("Invalid ledger schema");
+  for (const field of ["day_every_min", "night_every_min"])
+    if (ledger.report[field] !== undefined && (!Number.isFinite(ledger.report[field]) || ledger.report[field] <= 0)) throw new Error(`Invalid ${field}`);
+  if (ledger.report.night_hours !== undefined && (!Array.isArray(ledger.report.night_hours) || ledger.report.night_hours.length !== 2 || !ledger.report.night_hours.every(Number.isInteger) || ledger.report.night_hours.some(hour => hour < 0 || hour > 23) || ledger.report.night_hours[0] === ledger.report.night_hours[1])) throw new Error("Invalid night_hours");
+  if (ledger.report.timezone !== undefined) {
+    try { new Intl.DateTimeFormat("en-US", { timeZone: ledger.report.timezone, hour: "2-digit", hourCycle: "h23" }); } catch { throw new Error(`Invalid timezone: ${ledger.report.timezone}`); }
+  }
   const ids = new Set();
   for (const item of ledger.items) {
     safeName(item.id);
@@ -517,9 +523,11 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
   let startedItem;
   let escalationError = null;
   const result = await changeLedger(root, role, async (l) => {
-    if (l.report.every_min === 0 && roleConfig?.report) {
-      l.report.every_min = roleConfig.report.every_min;
-      l.report.channel = roleConfig.report.channel;
+    if (roleConfig?.report) {
+      if (l.report.every_min === 0 && roleConfig.report.every_min !== undefined) l.report.every_min = roleConfig.report.every_min;
+      if (!l.report.channel && roleConfig.report.channel) l.report.channel = roleConfig.report.channel;
+      for (const field of ["day_every_min", "night_every_min", "night_hours", "timezone"])
+        if (l.report[field] === undefined && roleConfig.report[field] !== undefined) l.report[field] = roleConfig.report[field];
     }
     if (command === "add") {
       const normalizedMsgId = normalizeMsgId(o["msg-id"]);
@@ -590,6 +598,23 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         const n = Number(o["every-min"]);
         if (!Number.isFinite(n) || n < 0) throw new Error("Invalid every-min");
         l.report.every_min = n;
+      }
+      for (const [option, field] of [["day-every-min", "day_every_min"], ["night-every-min", "night_every_min"]]) {
+        if (o[option] === undefined) continue;
+        const n = Number(o[option]);
+        if (!Number.isFinite(n) || n <= 0) throw new Error(`Invalid ${option}`);
+        l.report[field] = n;
+      }
+      if (o["night-hours"] !== undefined) {
+        const match = /^(\d+)-(\d+)$/.exec(o["night-hours"]);
+        if (!match) throw new Error("Invalid night-hours; expected start-end");
+        const hours = match.slice(1).map(Number);
+        if (hours.some(hour => hour > 23) || hours[0] === hours[1]) throw new Error("Invalid night-hours");
+        l.report.night_hours = hours;
+      }
+      if (o.timezone !== undefined) {
+        try { new Intl.DateTimeFormat("en-US", { timeZone: o.timezone, hour: "2-digit", hourCycle: "h23" }); } catch { throw new Error(`Invalid timezone: ${o.timezone}`); }
+        l.report.timezone = o.timezone;
       }
       l.report.channel = o.channel;
       l.report.last_msg_id = o["msg-id"];

@@ -107,7 +107,7 @@ test("report cadence keeps legacy every_min and selects day/night windows", () =
     timezone: "Asia/Seoul",
   };
   assert.equal(effectiveReportEveryMin({ ...report, night_hours: undefined }, Date.parse("2026-11-08T03:00:00Z")), 120);
-  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T00:00:00Z")), 180);
+  assert.equal(effectiveReportEveryMin(report, Date.parse("2026-11-08T15:00:00Z")), 180);
   assert.equal(effectiveReportEveryMin({ every_min: 60 }, Date.parse("2026-11-08T00:00:00Z")), 60);
   assert.throws(() => effectiveReportEveryMin({ every_min: 60, timezone: "Not/AZone" }, Date.now()), /timezone/i);
   assert.throws(() => effectiveReportEveryMin({ every_min: 60, night_hours: [24, 2] }, Date.now()), /night_hours/i);
