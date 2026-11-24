@@ -306,9 +306,9 @@ Nextain の内部の系譜は、上の選択肢とは別の運用例です。公
    `git submodule add <repo> projects/<name>`
 5. 各メンバーは組織の ADK をさらにフォークし、個人のワークスペースとして使います。
 
-### Naia OS との連携(任意)
+### Naia Shell との連携(任意)
 
-[Naia OS](https://github.com/nextain/naia-os) デスクトップアプリを使っている場合は、ワークスペースの
+[Naia Shell](https://github.com/nextain/naia-shell) デスクトップ・Web アプリを使っている場合は、ワークスペースの
 パスを自分の ADK ディレクトリに指定してください。スキルとデータが API で提供されます。
 
 ## コントリビューション
@@ -333,8 +333,11 @@ Nextain の内部の系譜は、上の選択肢とは別の運用例です。公
 
 コードは [Apache License 2.0 (`Apache-2.0`)](LICENSE) の下で提供されており、特許境界および条件付き特許誓約 ([`PATENTS.md`](PATENTS.md))、商用・エンタープライズライセンス ([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md))、コントリビューター規約 ([`CONTRIBUTING.md`](CONTRIBUTING.md)、[`CLA.md`](CLA.md)、[`CLA-CORPORATE.md`](CLA-CORPORATE.md)) の全文については、英語版 [`README.md` の License & Patent Notice](README.md#license--patent-notice) セクションを参照してください。
 
-## リンク
+## Naia エコシステム
 
-- **Naia OS** — [github.com/nextain/naia-os](https://github.com/nextain/naia-os)
+- **naia-shell** — [github.com/nextain/naia-shell](https://github.com/nextain/naia-shell) (デスクトップ・Web シェルクライアント)
+- **naia-agent** — [github.com/nextain/naia-agent](https://github.com/nextain/naia-agent) (エージェントランタイム・ツールオーケストレーション)
+- **naia-memory** — [github.com/nextain/naia-memory](https://github.com/nextain/naia-memory) (永続エージェントメモリ)
+- **naia-kb-compiler** — [github.com/nextain/naia-kb-compiler](https://github.com/nextain/naia-kb-compiler) (構造化知識ベースコンパイラ)
 - **Nextain** — [nextain.io](https://nextain.io)
-- **Naia Dashboard** — [naia.nextain.io](https://naia.nextain.io)
+- **Naia** — [naia.nextain.io](https://naia.nextain.io)

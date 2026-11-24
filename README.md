@@ -370,9 +370,9 @@ the [skill index](.agents/context/skills-index.yaml).
    `git submodule add <repo> projects/<name>`
 5. Each member forks the org ADK again as their personal workspace.
 
-### Naia OS integration (optional)
+### Naia Shell integration (optional)
 
-If you use the [Naia OS](https://github.com/nextain/naia-os) desktop app, point
+If you use the [Naia Shell](https://github.com/nextain/naia-shell) desktop & web app, point
 its workspace path at your ADK directory. Skills and data are served over the API.
 
 ## Contributing
@@ -403,8 +403,11 @@ The following is planned, not a feature that works today.
 - **Commercial:** [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md) covers proprietary Nextain Tier-2 modules and cloud pipelines not published in this repository, commercial patent licenses for methods not contained here, and enterprise support and indemnification.
 - **Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md). Pull requests are accepted under [`CLA.md`](CLA.md) (or [`CLA-CORPORATE.md`](CLA-CORPORATE.md) for corporate contributions).
 
-## Links
+## Naia Ecosystem
 
-- **Naia OS** — [github.com/nextain/naia-os](https://github.com/nextain/naia-os)
+- **naia-shell** — [github.com/nextain/naia-shell](https://github.com/nextain/naia-shell) (desktop & web shell client)
+- **naia-agent** — [github.com/nextain/naia-agent](https://github.com/nextain/naia-agent) (agent runtime & tool orchestration)
+- **naia-memory** — [github.com/nextain/naia-memory](https://github.com/nextain/naia-memory) (persistent agent memory)
+- **naia-kb-compiler** — [github.com/nextain/naia-kb-compiler](https://github.com/nextain/naia-kb-compiler) (knowledge-base compiler for structured context)
 - **Nextain** — [nextain.io](https://nextain.io)
-- **Naia Dashboard** — [naia.nextain.io](https://naia.nextain.io)
+- **Naia** — [naia.nextain.io](https://naia.nextain.io)
