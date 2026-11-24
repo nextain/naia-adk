@@ -4,7 +4,8 @@ import React, { useEffect, useState } from "react"
 import { ExternalLink, X } from "lucide-react"
 import { DocMarkdown } from "./MessageMarkdown"
 import { docHref, inferTab } from "../docs/tabs"
-import { MSG, resolveDocLink } from "./messenger"
+import { getMessengerStrings, resolveDocLink } from "./messenger"
+import { useLocale } from "../i18n/provider.tsx"
 
 type DocState =
   | { kind: "loading" }
@@ -23,6 +24,7 @@ export function DocPreview({
   fetchFn?: typeof fetch
   initial?: DocState
 }) {
+  const S = getMessengerStrings(useLocale())
   const [state, setState] = useState<DocState>(initial ?? { kind: "loading" })
   useEffect(() => {
     if (initial) return
@@ -39,10 +41,10 @@ export function DocPreview({
   const tab = state.kind === "ready" ? inferTab(state.source, state.path) : "common"
   const title = state.kind === "ready" ? state.path.split("/").pop() : docKey
   return (
-    <section data-testid="doc-preview" aria-label={MSG.docPreview} className="flex h-full min-h-0 flex-col bg-neutral-950">
+    <section data-testid="doc-preview" aria-label={S.docPreview} className="flex h-full min-h-0 flex-col bg-neutral-950">
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-neutral-500">{MSG.docPreview}</div>
+          <div className="text-xs text-neutral-500">{S.docPreview}</div>
           <div className="truncate text-sm font-semibold text-neutral-100" title={state.kind === "ready" ? state.path : docKey}>
             {title}
           </div>
@@ -54,16 +56,16 @@ export function DocPreview({
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-neutral-300 hover:text-white hover:bg-neutral-900"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            <span className="max-sm:hidden">{MSG.openDoc}</span>
+            <span className="max-sm:hidden">{S.openDoc}</span>
           </a>
         )}
-        <button type="button" data-testid="doc-preview-close" aria-label={MSG.closePanel} onClick={onClose} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-900">
+        <button type="button" data-testid="doc-preview-close" aria-label={S.closePanel} onClick={onClose} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-900">
           <X className="w-4 h-4" />
         </button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {state.kind === "loading" && <p className="text-sm text-neutral-400">{MSG.docLoading}</p>}
-        {state.kind === "error" && <p className="text-sm text-red-300">{MSG.docFailed}</p>}
+        {state.kind === "loading" && <p className="text-sm text-neutral-400">{S.docLoading}</p>}
+        {state.kind === "error" && <p className="text-sm text-red-300">{S.docFailed}</p>}
         {state.kind === "ready" && <DocMarkdown content={state.content} sourceId={state.source} path={state.path} activeTab={tab} />}
       </div>
     </section>

@@ -1,6 +1,8 @@
 import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 import type { ScheduleLinkTarget } from "@naia-adk/core/src/schedule-link"
 import type { BoardScheduleProjection, CalendarCellEvent, CalendarUnit, CompanyScheduleItem, ScheduleDisplayMode, ScheduleLayers, WorkScheduleFilter } from "./schedule-calendar"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
 
 export const PERSONAL_IDENTITY_REQUIRED_NOTICE =
   "개인 일정은 로그인 연결 설정 뒤에 켜집니다(다른 분 일정이 섞이지 않게 지금은 꺼 두었습니다)"
@@ -10,6 +12,18 @@ export const PERSONAL_WARNINGS_LOCKED_NOTICE =
 
 export const PERSONAL_LOADING_NOTICE = "개인 일정 불러오는 중"
 export const MAX_VISIBLE_PERSONAL_WARNINGS = 5
+
+export function personalIdentityRequiredNotice(locale: Locale = "ko"): string {
+  return getDict(locale)["sched.identityRequired"]
+}
+
+export function personalWarningsLockedNotice(locale: Locale = "ko"): string {
+  return getDict(locale)["sched.warningsLocked"]
+}
+
+export function personalLoadingNotice(locale: Locale = "ko"): string {
+  return getDict(locale)["sched.personalLoading"]
+}
 
 export type PersonalLayerStatus = "loading" | "ready" | "identity-required" | "warnings-locked" | "unavailable"
 
@@ -108,6 +122,7 @@ export async function requestCompanySchedule(
 
 export interface ScheduleViewProps {
   hasBoard: boolean | null
+  locale?: Locale
   initialMode?: ScheduleDisplayMode
   initialUnit?: CalendarUnit
   initialLayers?: Partial<ScheduleLayers>

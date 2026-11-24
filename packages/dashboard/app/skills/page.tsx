@@ -1,4 +1,6 @@
 import { apiBase } from "../api-base"
+import { formatMessage, getDict } from "../i18n"
+import { getRequestLocale } from "../i18n/server"
 
 async function getSkills() {
   const res = await fetch(`${apiBase()}/api/skills`, { cache: "no-store" })
@@ -7,12 +9,13 @@ async function getSkills() {
 }
 
 export default async function SkillsPage() {
-  const skills = await getSkills()
+  const [skills, locale] = await Promise.all([getSkills(), getRequestLocale()])
+  const t = getDict(locale)
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Skills</h1>
-      <p className="text-neutral-400 text-sm">{Array.isArray(skills) ? skills.length : 0} skills registered</p>
+      <h1 className="text-2xl font-bold">{t["skills.title"]}</h1>
+      <p className="text-neutral-400 text-sm">{formatMessage(t["skills.registered"], { count: Array.isArray(skills) ? skills.length : 0 })}</p>
 
       <div className="space-y-3">
         {Array.isArray(skills) && skills.map((skill: {

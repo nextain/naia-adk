@@ -2,14 +2,17 @@
 
 import React from "react"
 import {
-  LAYER_LABELS,
-  WEEKDAY_LABELS_KO,
+  layerLabels,
+  weekdayLabels,
   type CalendarCellEvent,
   type CalendarDayCell,
   type CalendarUnit,
   type CalendarWeekBarSegment,
   type CalendarWeekLayout,
 } from "./schedule-calendar"
+import { formatMessage, tFor } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
+import type { Locale } from "../i18n/types.ts"
 
 export interface ScheduleCalendarGridProps {
   weeks: CalendarWeekLayout[]
@@ -20,13 +23,15 @@ export interface ScheduleCalendarGridProps {
   onOpenDayList: (cell: CalendarDayCell) => void
 }
 
-function formatBarTitleAttr(bar: CalendarWeekBarSegment): string {
+function formatBarTitleAttr(bar: CalendarWeekBarSegment, locale: Locale = "ko"): string {
   const { event: ev } = bar
-  const parts: string[] = [ev.title, `${LAYER_LABELS[ev.layer]} (${ev.startDate} ~ ${ev.endDate})`]
+  const t = tFor(locale)
+  const names = layerLabels(locale)
+  const parts: string[] = [ev.title, `${names[ev.layer]} (${ev.startDate} ~ ${ev.endDate})`]
   if (ev.layer === "work" && ev.workItem && (ev.workItem.taskTotal ?? 0) > 0) {
-    parts.push(`세부 작업 ${ev.workItem.taskDone ?? 0}/${ev.workItem.taskTotal}`)
+    parts.push(formatMessage(t("sched.taskCompact"), { done: ev.workItem.taskDone ?? 0, total: ev.workItem.taskTotal }))
   } else if (ev.layer === "milestone" && ev.milestoneItem && ev.milestoneItem.total > 0) {
-    parts.push(`완료 ${ev.milestoneItem.completed}/${ev.milestoneItem.total}`)
+    parts.push(formatMessage(t("sched.doneCompact"), { done: ev.milestoneItem.completed, total: ev.milestoneItem.total }))
   }
   if (ev.subtitle) {
     parts.push(ev.subtitle)
@@ -93,6 +98,9 @@ export function ScheduleCalendarGrid({
   onSelectEvent,
   onOpenDayList,
 }: ScheduleCalendarGridProps) {
+  const locale = useLocale()
+  const t = useT()
+  const days = weekdayLabels(locale)
   return (
     <div
       data-testid="schedule-calendar-grid"
@@ -100,7 +108,7 @@ export function ScheduleCalendarGrid({
     >
       {/* 요일 머리글 */}
       <div className="grid grid-cols-7 border-b border-neutral-800 bg-neutral-900/90">
-        {WEEKDAY_LABELS_KO.map((label, idx) => (
+        {days.map((label, idx) => (
           <div
             key={label}
             className={`py-1.5 text-center text-xs font-semibold ${
@@ -176,7 +184,7 @@ export function ScheduleCalendarGrid({
                         <button
                           type="button"
                           data-testid={`calendar-add-${cell.date}`}
-                          title={`${cell.date} 개인 일정 추가`}
+                          title={`${cell.date} ${t("sched.addPersonal")}`}
                           onClick={() => onAddPersonal(cell.date)}
                           className="text-[11px] px-1 rounded text-neutral-500 hover:text-emerald-300 hover:bg-neutral-800 shrink-0"
                         >
@@ -214,7 +222,7 @@ export function ScheduleCalendarGrid({
                           data-end-col={bar.endCol}
                           data-continues-before={bar.continuesBefore ? "1" : "0"}
                           data-continues-after={bar.continuesAfter ? "1" : "0"}
-                          title={formatBarTitleAttr(bar)}
+                          title={formatBarTitleAttr(bar, locale)}
                           onClick={() => onSelectEvent(ev)}
                           style={{
                             gridColumn: `${bar.startCol + 1} / ${bar.endCol + 2}`,
@@ -280,7 +288,7 @@ export function ScheduleCalendarGrid({
                           onClick={() => onOpenDayList(cell)}
                           className="w-full text-left px-1 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold text-sky-300 hover:text-white hover:bg-neutral-800/90 transition-colors truncate cursor-pointer"
                         >
-                          +{hiddenCount}건
+                          {formatMessage(t("sched.moreCount"), { count: hiddenCount })}
                         </button>
                       )
                     })}

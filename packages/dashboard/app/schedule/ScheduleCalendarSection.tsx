@@ -2,14 +2,18 @@
 import React from "react"
 import type { useScheduleView } from "./useScheduleView"
 import { companyItemToCalendarEvent } from "./useScheduleView"
-import { PERSONAL_IDENTITY_REQUIRED_NOTICE, PERSONAL_LOADING_NOTICE, PERSONAL_WARNINGS_LOCKED_NOTICE, MAX_VISIBLE_PERSONAL_WARNINGS } from "./schedule-view-model"
+import { personalIdentityRequiredNotice, personalLoadingNotice, personalWarningsLockedNotice, MAX_VISIBLE_PERSONAL_WARNINGS } from "./schedule-view-model"
 import { shiftCalendarAnchor } from "./schedule-calendar"
 import { ScheduleCalendarGrid } from "./ScheduleCalendarGrid"
 import { ScheduleDayListDialog, ScheduleDetailDialog } from "./ScheduleDetailDialog"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 type View = ReturnType<typeof useScheduleView>
 
 export function ScheduleCalendarSection({ view }: { view: View }) {
+  const locale = useLocale()
+  const t = useT()
   const {
     mode, unit, layers, workFilter,
     setAnchorDate, userLabel, personalIdentityRequired, personalWarningsLocked,
@@ -33,7 +37,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 onClick={() => setAnchorDate((prev) => shiftCalendarAnchor(prev, unit, -1))}
                 className="px-2.5 py-1 rounded border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs text-neutral-200"
               >
-                ◀ 이전
+                {t("sched.prev")}
               </button>
               <h2 data-testid="schedule-period-title" className="text-base sm:text-lg font-bold text-white min-w-[8rem] text-center">
                 {periodTitle}
@@ -44,7 +48,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 onClick={() => setAnchorDate((prev) => shiftCalendarAnchor(prev, unit, 1))}
                 className="px-2.5 py-1 rounded border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs text-neutral-200"
               >
-                다음 ▶
+                {t("sched.next")}
               </button>
               <button
                 type="button"
@@ -52,7 +56,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 onClick={() => setAnchorDate(boardSchedule.todayDate)}
                 className="px-2.5 py-1 rounded border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs text-neutral-300"
               >
-                오늘
+                {t("sched.today")}
               </button>
             </div>
 
@@ -60,7 +64,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
               {/* 월 / 주 단위 전환 */}
               <div
                 role="group"
-                aria-label="달력 단위"
+                aria-label={t("sched.calendarUnit")}
                 className="inline-flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5"
               >
                 <button
@@ -72,7 +76,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                     unit === "month" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
                   }`}
                 >
-                  월 단위
+                  {t("sched.unitMonth")}
                 </button>
                 <button
                   type="button"
@@ -83,7 +87,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                     unit === "week" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
                   }`}
                 >
-                  주 단위
+                  {t("sched.unitWeek")}
                 </button>
               </div>
 
@@ -91,7 +95,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
               {(layers.work || layers.queue) && (
                 <div
                   role="group"
-                  aria-label="작업 일정 범위"
+                  aria-label={t("sched.workRange")}
                   className="inline-flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5"
                 >
                   <button
@@ -103,7 +107,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                       workFilter === "open" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
                     }`}
                   >
-                    미완료 작업
+                    {t("sched.workOpen")}
                   </button>
                   <button
                     type="button"
@@ -114,7 +118,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                       workFilter === "all" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
                     }`}
                   >
-                    전체 작업
+                    {t("sched.workAll")}
                   </button>
                 </div>
               )}
@@ -155,30 +159,30 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 {personalLoading ? (
                   <>
                     <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-emerald-300">개인 일정</h3>
+                      <h3 className="text-xs font-bold text-emerald-300">{t("sched.personal")}</h3>
                     </div>
                     <p data-testid="personal-loading-notice" className="text-xs text-neutral-400">
-                      {PERSONAL_LOADING_NOTICE}
+                      {personalLoadingNotice(locale)}
                     </p>
                   </>
                 ) : personalUnavailable ? (
                   <p role="alert" className="text-xs text-amber-300">
-                    개인 일정을 불러오지 못했습니다. <button type="button" className="underline" onClick={() => void loadPersonal()}>다시 시도</button>
+                    {t("sched.personalLoadFailed")} <button type="button" className="underline" onClick={() => void loadPersonal()}>{t("common.retry")}</button>
                   </p>
                 ) : personalIdentityRequired ? (
                   <>
                     <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-emerald-300">개인 일정</h3>
+                      <h3 className="text-xs font-bold text-emerald-300">{t("sched.personal")}</h3>
                     </div>
                     <p data-testid="personal-identity-required-notice" className="text-xs text-neutral-400">
-                      {PERSONAL_IDENTITY_REQUIRED_NOTICE}
+                      {personalIdentityRequiredNotice(locale)}
                     </p>
                   </>
                 ) : (
                   <>
                     <div className="flex items-center justify-between">
                       <h3 className="text-xs font-bold text-emerald-300">
-                        내 개인 일정 ({userLabel ? `${userLabel} · ` : ""}{personalItems.length}건)
+                        {t("sched.mySchedule")} ({userLabel ? `${userLabel} · ` : ""}{formatMessage(t("work.count"), { count: personalItems.length })})
                       </h3>
                       {canMutatePersonal && (
                         <button
@@ -187,7 +191,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                           onClick={() => openAddForm()}
                           className="text-xs text-emerald-300 hover:text-emerald-200 underline"
                         >
-                          + 추가
+                          + {t("sched.addShort")}
                         </button>
                       )}
                     </div>
@@ -196,7 +200,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                         data-testid="personal-warnings-locked-notice"
                         className="rounded border border-amber-700/70 bg-amber-950/40 p-2 space-y-1 text-xs text-amber-200"
                       >
-                        <p className="font-medium">{PERSONAL_WARNINGS_LOCKED_NOTICE}</p>
+                        <p className="font-medium">{personalWarningsLockedNotice(locale)}</p>
                         <ul data-testid="personal-warnings-list" className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-300">
                           {personalWarnings.slice(0, MAX_VISIBLE_PERSONAL_WARNINGS).map((w, idx) => (
                             <li key={idx}>{w}</li>
@@ -206,9 +210,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                     )}
                     {personalItems.length === 0 ? (
                       <p className="text-xs text-neutral-500">
-                        {canMutatePersonal
-                          ? "등록된 개인 일정이 없습니다. [+ 개인 일정 추가] 단추로 추가하세요."
-                          : "등록된 개인 일정이 없습니다."}
+                        {canMutatePersonal ? t("sched.noPersonal") : t("sched.noPersonalShort")}
                       </p>
                     ) : (
                       <ul className="space-y-1.5">
@@ -222,7 +224,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                               <div className="font-semibold text-emerald-200 truncate">{item.title}</div>
                               <div className="text-[11px] text-neutral-400">
                                 {item.start === item.end ? item.start : `${item.start} ~ ${item.end}`} ·{" "}
-                                {item.allDay ? "종일" : "시각 지정"}
+                                {item.allDay ? t("sched.allDay") : t("sched.timed")}
                               </div>
                               {item.memo && <div className="text-[11px] text-neutral-300 mt-0.5">{item.memo}</div>}
                             </div>
@@ -235,7 +237,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                                   onClick={() => openEditForm(item)}
                                   className="px-2 py-0.5 rounded border border-neutral-700 hover:border-emerald-500 text-[11px] text-neutral-200"
                                 >
-                                  고치기
+                                  {t("sched.editShort")}
                                 </button>
                                 <button
                                   type="button"
@@ -244,7 +246,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                                   onClick={() => void handleDeleteItem(item.id)}
                                   className="px-2 py-0.5 rounded border border-rose-800/80 hover:bg-rose-900/50 text-[11px] text-rose-300"
                                 >
-                                  지우기
+                                  {t("sched.deleteBtn")}
                                 </button>
                               </div>
                             )}
@@ -264,10 +266,10 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 className="rounded-lg border border-amber-900/60 bg-neutral-900/50 p-3 space-y-2"
               >
                 <h3 className="text-xs font-bold text-amber-300">
-                  마일스톤 ({boardSchedule.milestones.length}건)
+                  {t("sched.milestone")} ({formatMessage(t("work.count"), { count: boardSchedule.milestones.length })})
                 </h3>
                 {boardSchedule.milestones.length === 0 ? (
-                  <p className="text-xs text-neutral-500">표시할 마일스톤이 없습니다.</p>
+                  <p className="text-xs text-neutral-500">{t("sched.noMilestones")}</p>
                 ) : (
                   <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
                     {boardSchedule.milestones.map((ms) => (
@@ -279,7 +281,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                         <div className="min-w-0">
                           <span className="font-semibold text-amber-200">{ms.name}</span>
                           <span className="text-[11px] text-neutral-400 ml-2">
-                            {ms.dueDate ? `기한 ${ms.dueDate}` : "기한 없음"}
+                            {ms.dueDate ? `${t("sched.deadline")} ${ms.dueDate}` : t("sched.noDue")}
                           </span>
                         </div>
                         <span className="text-[11px] tabular-nums px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 shrink-0">
@@ -300,8 +302,8 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
               >
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-xs font-bold text-violet-300">
-                    회사 일정 ({(view.companyMdItems ?? []).length}건
-                    {view.showRegular ? ` · 정기 반복 ${(view.regularItems ?? []).length}건` : ""})
+                    {t("sched.company")} ({formatMessage(t("work.count"), { count: (view.companyMdItems ?? []).length })}
+                    {view.showRegular ? ` · ${t("sched.regular")} ${formatMessage(t("work.count"), { count: (view.regularItems ?? []).length })}` : ""})
                   </h3>
                   {view.companyStatus === "unavailable" && (
                     <button
@@ -309,13 +311,13 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                       className="text-[11px] text-amber-300 underline"
                       onClick={() => void view.loadCompanySchedule?.()}
                     >
-                      다시 시도
+                      {t("common.retry")}
                     </button>
                   )}
                 </div>
                 {(view.companyMdItems ?? []).length === 0 && (!view.showRegular || (view.regularItems ?? []).length === 0) ? (
                   <p className="text-xs text-neutral-500">
-                    {view.companyStatus === "loading" ? "회사 일정 불러오는 중" : "이 기간에 표시할 회사 일정이 없습니다."}
+                    {view.companyStatus === "loading" ? t("sched.loadingCompany") : t("sched.noCompany")}
                   </p>
                 ) : (
                   <ul className="grid grid-cols-1 md:grid-cols-2 gap-1.5 max-h-60 overflow-y-auto pr-1">
@@ -327,7 +329,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                         <button
                           type="button"
                           data-testid={`company-panel-item-${item.id}`}
-                          onClick={() => handleSelectCalendarEvent(companyItemToCalendarEvent(item))}
+                          onClick={() => handleSelectCalendarEvent(companyItemToCalendarEvent(item, locale))}
                           className="w-full text-left p-2 rounded border border-neutral-800 bg-neutral-950/80 hover:border-violet-600/70 hover:bg-neutral-900 transition-colors flex items-start justify-between gap-2 text-xs cursor-pointer"
                         >
                           <div className="min-w-0">
@@ -359,7 +361,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
               className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 text-xs"
             >
               <summary className="cursor-pointer font-medium text-neutral-300">
-                날짜 없음 ({filteredUndatedItems.length}건)
+                {t("sched.undated")} ({formatMessage(t("work.count"), { count: filteredUndatedItems.length })})
               </summary>
               <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 {filteredUndatedItems.map((item) => (

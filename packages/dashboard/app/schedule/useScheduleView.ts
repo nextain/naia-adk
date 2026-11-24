@@ -16,6 +16,8 @@ import {
   requestCompanySchedule, shouldDiscardPersonalDraft, type CompanyLayerStatus, type FormState,
   type PersonalLayerState, type ScheduleViewProps,
 } from "./schedule-view-model"
+import type { Locale } from "../i18n/types.ts"
+import { getDict, tFor } from "../i18n/index.ts"
 import { requestBoardSchedule, retainLocalToday, type BoardScheduleStatus } from "./schedule-board-state"
 import { readScheduleDeepLink, resolveDeepLink, type ScheduleLinkTarget } from "./schedule-deep-link"
 
@@ -27,18 +29,19 @@ export function createLatestRequestGuard() {
   }
 }
 
-export function companyItemToCalendarEvent(item: CompanyScheduleItem): CalendarCellEvent {
+export function companyItemToCalendarEvent(item: CompanyScheduleItem, locale: Locale = "ko"): CalendarCellEvent {
   const rawEnd = item.endDate || item.startDate
   const startDate = item.startDate <= rawEnd ? item.startDate : rawEnd
   const endDate = item.startDate <= rawEnd ? rawEnd : item.startDate
   const allDay = !item.startTime && !item.endTime && !(item.times && item.times.length > 0)
+  const dict = getDict(locale)
   const timeLabel = allDay
-    ? "종일"
+    ? dict["sched.allDay"]
     : item.times && item.times.length > 1
       ? item.times.join(", ")
       : item.startTime && item.endTime && item.startTime !== item.endTime
         ? `${item.startTime}~${item.endTime}`
-        : item.startTime ?? item.endTime ?? "종일"
+        : item.startTime ?? item.endTime ?? dict["sched.allDay"]
   const completed = Boolean(
     item.status && /^(?:완료|발송\s*완료|출원\s*완료|제출\s*완료)(?:\s|\(|$)/.test(item.status.trim()),
   )
@@ -53,7 +56,7 @@ export function companyItemToCalendarEvent(item: CompanyScheduleItem): CalendarC
     allDay,
     timeLabel,
     subtitle: [
-      item.kind === "regular" ? "정기 반복" : "회사 일정",
+      item.kind === "regular" ? dict["sched.regular"] : dict["sched.company"],
       item.roleLabel || item.role,
       item.state || item.status,
     ]
@@ -85,7 +88,10 @@ export function useScheduleView(props: ScheduleViewProps) {
     initialDayListDate = null,
     initialDeepLink,
     fetchFn,
+    locale: localeProp,
   } = props
+  const locale: Locale = localeProp ?? "ko"
+  const t = tFor(locale)
 
   const defaultToday = initialAnchorDate ?? initialBoardSchedule?.todayDate ?? "2000-01-01"
 
@@ -262,10 +268,10 @@ export function useScheduleView(props: ScheduleViewProps) {
 
   const loadBoardSchedule = useCallback(async () => {
     setBoardStatus("loading")
-    const result = await requestBoardSchedule(fetchFn ?? fetch)
+    const result = await requestBoardSchedule(fetchFn ?? fetch, locale)
     if (result.status === "ready") setBoardSchedule((current) => retainLocalToday(current, result.data))
     setBoardStatus(result.status)
-  }, [fetchFn])
+  }, [fetchFn, locale])
 
   const baseGridCells = useMemo(
     () => buildCalendarCells(anchorDate, unit, boardSchedule.todayDate),
@@ -337,10 +343,10 @@ export function useScheduleView(props: ScheduleViewProps) {
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!canMutatePersonal || mutationPending.current) return
-    if (!personalRevision.current) { setFormError("일정 버전을 확인하지 못했습니다. 새로고침한 뒤 다시 시도하세요."); return }
+    if (!personalRevision.current) { setFormError(t("sched.errVersion")); return }
     const trimmedTitle = form.title.trim()
     if (!trimmedTitle) {
-      setFormError("제목을 입력하세요.")
+      setFormError(t("sched.errTitle"))
       return
     }
     const start = form.allDay ? form.startDate : `${form.startDate} ${form.startTime || "09:00"}`
@@ -393,11 +399,11 @@ export function useScheduleView(props: ScheduleViewProps) {
       }
       if (!res.ok) {
         setFormError(data.error === "personal-schedule-busy"
-          ? "다른 변경이 진행 중입니다. 잠시 후 다시 시도하세요."
+          ? t("sched.errBusy")
           : data.error === "personal-schedule-conflict"
-            ? "일정 파일이 바뀌었습니다. 새로고침한 뒤 다시 시도하세요."
-            : res.status === 403 ? "일정을 저장하지 못했습니다. 연결 설정을 확인하고 다시 시도하세요."
-              : (data.error || "일정을 저장하지 못했습니다."))
+            ? t("sched.errConflict")
+            : res.status === 403 ? t("sched.errSave")
+              : (data.error || t("sched.errSaveNet")))
         return
       }
       if (Array.isArray(data.items) && typeof data.revision === "string" && /^"[a-f0-9]{64}"$/.test(data.revision)) {
@@ -415,7 +421,7 @@ export function useScheduleView(props: ScheduleViewProps) {
       }
       setFormOpen(false)
     } catch {
-      if (personalRequests.current.isCurrent(generation)) setFormError("네트워크 오류로 일정을 저장하지 못했습니다.")
+      if (personalRequests.current.isCurrent(generation)) setFormError(t("sched.errSaveNet"))
     } finally {
       mutationPending.current = false
       setSaving(false)
@@ -424,7 +430,7 @@ export function useScheduleView(props: ScheduleViewProps) {
 
   const handleDeleteItem = async (id: string) => {
     if (!canMutatePersonal || mutationPending.current) return
-    if (!personalRevision.current) { setFormError("일정 버전을 확인하지 못했습니다. 새로고침한 뒤 다시 시도하세요."); return }
+    if (!personalRevision.current) { setFormError(t("sched.errVersion")); return }
     mutationPending.current = true
     const generation = personalRequests.current.begin()
     setSaving(true)
@@ -464,11 +470,11 @@ export function useScheduleView(props: ScheduleViewProps) {
       }
       if (!res.ok) {
         setFormError(data.error === "personal-schedule-busy"
-          ? "다른 변경이 진행 중입니다. 잠시 후 다시 시도하세요."
+          ? t("sched.errBusy")
           : data.error === "personal-schedule-conflict"
-            ? "일정 파일이 바뀌었습니다. 새로고침한 뒤 다시 시도하세요."
-            : res.status === 403 ? "일정을 지우지 못했습니다. 연결 설정을 확인하고 다시 시도하세요."
-              : (data.error || "일정을 지우지 못했습니다."))
+            ? t("sched.errConflict")
+            : res.status === 403 ? t("sched.errDelete")
+              : (data.error || t("sched.errDeleteNet")))
         return
       }
       if (Array.isArray(data.items) && typeof data.revision === "string" && /^"[a-f0-9]{64}"$/.test(data.revision)) {
@@ -488,7 +494,7 @@ export function useScheduleView(props: ScheduleViewProps) {
         setFormOpen(false)
       }
     } catch {
-      if (personalRequests.current.isCurrent(generation)) setFormError("네트워크 오류로 일정을 지우지 못했습니다.")
+      if (personalRequests.current.isCurrent(generation)) setFormError(t("sched.errDeleteNet"))
     } finally {
       mutationPending.current = false
       setSaving(false)
@@ -531,8 +537,9 @@ export function useScheduleView(props: ScheduleViewProps) {
       companyItems,
       workItems: boardSchedule.workItems,
       milestones: boardSchedule.milestones,
+      locale,
     })
-  }, [baseGridCells, layers, workFilter, showRegular, personalItems, companyItems, boardSchedule.workItems, boardSchedule.milestones])
+  }, [baseGridCells, layers, workFilter, showRegular, personalItems, companyItems, boardSchedule.workItems, boardSchedule.milestones, locale])
 
   const calendarWeeks = useMemo(
     () => layoutCalendarWeeks(calendarCells, { unit }),
@@ -596,7 +603,7 @@ export function useScheduleView(props: ScheduleViewProps) {
     queue: filteredQueueCount,
   }
 
-  const periodTitle = formatCalendarPeriodTitle(anchorDate, unit)
+  const periodTitle = formatCalendarPeriodTitle(anchorDate, unit, locale)
 
   return {
     hasBoard, mode, unit, layers, workFilter, showRegular, toggleRegular, anchorDate, setAnchorDate,

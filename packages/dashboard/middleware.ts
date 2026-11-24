@@ -20,7 +20,18 @@ export function middleware(request: NextRequest) {
     })
   }
 
-  const response = NextResponse.next()
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.delete("x-naia-lang-query")
+  const queryLang = request.nextUrl.searchParams.get("lang")
+  if (queryLang) {
+    requestHeaders.set("x-naia-lang-query", queryLang)
+  }
+
+  const response = NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  })
   response.headers.set("Content-Security-Policy", "frame-ancestors 'self'")
   response.headers.set("X-Frame-Options", "SAMEORIGIN")
   return response

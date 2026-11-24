@@ -1,5 +1,7 @@
 import { apiBase } from "./api-base"
 import { HomeTodoSummary } from "./components/HomeTodoSummary"
+import { formatMessage, getDict } from "./i18n/index.ts"
+import { getRequestLocale } from "./i18n/server"
 
 type IndexEntry = {
   path?: string;
@@ -33,7 +35,8 @@ function countPresent(entries: Record<string, IndexEntry>, keys: string[]): numb
 }
 
 export default async function Home() {
-  const [meta, skills, index] = await Promise.all([getMeta(), getSkills(), getIndex()])
+  const [meta, skills, index, locale] = await Promise.all([getMeta(), getSkills(), getIndex(), getRequestLocale()])
+  const t = getDict(locale)
 
   const submodules: Record<string, IndexEntry> = index?.submodules ?? {}
   const localProjects: Record<string, IndexEntry> = index?.local_projects ?? {}
@@ -55,17 +58,17 @@ export default async function Home() {
       </div>
 
       <div className="grid grid-cols-4 gap-4">
-        <Card label="Projects" value={presentProjects} declared={localProjectKeys.length} />
-        <Card label="Submodules" value={presentNonRefSubmodules} declared={nonRefSubmoduleKeys.length} />
-        <Card label="References" value={presentRefs} declared={refKeys.length} />
-        <Card label="Skills" value={Array.isArray(skills) ? skills.length : 0} />
+        <Card label={t["home.projects"]} value={presentProjects} declared={localProjectKeys.length} locale={locale} />
+        <Card label={t["home.submodules"]} value={presentNonRefSubmodules} declared={nonRefSubmoduleKeys.length} locale={locale} />
+        <Card label={t["home.references"]} value={presentRefs} declared={refKeys.length} locale={locale} />
+        <Card label={t["home.skills"]} value={Array.isArray(skills) ? skills.length : 0} locale={locale} />
       </div>
 
       <HomeTodoSummary />
 
       <div className="grid grid-cols-2 gap-6">
         <div>
-          <h2 className="text-lg font-semibold mb-3">Skills</h2>
+          <h2 className="text-lg font-semibold mb-3">{t["home.skillsTitle"]}</h2>
           <div className="space-y-2">
             {Array.isArray(skills) && skills.map((s: { name: string; description: string; trigger?: string }) => (
               <a key={s.name} href={`/skills#${s.name}`}
@@ -78,7 +81,7 @@ export default async function Home() {
         </div>
 
         <div>
-          <h2 className="text-lg font-semibold mb-3">Projects</h2>
+          <h2 className="text-lg font-semibold mb-3">{t["home.projectsTitle"]}</h2>
           <div className="space-y-2">
             {localProjectKeys.map((name: string) => {
               const entry = localProjects[name]
@@ -90,7 +93,7 @@ export default async function Home() {
                     <span className="font-medium">{name}</span>
                     <div className="flex items-center gap-2">
                       {missing && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400">missing</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400">{t["home.missing"]}</span>
                       )}
                       {entry?.visibility && (
                         <span className={`text-xs px-2 py-0.5 rounded ${
@@ -110,14 +113,15 @@ export default async function Home() {
   )
 }
 
-function Card({ label, value, declared }: { label: string; value: number; declared?: number }) {
+function Card({ label, value, declared, locale }: { label: string; value: number; declared?: number; locale: Parameters<typeof getDict>[0] }) {
+  const t = getDict(locale)
   const phantom = declared !== undefined && declared > value
   return (
     <div className="p-4 rounded-lg border border-neutral-800">
       <div className="text-3xl font-bold">{value}</div>
       <div className="text-sm text-neutral-400 mt-1">{label}</div>
       {phantom && (
-        <div className="text-xs text-amber-500 mt-1">{declared} declared</div>
+        <div className="text-xs text-amber-500 mt-1">{formatMessage(t["home.declared"], { declared })}</div>
       )}
     </div>
   )

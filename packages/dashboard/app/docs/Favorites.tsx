@@ -10,14 +10,19 @@ import {
   type FavoriteItem,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
+import { getDict } from "../i18n/index.ts"
+import { useT } from "../i18n/provider.tsx"
+import type { Locale } from "../i18n/types.ts"
 
 // ── 즐겨찾기 API 함수 ───────────────────────────────────────────────────────
 export async function addFavorite(params: {
   source: string
   path: string
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<{ ok: boolean; status: number; error?: string }> {
   const fetcher = params.fetchFn ?? fetch
+  const locale = params.locale ?? "ko"
   try {
     const res = await fetcher("/api/portal/favorites", {
       method: "POST",
@@ -31,9 +36,9 @@ export async function addFavorite(params: {
     if (res.ok) {
       return { ok: true, status: res.status }
     }
-    return { ok: false, status: res.status, error: mapFavoritesError(res.status, json) }
+    return { ok: false, status: res.status, error: mapFavoritesError(res.status, json, locale) }
   } catch {
-    return { ok: false, status: 0, error: "즐겨찾기에 추가하지 못했습니다." }
+    return { ok: false, status: 0, error: getDict(locale)["docs.favAddFailed"] }
   }
 }
 
@@ -41,8 +46,10 @@ export async function removeFavorite(params: {
   source: string
   path: string
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<{ ok: boolean; status: number; error?: string }> {
   const fetcher = params.fetchFn ?? fetch
+  const locale = params.locale ?? "ko"
   try {
     const res = await fetcher("/api/portal/favorites", {
       method: "DELETE",
@@ -56,9 +63,9 @@ export async function removeFavorite(params: {
     if (res.ok) {
       return { ok: true, status: res.status }
     }
-    return { ok: false, status: res.status, error: mapFavoritesError(res.status, json) }
+    return { ok: false, status: res.status, error: mapFavoritesError(res.status, json, locale) }
   } catch {
-    return { ok: false, status: 0, error: "즐겨찾기에서 빼지 못했습니다." }
+    return { ok: false, status: 0, error: getDict(locale)["docs.favRemoveFailed"] }
   }
 }
 
@@ -82,6 +89,7 @@ export function FavoritesGroup({
   onRemoveFavorite,
   onNavigate,
 }: FavoritesGroupProps) {
+  const t = useT()
   // 비어 있으면 묶음을 숨긴다 (SP-01)
   if (!favorites || favorites.length === 0) {
     return null
@@ -91,7 +99,7 @@ export function FavoritesGroup({
     <div className="space-y-1 pb-3 mb-2 border-b border-neutral-800/80">
       <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-bold tracking-wider text-neutral-400">
         <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-        <span>즐겨찾기</span>
+        <span>{t("docs.favorites")}</span>
       </div>
 
       {errorMessage && (
@@ -116,7 +124,7 @@ export function FavoritesGroup({
               >
                 <div className="flex items-center gap-1.5 truncate">
                   <FileIcon className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate line-through" title="없어진 항목입니다">
+                  <span className="truncate line-through" title={t("docs.missingFavorite")}>
                     {itemName}
                   </span>
                 </div>
@@ -124,8 +132,8 @@ export function FavoritesGroup({
                   <button
                     type="button"
                     onClick={() => onRemoveFavorite(item.source, item.path)}
-                    title="즐겨찾기에서 빼기"
-                    aria-label={`${itemName} 즐겨찾기에서 빼기`}
+                    title={t("docs.removeFavorite")}
+                    aria-label={`${itemName} ${t("docs.removeFavorite")}`}
                     className="p-0.5 rounded hover:bg-neutral-800 text-neutral-500 hover:text-neutral-300"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -171,8 +179,8 @@ export function FavoritesGroup({
                     e.stopPropagation()
                     onRemoveFavorite(item.source, item.path)
                   }}
-                  title="즐겨찾기에서 빼기"
-                  aria-label={`${itemName} 즐겨찾기에서 빼기`}
+                  title={t("docs.removeFavorite")}
+                  aria-label={`${itemName} ${t("docs.removeFavorite")}`}
                   className="p-1 mr-1 rounded opacity-0 group-hover:opacity-100 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-opacity"
                 >
                   <X className="w-3.5 h-3.5" />

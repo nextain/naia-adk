@@ -1,5 +1,7 @@
 // Top tabs and main-area width. hasMessenger is /api/portal messenger.enabled: the 대화 tab hides only
 // when the server says the messenger is off; older servers that omit it keep the tab.
+import type { Locale } from "../i18n/types.ts"
+
 export type TopNavTabId = "docs" | "schedule" | "decisions" | "work" | "messages" | "ax-messenger"
 
 export interface TopNavTabItem {
@@ -18,8 +20,39 @@ export const TOP_NAV_TABS: readonly TopNavTabItem[] = [
   { id: "ax-messenger", label: "Matrix 대화", href: "/ax/messenger", requiresBoard: false },
 ]
 
-export function visibleTopNavTabs(hasMessenger: boolean | null | undefined, hasAxMessenger?: boolean | null): readonly TopNavTabItem[] {
-  return TOP_NAV_TABS.filter(tab => (tab.id !== "messages" || hasMessenger !== false) && (tab.id !== "ax-messenger" || hasAxMessenger === true))
+const TOP_NAV_TAB_LABELS: Record<Locale, Record<TopNavTabId, string>> = {
+  ko: {
+    docs: "문서",
+    schedule: "일정",
+    decisions: "결정",
+    work: "작업",
+    messages: "대화",
+    "ax-messenger": "Matrix 대화",
+  },
+  en: {
+    docs: "Docs",
+    schedule: "Schedule",
+    decisions: "Decisions",
+    work: "Work",
+    messages: "Chat",
+    "ax-messenger": "Matrix Chat",
+  },
+}
+
+export function topNavTabLabel(id: TopNavTabId, locale: Locale = "ko"): string {
+  return TOP_NAV_TAB_LABELS[locale === "en" ? "en" : "ko"][id] ?? id
+}
+
+export function topNavTabs(locale: Locale = "ko"): readonly TopNavTabItem[] {
+  return TOP_NAV_TABS.map((tab) => ({ ...tab, label: topNavTabLabel(tab.id, locale) }))
+}
+
+export function visibleTopNavTabs(
+  hasMessenger: boolean | null | undefined,
+  hasAxMessenger?: boolean | null,
+  locale: Locale = "ko",
+): readonly TopNavTabItem[] {
+  return topNavTabs(locale).filter(tab => (tab.id !== "messages" || hasMessenger !== false) && (tab.id !== "ax-messenger" || hasAxMessenger === true))
 }
 
 const under = (pathname: string | null, href: string) =>

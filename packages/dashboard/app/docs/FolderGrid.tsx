@@ -16,13 +16,13 @@ import {
   createBreadcrumbs,
   formatFileSize,
   getFileName,
-  MSG_FORBIDDEN,
-  MSG_TRUNCATED_GRID,
   sortGridEntries,
   type FileKind,
   type FolderGridEntry,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 export interface FolderGridProps {
   sourceId: string
@@ -70,9 +70,11 @@ export function FolderGrid({
   forbidden = false,
   onNavigate,
 }: FolderGridProps) {
+  const locale = useLocale()
+  const t = useT()
   const breadcrumbs = createBreadcrumbs(sourceTitle, path)
   const currentTitle = path ? getFileName(path) : sourceTitle
-  const sortedEntries = sortGridEntries(entries)
+  const sortedEntries = sortGridEntries(entries, locale)
   const itemCount = total !== undefined ? total : entries.length
 
   // SP-06: 403 Forbidden이면 격자 대신 안내 한 줄 표시
@@ -80,7 +82,7 @@ export function FolderGrid({
     return (
       <div className="space-y-6">
         <div className="pb-4 border-b border-neutral-800">
-          <nav aria-label="폴더 경로" className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
+          <nav aria-label={t("docs.folderPath")} className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
             {breadcrumbs.map((crumb, idx) => {
               const isLast = idx === breadcrumbs.length - 1
               return (
@@ -94,7 +96,7 @@ export function FolderGrid({
           <h1 className="text-xl font-bold text-white mt-1 truncate">{currentTitle}</h1>
         </div>
         <div className="p-8 text-center text-sm text-neutral-400 bg-neutral-900/40 rounded-lg border border-neutral-800">
-          {MSG_FORBIDDEN}
+          {t("docs.forbidden")}
         </div>
       </div>
     )
@@ -106,7 +108,7 @@ export function FolderGrid({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
         <div className="space-y-1 min-w-0">
           {/* 누를 수 있는 이동 경로 (breadcrumbs) */}
-          <nav aria-label="폴더 경로" className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
+          <nav aria-label={t("docs.folderPath")} className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
             {breadcrumbs.map((crumb, idx) => {
               const isLast = idx === breadcrumbs.length - 1
               if (isLast) {
@@ -142,8 +144,8 @@ export function FolderGrid({
               <button
                 type="button"
                 onClick={onToggleFavorite}
-                title={isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"}
-                aria-label={isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                title={isFavorite ? t("docs.removeFavorite") : t("docs.addFavorite")}
+                aria-label={isFavorite ? t("docs.removeFavorite") : t("docs.addFavorite")}
                 className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-amber-400 transition-colors"
               >
                 <Star className={`w-5 h-5 ${isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
@@ -157,21 +159,21 @@ export function FolderGrid({
 
         {/* 항목 수 */}
         <div className="shrink-0 text-xs text-neutral-400">
-          <span>{`${itemCount}개 항목`}</span>
+          <span>{formatMessage(t("docs.itemCount"), { count: itemCount })}</span>
         </div>
       </div>
 
       {/* 500개 초과 문구 (truncated가 true일 때만 표시) */}
       {truncated && (
         <div className="px-3 py-2 rounded bg-amber-950/40 border border-amber-900/60 text-amber-300 text-xs">
-          {MSG_TRUNCATED_GRID}
+          {t("docs.truncatedGrid")}
         </div>
       )}
 
       {/* 격자 칸 목록: 휴대폰 2칸, 넓으면 늘어남, 가로 스크롤 없음 */}
       {sortedEntries.length === 0 ? (
         <div className="p-12 text-center text-sm text-neutral-500 bg-neutral-900/30 rounded-lg border border-neutral-800">
-          폴더가 비어 있습니다.
+          {t("docs.emptyFolder")}
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">

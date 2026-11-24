@@ -17,6 +17,9 @@ export type CalendarUnit = "month" | "week"
 export type ScheduleLayerKey = "personal" | "company" | "work" | "milestone" | "queue"
 export type WorkScheduleFilter = "open" | "all"
 export type SpanPosition = "single" | "start" | "middle" | "end"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
+
 export type TaskStatusBadge = "완료" | "진행" | "대기" | "미완료"
 
 export interface ScheduleLayers {
@@ -50,6 +53,24 @@ export const LAYER_LABELS: Record<ScheduleLayerKey, string> = {
 }
 
 export const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"] as const
+
+export function layerLabels(locale: Locale = "ko"): Record<ScheduleLayerKey, string> {
+  if (locale === "en") {
+    return {
+      personal: getDict("en")["sched.personal"],
+      company: getDict("en")["sched.company"],
+      work: getDict("en")["sched.workGroup"],
+      milestone: getDict("en")["sched.milestone"],
+      queue: getDict("en")["sched.pendingWork"],
+    }
+  }
+  return LAYER_LABELS
+}
+
+export function weekdayLabels(locale: Locale = "ko"): readonly string[] {
+  if (locale === "en") return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const
+  return WEEKDAY_LABELS_KO
+}
 
 export const MONTH_MAX_VISIBLE_LANES = 3
 export const WEEK_MAX_VISIBLE_LANES = 10
@@ -234,10 +255,12 @@ export function shiftCalendarAnchor(anchorDate: string, unit: CalendarUnit, dire
   return formatUtcDate(dt)
 }
 
-export function formatCalendarPeriodTitle(anchorDate: string, unit: CalendarUnit): string {
+export function formatCalendarPeriodTitle(anchorDate: string, unit: CalendarUnit, locale: Locale = "ko"): string {
   const parts = parseDateParts(anchorDate)
   if (!parts) return anchorDate
+  const pad2 = (n: number) => String(n).padStart(2, "0")
   if (unit === "month") {
+    if (locale === "en") return `${parts.year}-${pad2(parts.month)}`
     return `${parts.year}년 ${parts.month}월`
   }
   const dt = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
@@ -246,6 +269,15 @@ export function formatCalendarPeriodTitle(anchorDate: string, unit: CalendarUnit
   const weekEnd = addDays(weekStart, 6)
   const s = parseDateParts(weekStart)!
   const e = parseDateParts(weekEnd)!
+  if (locale === "en") {
+    if (s.year === e.year && s.month === e.month) {
+      return `${s.year}-${pad2(s.month)}-${pad2(s.day)} ~ ${pad2(e.day)}`
+    }
+    if (s.year === e.year) {
+      return `${s.year}-${pad2(s.month)}-${pad2(s.day)} ~ ${pad2(e.month)}-${pad2(e.day)}`
+    }
+    return `${weekStart} ~ ${weekEnd}`
+  }
   if (s.year === e.year && s.month === e.month) {
     return `${s.year}년 ${s.month}월 ${s.day}일 ~ ${e.day}일`
   }

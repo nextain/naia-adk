@@ -1,13 +1,14 @@
 // 나이아 워크스페이스 문서 화면 상호작용 핸들러 및 데이터 준비 모듈 (UI1c)
 
 import {
+  docsMessage,
   inferKindFromPath,
-  MSG_CONFIRM_DISCARD,
-  MSG_FORBIDDEN,
   type FileKind,
   type FolderGridEntry,
 } from "./kinds"
 import { type DocTab } from "./tabs"
+import { formatMessage, getDict } from "../i18n/index.ts"
+import type { Locale } from "../i18n/types.ts"
 import { type Source, type TreeNode } from "./DocsView"
 
 export interface DocsViewState {
@@ -43,9 +44,12 @@ export async function loadDocsViewState(params: {
   path: string | null
   sources: Source[]
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<DocsViewState> {
   const { tab, source, path, sources } = params
   const fetcher = params.fetchFn ?? fetch
+  const locale: Locale = params.locale ?? "ko"
+  const dict = getDict(locale)
 
   const state: DocsViewState = {
     activeTab: tab,
@@ -115,16 +119,16 @@ export async function loadDocsViewState(params: {
         const res = await fetcher(`/api/portal/doc?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`)
         if (res.status === 403) {
           state.forbidden = true
-          state.docError = MSG_FORBIDDEN
+          state.docError = dict["docs.forbidden"]
         } else if (res.ok) {
           const etag = res.headers.get("etag")?.replace(/^"(.*)"$/, "$1") ?? ""
           state.docBaseHash = etag
           state.docContent = await res.text()
         } else {
-          state.docError = `문서를 찾을 수 없습니다 (${res.status})`
+          state.docError = formatMessage(dict["docs.docNotFound"], { status: res.status })
         }
       } catch (err: any) {
-        state.docError = err?.message || "문서를 불러오지 못했습니다"
+        state.docError = err?.message || dict["docs.loadFailed"]
       }
       return state
     }
@@ -181,16 +185,16 @@ export async function loadDocsViewState(params: {
           const res = await fetcher(`/api/portal/doc?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`)
           if (res.status === 403) {
             state.forbidden = true
-            state.docError = MSG_FORBIDDEN
+            state.docError = dict["docs.forbidden"]
           } else if (res.ok) {
             const etag = res.headers.get("etag")?.replace(/^"(.*)"$/, "$1") ?? ""
             state.docBaseHash = etag
             state.docContent = await res.text()
           } else {
-            state.docError = `문서를 찾을 수 없습니다 (${res.status})`
+            state.docError = formatMessage(dict["docs.docNotFound"], { status: res.status })
           }
         } catch (err: any) {
-          state.docError = err?.message || "문서를 불러오지 못했습니다"
+          state.docError = err?.message || dict["docs.loadFailed"]
         }
         return state
       }
@@ -216,16 +220,16 @@ export async function loadDocsViewState(params: {
       const res = await fetcher(`/api/portal/doc?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`)
       if (res.status === 403) {
         state.forbidden = true
-        state.docError = MSG_FORBIDDEN
+        state.docError = dict["docs.forbidden"]
       } else if (res.ok) {
         const etag = res.headers.get("etag")?.replace(/^"(.*)"$/, "$1") ?? ""
         state.docBaseHash = etag
         state.docContent = await res.text()
       } else {
-        state.docError = `문서를 찾을 수 없습니다 (${res.status})`
+        state.docError = formatMessage(dict["docs.docNotFound"], { status: res.status })
       }
     } catch (err: any) {
-      state.docError = err?.message || "문서를 불러오지 못했습니다"
+      state.docError = err?.message || dict["docs.loadFailed"]
     }
     return state
   }
@@ -273,16 +277,17 @@ export async function loadDocsViewState(params: {
   return state
 }
 
-// ── 2. 이동 확인 도우미 함수 (더러운 편집 상태에서 이동 시 MSG_CONFIRM_DISCARD) ──
+// ── 2. 이동 확인 도우미 함수 (더러운 편집 상태에서 이동 시 확인 문구) ──
 export function canNavigateWithDiscardConfirm(params: {
   isDirty: boolean
   targetHref: string
   confirmFn?: (message: string) => boolean
   navigateFn?: (url: string) => void
+  locale?: Locale
 }): boolean {
   if (params.isDirty) {
     const confirmer = params.confirmFn ?? (typeof window !== "undefined" ? window.confirm : () => true)
-    const ok = confirmer(MSG_CONFIRM_DISCARD)
+    const ok = confirmer(docsMessage("docs.discardConfirm", params.locale))
     if (!ok) return false
   }
   if (params.navigateFn) {
