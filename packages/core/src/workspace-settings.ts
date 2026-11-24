@@ -326,7 +326,7 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
   const targetPath = path.resolve(root, requestedPath)
   const exampleExists = fs.existsSync(path.join(root, exampleRelPath))
 
-  const baseMissing = (): WorkspaceTierProfileStatus => ({
+  const baseMissing = (): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } => ({
     status: "missing",
     path: sourcePath,
     sourcePath,
@@ -339,7 +339,7 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
     roleBindings: [],
   })
 
-  const invalid = (error: string): WorkspaceTierProfileStatus => ({
+  const invalid = (error: string): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } => ({
     status: "invalid",
     path: sourcePath,
     sourcePath,
