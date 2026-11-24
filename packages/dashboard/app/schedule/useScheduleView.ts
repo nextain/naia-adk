@@ -537,8 +537,9 @@ export function useScheduleView(props: ScheduleViewProps) {
       companyItems,
       workItems: boardSchedule.workItems,
       milestones: boardSchedule.milestones,
+      locale,
     })
-  }, [baseGridCells, layers, workFilter, showRegular, personalItems, companyItems, boardSchedule.workItems, boardSchedule.milestones])
+  }, [baseGridCells, layers, workFilter, showRegular, personalItems, companyItems, boardSchedule.workItems, boardSchedule.milestones, locale])
 
   const calendarWeeks = useMemo(
     () => layoutCalendarWeeks(calendarCells, { unit }),
@@ -602,7 +603,7 @@ export function useScheduleView(props: ScheduleViewProps) {
     queue: filteredQueueCount,
   }
 
-  const periodTitle = formatCalendarPeriodTitle(anchorDate, unit)
+  const periodTitle = formatCalendarPeriodTitle(anchorDate, unit, locale)
 
   return {
     hasBoard, mode, unit, layers, workFilter, showRegular, toggleRegular, anchorDate, setAnchorDate,
