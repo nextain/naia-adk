@@ -16,7 +16,14 @@ export interface DocFavoritesData {
 
 export const FAVORITES_MAX_BYTES = 256 * 1024
 
-export function getFavoritesFilePath(adkRoot: string): string {
+export function getFavoritesFilePath(
+  adkRoot: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): string {
+  const v = env?.NAIA_FAVORITES_FILE?.trim()
+  if (v) {
+    return path.isAbsolute(v) ? path.resolve(v) : path.resolve(adkRoot, v)
+  }
   return path.join(adkRoot, ".agents", "work", "doc-favorites.json")
 }
 
@@ -24,8 +31,11 @@ export type ReadFavoritesResult =
   | { ok: true; data: DocFavoritesData }
   | { ok: false; error: "favorites_file_invalid" }
 
-export function readFavoritesSecure(adkRoot: string): ReadFavoritesResult {
-  const filePath = getFavoritesFilePath(adkRoot)
+export function readFavoritesSecure(
+  adkRoot: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): ReadFavoritesResult {
+  const filePath = getFavoritesFilePath(adkRoot, env)
 
   let fd: number
   try {
@@ -70,16 +80,23 @@ export function readFavoritesSecure(adkRoot: string): ReadFavoritesResult {
   }
 }
 
-export function readFavorites(adkRoot: string): DocFavoritesData {
-  const res = readFavoritesSecure(adkRoot)
+export function readFavorites(
+  adkRoot: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): DocFavoritesData {
+  const res = readFavoritesSecure(adkRoot, env)
   if (res.ok) {
     return res.data
   }
   return { schemaVersion: 1, items: [] }
 }
 
-export function saveFavorites(adkRoot: string, data: DocFavoritesData): void {
-  const filePath = getFavoritesFilePath(adkRoot)
+export function saveFavorites(
+  adkRoot: string,
+  data: DocFavoritesData,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): void {
+  const filePath = getFavoritesFilePath(adkRoot, env)
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
 
