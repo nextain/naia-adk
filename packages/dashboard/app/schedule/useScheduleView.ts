@@ -268,10 +268,10 @@ export function useScheduleView(props: ScheduleViewProps) {
 
   const loadBoardSchedule = useCallback(async () => {
     setBoardStatus("loading")
-    const result = await requestBoardSchedule(fetchFn ?? fetch)
+    const result = await requestBoardSchedule(fetchFn ?? fetch, locale)
     if (result.status === "ready") setBoardSchedule((current) => retainLocalToday(current, result.data))
     setBoardStatus(result.status)
-  }, [fetchFn])
+  }, [fetchFn, locale])
 
   const baseGridCells = useMemo(
     () => buildCalendarCells(anchorDate, unit, boardSchedule.todayDate),

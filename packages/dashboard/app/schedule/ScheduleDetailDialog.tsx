@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from "react"
 import {
   buildCompanyDocLink,
+  formatWorkStatusLabel,
   layerLabels,
   taskStatusBadge,
   type CalendarCellEvent,
@@ -226,7 +227,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                 <div>
                   <dt className="text-[11px] text-neutral-400">{t("sched.statusLabel")}</dt>
                   <dd data-testid="schedule-detail-status" className="font-medium text-neutral-100 mt-0.5 break-words">
-                    {w?.status || "-"}
+                    {w ? formatWorkStatusLabel(w, locale) : "-"}
                     {w?.completed ? t("sched.doneSuffix") : w?.cancelled ? t("sched.cancelledSuffix") : ""}
                   </dd>
                 </div>

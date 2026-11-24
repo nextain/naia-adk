@@ -17,6 +17,7 @@ export interface WorkScheduleItem {
   title: string
   issue: string
   status: string
+  rawStatus?: string
   kind: "queue" | "work_document"
   completed: boolean
   cancelled: boolean
@@ -292,6 +293,7 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string, 
       title,
       issue,
       status,
+      rawStatus: status,
       kind: "queue",
       completed,
       cancelled,
@@ -360,6 +362,7 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string, 
       title,
       issue,
       status,
+      rawStatus: status,
       kind: "work_document",
       completed,
       cancelled: false,
@@ -395,7 +398,9 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string, 
     .filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object")
     .map((m, idx) => {
       const id = String(m.id || `milestone-${idx + 1}`)
-      const name = String(m.nameKo || m.name || m.nameEn || id)
+      const name = locale === "en"
+        ? String(m.nameEn || m.name || m.nameKo || id)
+        : String(m.nameKo || m.name || m.nameEn || id)
       const description = typeof m.description === "string" ? m.description : ""
       const order = typeof m.order === "number" && Number.isFinite(m.order) ? m.order : idx + 1
       const dueDate = localDateOnly(m.dueDate)
@@ -486,6 +491,52 @@ export function formatLedgerStatusLabel(rawStatus: unknown, locale: Locale = "ko
   }
 }
 
+const KNOWN_WORK_STATUS_CODES: Record<string, string> = {
+  open: "open",
+  active: "open",
+  "in progress": "open",
+  "진행": "open",
+  "진행 중": "open",
+  waiting_human: "waiting_human",
+  waiting: "waiting_human",
+  pending: "waiting_human",
+  "awaiting review": "waiting_human",
+  "확인 대기": "waiting_human",
+  "대기": "waiting_human",
+  escalated_human: "escalated_human",
+  escalated: "escalated_human",
+  "사람 개입": "escalated_human",
+  done: "done",
+  complete: "done",
+  completed: "done",
+  "완료": "done",
+  "완료됨": "done",
+  dropped: "dropped",
+  cancelled: "dropped",
+  "제외": "dropped",
+  "취소": "dropped",
+  unknown: "",
+  "미확인": "",
+}
+
+/** Localizes a projected work schedule item's status at render time without losing custom text. */
+export function formatWorkStatusLabel(
+  item: Pick<WorkScheduleItem, "status" | "rawStatus">,
+  locale: Locale = "ko",
+): string {
+  const rawCandidate = typeof item.rawStatus === "string" ? item.rawStatus.trim() : ""
+  const rawLower = rawCandidate.toLowerCase()
+  if (rawCandidate && Object.hasOwn(KNOWN_WORK_STATUS_CODES, rawLower)) {
+    return formatLedgerStatusLabel(KNOWN_WORK_STATUS_CODES[rawLower], locale)
+  }
+  const statusCandidate = typeof item.status === "string" ? item.status.trim() : ""
+  const statusLower = statusCandidate.toLowerCase()
+  if (statusCandidate && Object.hasOwn(KNOWN_WORK_STATUS_CODES, statusLower)) {
+    return formatLedgerStatusLabel(KNOWN_WORK_STATUS_CODES[statusLower], locale)
+  }
+  return statusCandidate || "-"
+}
+
 export function sanitizeLedgerDocHref(rawHref: unknown): string | null {
   if (typeof rawHref !== "string") return null
   const trimmed = rawHref.trim()
@@ -535,7 +586,11 @@ function pickLedgerDocLink(rawLinks: unknown): string | null {
  * - 기한이 없는 활성(`!done && !dropped`) 항목만 `undatedItems`에 포함하고, 완료·제외 무기한 항목은 제외한다.
  * - `kind: "work_document"`로 투영해 기본 켜짐(`layers.work`) 및 `work:<id>` 딥링크 조회와 1:1로 맞춘다.
  */
-export function extractLedgerDueSchedule(payload: unknown, fallbackToday?: string): BoardScheduleProjection {
+export function extractLedgerDueSchedule(
+  payload: unknown,
+  fallbackToday?: string,
+  locale: Locale = "ko",
+): BoardScheduleProjection {
   const p = (payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {}) as Record<string, unknown>
   const observedAt = typeof p.observedAt === "string" ? p.observedAt : null
   const todayDate =
@@ -559,7 +614,7 @@ export function extractLedgerDueSchedule(payload: unknown, fallbackToday?: strin
     const completed = rawStatus === "done"
     const cancelled = rawStatus === "dropped"
     const overdue = Boolean(item.overdue) && !completed && !cancelled
-    const status = formatLedgerStatusLabel(rawStatus)
+    const status = formatLedgerStatusLabel(rawStatus, locale)
     const title = truncateText(item.title, MAX_TASK_TEXT_LENGTH) || id
     const assignee =
       typeof item.role === "string" && item.role.trim()
@@ -575,6 +630,7 @@ export function extractLedgerDueSchedule(payload: unknown, fallbackToday?: strin
         title,
         issue: "",
         status,
+        rawStatus,
         kind: "work_document",
         completed,
         cancelled,
@@ -606,6 +662,7 @@ export function extractLedgerDueSchedule(payload: unknown, fallbackToday?: strin
         title,
         issue: "",
         status,
+        rawStatus,
         kind: "work_document",
         completed,
         cancelled,
