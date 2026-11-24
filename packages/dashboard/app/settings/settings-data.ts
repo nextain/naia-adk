@@ -10,6 +10,7 @@ import {
   type WorkspaceLLMRoleSlotStatus,
   type WorkspaceConfigFileItem,
   type InspectWorkspaceSettingsOptions,
+  type TierRoleBindingItem,
 } from "@naia-adk/core/src/workspace-settings"
 import { apiBase } from "../api-base.ts"
 
@@ -24,6 +25,7 @@ export {
   type WorkspaceLLMRoleSlotStatus,
   type WorkspaceConfigFileItem,
   type InspectWorkspaceSettingsOptions,
+  type TierRoleBindingItem,
 }
 
 export interface ServerHealthSnapshot {

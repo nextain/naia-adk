@@ -38,6 +38,7 @@ export interface NavProps {
   hasMessenger?: boolean | null
   hasAxMessenger?: boolean | null
   todoBadgeCount?: number | null
+  workspaceDisplayName?: string
 }
 
 const tabClass = (active: boolean) =>
@@ -149,6 +150,7 @@ export function Nav({
   hasAxMessenger: hasAxMessengerProp,
   todoBadgeCount: todoBadgeCountProp,
   locale: localeProp,
+  workspaceDisplayName = "Naia ADK",
 }: NavProps & { locale?: Locale } = {}) {
   const pathname = usePathname() || "/"
   const ctxLocale = useOptionalLocale()
@@ -268,7 +270,7 @@ export function Nav({
   return (
     <nav className="sticky top-0 z-10 h-14 border-b border-neutral-800 bg-neutral-950 px-2 sm:px-6 flex items-center gap-1 sm:gap-6">
       <Link href="/docs" className="font-bold text-[13px] sm:text-lg text-white shrink-0 whitespace-nowrap">
-        Naia ADK
+         {workspaceDisplayName}
       </Link>
 
       <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={localeProp} />

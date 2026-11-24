@@ -19,17 +19,53 @@ export interface TierSummaryItem {
   purpose?: string
   candidateCount: number
   clis: string[]
+  mode?: string
+  maxParallel?: number
+  candidates?: TierCandidateSummary[]
+}
+
+export interface TierCandidateSummary {
+  id: string
+  cli: string
+  model?: string
+  effort?: string
+  weight?: number
+  roles?: string[]
+  isDefault?: boolean
+}
+
+export interface TierRoleBindingItem {
+  role: string
+  tier: string
+  configuredCli?: string
+  configuredModel?: string
+  configuredEffort?: string
+  effectiveCli?: string
+  effectiveModel?: string
+  effectiveEffort?: string
+  fallbackActive: boolean
+  source: "role-match" | "default" | "fallback"
+}
+
+export interface TierFallbackSummary {
+  when?: string
+  to?: string
+  accountNames: string[]
 }
 
 export interface WorkspaceTierProfileStatus {
   status: "configured" | "missing" | "invalid"
-  path: "config/tier-profile.json"
+  path: string
+  sourcePath: string
+  sourceKind: "env-override" | "workspace-default"
   examplePath: "config/tier-profile.example.json"
   exampleExists: boolean
   error?: string
   priority: string[]
   workerSteps: string[]
   tiers: TierSummaryItem[]
+  roleBindings?: TierRoleBindingItem[]
+  fallbackSummary?: TierFallbackSummary
 }
 
 export interface ReviewModelOverrideItem {
@@ -86,6 +122,8 @@ export interface WorkspaceConfigFileItem {
 }
 
 export interface WorkspaceSettingsSnapshot {
+  roleBindings?: TierRoleBindingItem[]
+  workspaceDisplayName?: string
   runners: WorkspaceRunnerStatus[]
   tierProfile: WorkspaceTierProfileStatus
   reviewModels: WorkspaceReviewModelsStatus
@@ -97,6 +135,7 @@ export interface InspectWorkspaceSettingsOptions {
   pathEnv?: string
   homeDir?: string
   env?: Record<string, string | undefined>
+  fallbackMarkersDir?: string
 }
 
 const PLACEHOLDER_RE = /<[A-Z0-9_][^>]*>|\{\{[^}]*\}\}|^(?:MODEL_ID|CLI_ID)$/i
@@ -253,56 +292,90 @@ function inspectRunners(root: string, opts?: InspectWorkspaceSettingsOptions): W
   }))
 }
 
-function inspectTierProfile(root: string): WorkspaceTierProfileStatus {
-  const relPath = "config/tier-profile.json" as const
+function safeDisplayPath(root: string, requested: string): string {
+  const absolute = path.resolve(root, requested)
+  const relative = path.relative(root, absolute)
+  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative
+  return path.basename(requested) || "tier-profile.json"
+}
+
+function safeDisplayName(root: string, opts?: InspectWorkspaceSettingsOptions): string {
+  const env = opts?.env ?? process.env
+  const value = typeof env.NAIA_ADK_DISPLAY_NAME === "string" ? env.NAIA_ADK_DISPLAY_NAME : (() => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(root, "adk.json"), "utf-8"))
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>).name : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  return typeof value === "string" && value.trim() && value.trim().length <= 80 && !/[\0\r\n]/.test(value)
+    ? value.trim()
+    : "Naia ADK"
+}
+
+function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } {
+  const env = opts?.env ?? process.env
+  const envOverride = typeof env.NAIA_ADK_TIER_PROFILE === "string" && env.NAIA_ADK_TIER_PROFILE.trim() !== ""
+  const requestedPath = envOverride
+    ? (env.NAIA_ADK_TIER_PROFILE as string).trim()
+    : "config/tier-profile.json"
+  const sourcePath = safeDisplayPath(root, requestedPath)
+  const sourceKind = envOverride ? "env-override" as const : "workspace-default" as const
   const exampleRelPath = "config/tier-profile.example.json" as const
-  const targetPath = path.join(root, relPath)
+  const targetPath = path.resolve(root, requestedPath)
   const exampleExists = fs.existsSync(path.join(root, exampleRelPath))
 
-  const baseMissing = (): WorkspaceTierProfileStatus => ({
+  const baseMissing = (): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } => ({
     status: "missing",
-    path: relPath,
+    path: sourcePath,
+    sourcePath,
+    sourceKind,
     examplePath: exampleRelPath,
     exampleExists,
     priority: [],
     workerSteps: [],
     tiers: [],
+    roleBindings: [],
   })
 
-  const invalid = (error: string): WorkspaceTierProfileStatus => ({
+  const invalid = (error: string): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } => ({
     status: "invalid",
-    path: relPath,
+    path: sourcePath,
+    sourcePath,
+    sourceKind,
     examplePath: exampleRelPath,
     exampleExists,
     error,
     priority: [],
     workerSteps: [],
     tiers: [],
+    roleBindings: [],
   })
 
   let raw: string
   try {
     const st = fs.statSync(targetPath)
     if (!st.isFile() || st.size > 1 << 20) {
-      return invalid("config/tier-profile.json must be a regular file under 1MB")
+      return invalid("tier profile must be a regular file under 1MB")
     }
     raw = fs.readFileSync(targetPath, "utf-8")
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return baseMissing()
     }
-    return invalid("Failed to read config/tier-profile.json")
+    return invalid("Failed to read tier profile")
   }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return invalid("Invalid JSON in config/tier-profile.json")
+    return invalid("Invalid JSON in tier profile")
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return invalid("Root of config/tier-profile.json must be a JSON object")
+    return invalid("Root of tier profile must be a JSON object")
   }
 
   const doc = parsed as Record<string, unknown>
@@ -329,6 +402,8 @@ function inspectTierProfile(root: string): WorkspaceTierProfileStatus {
   }
 
   const summaries: TierSummaryItem[] = []
+  const roleBindings: TierRoleBindingItem[] = []
+  let fallbackSummary: TierFallbackSummary | undefined
   for (const [tierKey, tierVal] of tierEntries) {
     if (!tierVal || typeof tierVal !== "object" || Array.isArray(tierVal)) {
       return invalid(`tiers.${tierKey} must be an object`)
@@ -348,7 +423,7 @@ function inspectTierProfile(root: string): WorkspaceTierProfileStatus {
       if (!isValidTierToken(cand.cli)) {
         return invalid(`tiers.${tierKey}.candidates[${i}].cli is missing or contains an unreplaced placeholder`)
       }
-      if (!isValidTierToken(cand.model)) {
+      if (cand.model !== undefined && !isValidTierToken(cand.model)) {
         return invalid(`tiers.${tierKey}.candidates[${i}].model is missing or contains an unreplaced placeholder`)
       }
       if (cand.effort !== undefined && !isValidTierToken(cand.effort)) {
@@ -376,12 +451,86 @@ function inspectTierProfile(root: string): WorkspaceTierProfileStatus {
       }
     }
     const purpose = typeof tierRecord.purpose === "string" && tierRecord.purpose.trim() ? tierRecord.purpose.trim() : undefined
+    const summaryCandidates: TierCandidateSummary[] = candidates.map((value, index) => {
+      const cand = value as Record<string, unknown>
+      const id = isSafeNonSecretIdentifier(cand.id) ? cand.id : `candidate-${index + 1}`
+      const roles = Array.isArray(cand.roles) ? cand.roles.filter(isSafeNonSecretIdentifier) : []
+      return {
+        id,
+        cli: cand.cli as string,
+        ...(typeof cand.model === "string" ? { model: cand.model } : {}),
+        ...(typeof cand.effort === "string" ? { effort: cand.effort } : {}),
+        ...(typeof cand.weight === "number" && Number.isFinite(cand.weight) ? { weight: cand.weight } : {}),
+        ...(roles.length ? { roles } : {}),
+        ...(cand.default === true ? { isDefault: true } : { isDefault: false }),
+      }
+    })
     summaries.push({
       tier: tierKey,
       ...(purpose ? { purpose } : {}),
       candidateCount: candidates.length,
       clis,
+      ...(isValidTierToken(tierRecord.mode) ? { mode: tierRecord.mode } : {}),
+      ...(typeof tierRecord.max_parallel === "number" ? { maxParallel: tierRecord.max_parallel } : {}),
+      candidates: summaryCandidates,
     })
+    const summary = summaries[summaries.length - 1]
+    const hidden = { mode: summary.mode, maxParallel: summary.maxParallel, candidates: summary.candidates }
+    Object.defineProperties(summary, {
+      mode: { value: hidden.mode, enumerable: false, configurable: true },
+      maxParallel: { value: hidden.maxParallel, enumerable: false, configurable: true },
+      candidates: {
+        value: hidden.candidates,
+        enumerable: false,
+        configurable: true,
+      },
+      toJSON: {
+        value: () => ({ ...summary, ...hidden }),
+        enumerable: false,
+      },
+    })
+    if (tierKey === "3") {
+      const defaultCandidate = summaryCandidates.find((candidate) => candidate.isDefault) ?? summaryCandidates[0]
+      const steps = doc.worker_steps && typeof doc.worker_steps === "object" ? doc.worker_steps as Record<string, unknown> : {}
+      for (const role of Object.keys(steps)) {
+        const step = steps[role] && typeof steps[role] === "object" ? steps[role] as Record<string, unknown> : {}
+        const matched = summaryCandidates.find((candidate) => candidate.id === step.candidate || candidate.roles?.includes(role))
+        const chosen = matched ?? defaultCandidate
+        if (chosen) roleBindings.push({
+          role, tier: tierKey,
+          ...(matched ? { configuredCli: matched.cli, ...(matched.model ? { configuredModel: matched.model } : {}), ...(matched.effort ? { configuredEffort: matched.effort } : {}) } : {}),
+          effectiveCli: chosen.cli,
+          ...(chosen.model ? { effectiveModel: chosen.model } : {}),
+          ...(chosen.effort ? { effectiveEffort: chosen.effort } : {}),
+          fallbackActive: false,
+          source: matched ? "role-match" : "default",
+        })
+      }
+      const fallback = tierRecord.fallback
+      if (fallback && typeof fallback === "object" && !Array.isArray(fallback)) {
+        const f = fallback as Record<string, unknown>
+        const fallbackTo = isSafeNonSecretIdentifier(f.to) ? summaryCandidates.find((candidate) => candidate.id === f.to) : undefined
+        const marker = typeof opts?.fallbackMarkersDir === "string" && opts.fallbackMarkersDir
+          ? opts.fallbackMarkersDir
+          : typeof (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR === "string" && (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR
+            ? (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR!
+            : ".agents/state/tier3-fallback"
+        const active = fs.existsSync(path.resolve(root, marker))
+        if (active) for (const binding of roleBindings) {
+          binding.fallbackActive = true
+          binding.source = "fallback"
+          if (fallbackTo) {
+            binding.effectiveCli = fallbackTo.cli
+            binding.effectiveModel = fallbackTo.model
+            binding.effectiveEffort = fallbackTo.effort
+          }
+        }
+        const accounts = Array.isArray(f.accountNames) ? f.accountNames.filter(isSafeNonSecretIdentifier) : []
+        fallbackSummary = {
+          ...(isValidTierToken(f.when) ? { when: f.when } : {}), ...(isSafeNonSecretIdentifier(f.to) ? { to: f.to } : {}), accountNames: accounts,
+        }
+      }
+    }
   }
 
   let workerSteps: string[] = []
@@ -391,12 +540,16 @@ function inspectTierProfile(root: string): WorkspaceTierProfileStatus {
 
   return {
     status: "configured",
-    path: relPath,
+    path: sourcePath,
+    sourcePath,
+    sourceKind,
     examplePath: exampleRelPath,
     exampleExists,
     priority,
     workerSteps,
     tiers: summaries,
+    roleBindings,
+    ...(fallbackSummary ? { fallbackSummary } : {}),
   }
 }
 
@@ -666,11 +819,18 @@ export function inspectWorkspaceSettings(
   root: string,
   opts?: InspectWorkspaceSettingsOptions,
 ): WorkspaceSettingsSnapshot {
+  const tierProfile = inspectTierProfile(root, opts)
   return {
     runners: inspectRunners(root, opts),
-    tierProfile: inspectTierProfile(root),
+    workspaceDisplayName: safeDisplayName(root, opts),
+    roleBindings: tierProfile.roleBindings,
+    tierProfile,
     reviewModels: inspectReviewModels(root),
     llm: inspectLLMSettings(root, opts),
     configFiles: inspectConfigFiles(root),
   }
+}
+
+export function getWorkspaceDisplayName(root: string, opts?: InspectWorkspaceSettingsOptions): string {
+  return safeDisplayName(root, opts)
 }
