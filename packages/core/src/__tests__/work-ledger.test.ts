@@ -117,6 +117,7 @@ describe("work-ledger core loader", () => {
       done: 1,
       dropped: 0,
       overdue: 2,
+      processing: 0,
     })
 
     // Overdue active items sorted by earliest due first
@@ -176,5 +177,99 @@ describe("work-ledger core loader", () => {
     expect(formatDateInTimeZone("2026-11-18T16:00:00Z", "Asia/Seoul")).toBe("2026-11-19")
     expect(formatDateInTimeZone("2026-11-18T14:59:59Z", "Asia/Seoul")).toBe("2026-11-18")
     expect(buildDiscordMessageUrl(null, "123", "456")).toBeNull()
+  })
+
+  it("counts processing items (open with worker) and exposes publication.max_subagents", async () => {
+    const now = Date.parse("2026-11-18T06:00:00Z")
+    fs.mkdirSync(path.join(tempDir, "config"), { recursive: true })
+    fs.mkdirSync(path.join(tempDir, ".agents/work/ledger"), { recursive: true })
+    fs.writeFileSync(
+      path.join(tempDir, "config/work-ledger.json"),
+      JSON.stringify({
+        version: 1,
+        provider: { type: "discord", guild_id: "111" },
+        roles: [{ role: "alpha" }],
+      }),
+    )
+    fs.writeFileSync(
+      path.join(tempDir, ".agents/work/ledger/alpha.json"),
+      JSON.stringify({
+        version: 1,
+        role: "alpha",
+        publication: { max_subagents: 4 },
+        items: [
+          {
+            id: "p1",
+            title: "구동 중",
+            from: { channel: "c", msg_id: "1", quote: "" },
+            due: "2026-11-18T12:00:00Z",
+            status: "open",
+            worker: { name: "w1" },
+            checked_at: null,
+            note: "step 1",
+          },
+          {
+            id: "o1",
+            title: "대기 단위업무",
+            from: { channel: "c", msg_id: "2", quote: "" },
+            due: "2026-11-18T12:00:00Z",
+            status: "open",
+            worker: null,
+            checked_at: null,
+            note: "",
+          },
+          {
+            id: "d1",
+            title: "끝난 구동",
+            from: { channel: "c", msg_id: "3", quote: "" },
+            due: "2026-11-16T12:00:00Z",
+            status: "done",
+            worker: { name: "w9" },
+            checked_at: "2026-11-17T01:00:00Z",
+            note: "",
+          },
+        ],
+      }),
+    )
+    const res = await loadWorkLedgers(tempDir, { env: {}, now })
+    expect(res.summary.processing).toBe(1)
+    expect(res.maxSubagents).toBe(4)
+  })
+
+  it("ignores non-positive publication.max_subagents (null, no hardcoding)", async () => {
+    const now = Date.parse("2026-11-18T06:00:00Z")
+    fs.mkdirSync(path.join(tempDir, "config"), { recursive: true })
+    fs.mkdirSync(path.join(tempDir, ".agents/work/ledger"), { recursive: true })
+    fs.writeFileSync(
+      path.join(tempDir, "config/work-ledger.json"),
+      JSON.stringify({
+        version: 1,
+        provider: { type: "discord", guild_id: "111" },
+        roles: [{ role: "alpha" }],
+      }),
+    )
+    fs.writeFileSync(
+      path.join(tempDir, ".agents/work/ledger/alpha.json"),
+      JSON.stringify({
+        version: 1,
+        role: "alpha",
+        publication: { max_subagents: 0 },
+        items: [
+          {
+            id: "o1",
+            title: "대기 단위업무",
+            from: { channel: "c", msg_id: "1", quote: "" },
+            due: "2026-11-18T12:00:00Z",
+            status: "open",
+            worker: null,
+            checked_at: null,
+            note: "",
+          },
+        ],
+      }),
+    )
+    const res = await loadWorkLedgers(tempDir, { env: {}, now })
+    expect(res.summary.processing).toBe(0)
+    expect(res.maxSubagents).toBeNull()
   })
 })

@@ -42,6 +42,7 @@ export interface LedgerSummary {
   done: number
   dropped: number
   overdue: number
+  processing?: number
 }
 
 export interface LedgerPayload {
@@ -54,12 +55,13 @@ export interface LedgerPayload {
   roles: string[]
   summary: LedgerSummary
   filteredSummary: LedgerSummary
+  maxSubagents?: number | null
   items: LedgerCardItem[]
   warnings: string[]
 }
 
 export type WorkBoardTab = "summary" | "detail" | "archive"
-export type DetailStatusFilter = "todo" | "all" | LedgerStatus
+export type DetailStatusFilter = "todo" | "all" | LedgerStatus | "processing"
 
 export const WORK_BOARD_TABS: readonly { id: WorkBoardTab; label: string }[] = [
   { id: "summary", label: "요약" },
@@ -79,6 +81,7 @@ export const DETAIL_STATUS_FILTERS: readonly { id: DetailStatusFilter; label: st
   { id: "todo", label: "할 일(열림·대기)" },
   { id: "all", label: "전체" },
   { id: "open", label: "진행 중" },
+  { id: "processing", label: "서브에이전트 작업 중" },
   { id: "waiting_human", label: "사람 확인 대기" },
   { id: "escalated_human", label: "사람 올림" },
   { id: "done", label: "완료" },
@@ -103,12 +106,17 @@ export function ledgerStatusLabel(status: LedgerStatus, locale: Locale = "ko"): 
   return dict["work.statusDropped"]
 }
 
+export function isProcessingWorkerItem(item: Pick<LedgerCardItem, "status" | "workerName">): boolean {
+  return item.status === "open" && Boolean(item.workerName)
+}
+
 export function detailStatusFilters(locale: Locale = "ko"): readonly { id: DetailStatusFilter; label: string }[] {
   const dict = getDict(locale)
   return [
     { id: "todo", label: dict["work.filterTodo"] },
     { id: "all", label: dict["work.filterAll"] },
     { id: "open", label: dict["work.statusOpen"] },
+    { id: "processing", label: dict["work.processing"] },
     { id: "waiting_human", label: dict["work.statusWaiting"] },
     { id: "escalated_human", label: dict["work.statusEscalated"] },
     { id: "done", label: dict["work.statusDone"] },
@@ -172,6 +180,8 @@ export function filterLedgerCards(
     if (role && item.role !== role) return false
     if (statusFilter === "todo") {
       if (item.status !== "open" && item.status !== "waiting_human") return false
+    } else if (statusFilter === "processing") {
+      if (!isProcessingWorkerItem(item)) return false
     } else if (statusFilter !== "all" && item.status !== statusFilter) {
       return false
     }
@@ -193,6 +203,7 @@ export function splitSummaryColumns(
   openItems: LedgerCardItem[]
   waitingItems: LedgerCardItem[]
   recentDoneItems: LedgerCardItem[]
+  processingItems: LedgerCardItem[]
 } {
   const filtered = filterLedgerCards(items, {
     role: opts.role,
@@ -202,10 +213,11 @@ export function splitSummaryColumns(
     locale: opts.locale,
   })
   const limit = opts.recentDoneLimit ?? 20
-  const openItems = filtered.filter((i) => i.status === "open")
+  const processingItems = filtered.filter((i) => isProcessingWorkerItem(i))
+  const openItems = filtered.filter((i) => i.status === "open" && !isProcessingWorkerItem(i))
   const waitingItems = filtered.filter((i) => i.status === "waiting_human" || i.status === "escalated_human")
   const recentDoneItems = filtered.filter((i) => i.status === "done" || i.status === "dropped").slice(0, limit)
-  return { openItems, waitingItems, recentDoneItems }
+  return { openItems, waitingItems, recentDoneItems, processingItems }
 }
 
 export interface RoleBucketSummary {

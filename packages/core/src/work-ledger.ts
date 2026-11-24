@@ -67,6 +67,7 @@ export interface WorkLedgerSummary {
   done: number
   dropped: number
   overdue: number
+  processing: number
 }
 
 export interface LoadedWorkLedgers {
@@ -78,6 +79,7 @@ export interface LoadedWorkLedgers {
   roles: string[]
   items: WorkLedgerNormalizedItem[]
   summary: WorkLedgerSummary
+  maxSubagents: number | null
   warnings: string[]
 }
 
@@ -170,6 +172,16 @@ export function sortWorkLedgerItems(items: WorkLedgerNormalizedItem[]): WorkLedg
   })
 }
 
+export function isProcessingWorkLedgerItem(item: Pick<WorkLedgerNormalizedItem, "status" | "workerName">): boolean {
+  return item.status === "open" && Boolean(item.workerName)
+}
+
+export function parseMaxSubagents(value: unknown): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const raw = (value as Record<string, unknown>).max_subagents
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : null
+}
+
 export function summarizeWorkLedgerItems(items: WorkLedgerNormalizedItem[]): WorkLedgerSummary {
   const summary: WorkLedgerSummary = {
     total: items.length,
@@ -180,6 +192,7 @@ export function summarizeWorkLedgerItems(items: WorkLedgerNormalizedItem[]): Wor
     done: 0,
     dropped: 0,
     overdue: 0,
+    processing: 0,
   }
   for (const item of items) {
     if (item.status === "open") summary.open++
@@ -187,6 +200,7 @@ export function summarizeWorkLedgerItems(items: WorkLedgerNormalizedItem[]): Wor
     else if (item.status === "escalated_human") summary.escalated_human++
     else if (item.status === "done") summary.done++
     else if (item.status === "dropped") summary.dropped++
+    if (isProcessingWorkLedgerItem(item)) summary.processing++
     if (item.isTodo) summary.todoCount++
     if (item.overdue) summary.overdue++
   }
@@ -318,6 +332,7 @@ export async function loadWorkLedgers(
       roles: [],
       items: [],
       summary: emptySummary,
+      maxSubagents: null,
       warnings: [],
     }
   }
@@ -332,6 +347,7 @@ export async function loadWorkLedgers(
       roles: [],
       items: [],
       summary: emptySummary,
+      maxSubagents: null,
       warnings: [location.error || "work ledger configuration unavailable"],
     }
   }
@@ -374,6 +390,7 @@ export async function loadWorkLedgers(
   }
 
   const items: WorkLedgerNormalizedItem[] = []
+  let maxSubagents: number | null = null
   const roles = [...roleSet].sort((a, b) => a.localeCompare(b, "ko"))
 
   for (const role of roles) {
@@ -393,10 +410,15 @@ export async function loadWorkLedgers(
         version?: unknown
         role?: unknown
         items?: unknown
+        publication?: unknown
       }
       if (!parsed || parsed.version !== 1 || parsed.role !== role || !Array.isArray(parsed.items)) {
         warnings.push(`${role}: invalid ledger schema`)
         continue
+      }
+      const roleCap = parseMaxSubagents(parsed.publication)
+      if (roleCap !== null) {
+        maxSubagents = maxSubagents === null ? roleCap : Math.max(maxSubagents, roleCap)
       }
       const rc = roleConfigMap.get(role)
       const guildId = resolveRoleGuildId(rc, location.config, location.guildId)
@@ -427,6 +449,7 @@ export async function loadWorkLedgers(
     roles,
     items: sorted,
     summary: summarizeWorkLedgerItems(sorted),
+    maxSubagents,
     warnings,
   }
 }

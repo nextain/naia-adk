@@ -64,6 +64,7 @@ export interface LedgerApiResponse {
   roles: string[]
   summary: WorkLedgerSummary
   filteredSummary: WorkLedgerSummary
+  maxSubagents: number | null
   dates?: LedgerDueDateBucket[]
   items: PublicWorkLedgerItem[]
   warnings: string[]
@@ -339,7 +340,14 @@ function toPublicItem(
   }
 }
 
-function parseStatusFilter(rawStatus: string | undefined): Set<WorkLedgerStatus> | null {
+export function isProcessingPortalItem(item: Pick<PublicWorkLedgerItem, "status" | "workerName">): boolean {
+  return item.status === "open" && Boolean(item.workerName)
+}
+
+function parseStatusFilter(rawStatus: string | undefined): {
+  statuses: Set<WorkLedgerStatus>
+  includeProcessing: boolean
+} | null {
   if (!rawStatus || rawStatus.trim() === "" || rawStatus.trim() === "all") return null
   const tokens = rawStatus
     .split(",")
@@ -347,10 +355,13 @@ function parseStatusFilter(rawStatus: string | undefined): Set<WorkLedgerStatus>
     .filter(Boolean)
   if (tokens.length === 0 || tokens.includes("all")) return null
   const allowed = new Set<WorkLedgerStatus>()
+  let includeProcessing = false
   for (const t of tokens) {
     if (t === "todo") {
       allowed.add("open")
       allowed.add("waiting_human")
+    } else if (t === "processing") {
+      includeProcessing = true
     } else if (
       t === "open"
       || t === "waiting_human"
@@ -361,7 +372,8 @@ function parseStatusFilter(rawStatus: string | undefined): Set<WorkLedgerStatus>
       allowed.add(t)
     }
   }
-  return allowed.size > 0 ? allowed : null
+  if (allowed.size === 0 && !includeProcessing) return null
+  return { statuses: allowed, includeProcessing }
 }
 
 function buildDueBuckets(items: PublicWorkLedgerItem[]): LedgerDueDateBucket[] {
@@ -412,6 +424,7 @@ export async function queryPortalWorkLedger(
       roles: [],
       summary: loaded.summary,
       filteredSummary: loaded.summary,
+      maxSubagents: loaded.maxSubagents,
       ...(view === "due" ? { dates: [] } : {}),
       items: [],
       warnings: [],
@@ -443,7 +456,7 @@ export async function queryPortalWorkLedger(
   })
 
   const roleFilter = typeof q.role === "string" && q.role.trim() ? q.role.trim() : null
-  const statusFilter = parseStatusFilter(q.status)
+  const statusCriterion = parseStatusFilter(q.status)
   const overdueOnly = q.overdue === "1" || q.overdue === "true"
   const docSourceFilter = typeof q.source === "string" && q.source.trim() ? q.source.trim() : null
   const docPathFilter = typeof q.path === "string" && q.path.trim() ? normalizeDocRelPath(q.path.trim()) : null
@@ -451,7 +464,11 @@ export async function queryPortalWorkLedger(
 
   const filteredItems = allPublicItems.filter((item) => {
     if (roleFilter && item.role !== roleFilter) return false
-    if (statusFilter && !statusFilter.has(item.status)) return false
+    if (statusCriterion) {
+      const matchesStatus = statusCriterion.statuses.size > 0 && statusCriterion.statuses.has(item.status)
+      const matchesProcessing = statusCriterion.includeProcessing && isProcessingPortalItem(item)
+      if (!matchesStatus && !matchesProcessing) return false
+    }
     if (!includeClosed && (item.status === "done" || item.status === "dropped")) return false
     if (overdueOnly && !item.overdue) return false
     if (docSourceFilter && docPathFilter) {
@@ -475,6 +492,7 @@ export async function queryPortalWorkLedger(
     done: filteredItems.filter((i) => i.status === "done").length,
     dropped: filteredItems.filter((i) => i.status === "dropped").length,
     overdue: filteredItems.filter((i) => i.overdue).length,
+    processing: filteredItems.filter((i) => isProcessingPortalItem(i)).length,
   }
 
   return {
@@ -487,6 +505,7 @@ export async function queryPortalWorkLedger(
     roles: loaded.roles,
     summary: loaded.summary,
     filteredSummary,
+    maxSubagents: loaded.maxSubagents,
     ...(view === "due" ? { dates: buildDueBuckets(filteredItems) } : {}),
     items: filteredItems,
     warnings: loaded.warnings,

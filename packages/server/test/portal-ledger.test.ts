@@ -55,6 +55,7 @@ describe("Portal work-ledger routes (/api/portal/ledger)", () => {
         version: 1,
         role: "minho",
         report: { every_min: 60, channel: "100", last_msg_id: null, last_at: null },
+        publication: { max_subagents: 3 },
         items: [
           {
             id: "m-overdue",
@@ -240,6 +241,20 @@ describe("Portal work-ledger routes (/api/portal/ledger)", () => {
     })
     const dataDocBody = JSON.parse(dataDocRes.payload)
     expect(dataDocBody.items.map((i: any) => i.id)).toEqual(["j-data-res"])
+  })
+
+  it("supports status=processing filter and exposes maxSubagents + summary.processing", async () => {
+    const res = await appConfigured.inject({
+      method: "GET",
+      url: "/api/portal/ledger?status=processing",
+      headers: TRUSTED_HEADERS,
+    })
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.payload)
+    expect(body.maxSubagents).toBe(3)
+    expect(body.summary.processing).toBe(2)
+    expect(body.filteredSummary.processing).toBe(2)
+    expect(body.items.map((i: any) => i.id).sort()).toEqual(["j-data-res", "m-overdue"])
   })
 
   it("serves GET /api/portal/ledger?view=due grouped by Asia/Seoul due date", async () => {
