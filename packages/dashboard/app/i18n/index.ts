@@ -162,7 +162,7 @@ export function formatMessage(template: string, vars?: Record<string, string | n
 
 /** Tiny pre-paint inline script syncing `documentElement.lang` (mirrors `buildThemeInitScript`). */
 export function buildLocaleInitScript(): string {
-  return `(function(){try{var l=null;try{var m=document.cookie.match(/(?:^|;\\s*)${LOCALE_COOKIE}=([^;]*)/);if(m)l=decodeURIComponent(m[1]);}catch(_){}try{if(!l)l=localStorage.getItem("${LOCALE_STORAGE_KEY}");}catch(_){}l=(l==="en"||l==="ko")?l:"ko";document.documentElement.setAttribute("lang",l);}catch(_){}})();`
+  return `(function(){try{var p=function(v){if(typeof v!=="string")return null;var c=v.trim().toLowerCase();if(c==="en"||c.indexOf("en-")===0)return "en";if(c==="ko"||c.indexOf("ko-")===0)return "ko";return null;};var l=null;try{if(typeof location!=="undefined"&&typeof location.search==="string"){var q=location.search.match(/(?:^|[?&])lang=([^&#]*)/);if(q)l=p(decodeURIComponent(q[1].replace(/\\+/g," ")));}}catch(_){}try{if(!l){var m=document.cookie.match(/(?:^|;\\s*)${LOCALE_COOKIE}=([^;]*)/);if(m)l=p(decodeURIComponent(m[1]));}}catch(_){}try{if(!l)l=p(localStorage.getItem("${LOCALE_STORAGE_KEY}"));}catch(_){}l=l||"ko";document.documentElement.setAttribute("lang",l);}catch(_){}})();`
 }
 
 export function serializeLocaleCookie(locale: Locale): string {
