@@ -31,7 +31,11 @@ function writeDoc(root) {
             { id: "primary", cli: "runner-a", model: "model-primary", effort: "high", weight: 2, roles: ["implementation"] },
             { id: "default", cli: "runner-b", model: "model-default", default: true },
           ],
-          fallback: { when: "unavailable", to: "default", accountNames: ["backup-account"] },
+          fallback: {
+            when: "unavailable", to: "default", accounts: [{ name: "backup-account", home: "/private/home" }],
+            quota_policy: { min_remaining_pct: 20, switch_threshold_pct: 10, recovery_check_interval_sec: 60 },
+            recovery: { accept_any_of: ["quota-restored"] },
+          },
         },
       },
     }),
@@ -69,6 +73,8 @@ describe("tier-profile-show focused visibility", () => {
         when: "unavailable",
         to: "default",
         accountNames: ["backup-account"],
+        quotaPolicy: { minRemainingPct: 20, switchThresholdPct: 10, recoveryCheckIntervalSec: 60 },
+        recoverySignals: ["quota-restored"],
       })
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
