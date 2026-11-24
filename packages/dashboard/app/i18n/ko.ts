@@ -391,7 +391,7 @@ export const ko = {
   "sched.dueUnset": "기한 미정",
   "sched.ddayOver": "D-Day (기한 경과)",
   "sched.ddayToday": "D-Day (오늘 마감)",
-  "sched.ongoingToday": "~ 진행 중(오늘까지)",
+  "sched.ongoingToday": "진행 중(오늘까지)",
   "sched.subtasksDone": "세부 작업 {done}개 중 {total}개 완료",
   "sched.openDoc": "문서 열기",
   "sched.layerLedger": "업무 장부",

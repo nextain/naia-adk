@@ -38,7 +38,7 @@ function formatEventPeriodLabel(ev: CalendarCellEvent, locale: Locale = "ko"): s
     const start = ev.workItem.startDate ?? ev.startDate
     const end = ev.workItem.endDate ?? ev.endDate
     if (ev.workItem.openEnded) {
-      return `${start} ~${t("sched.ongoingToday")}`
+      return `${start} ~ ${t("sched.ongoingToday")}`
     }
     return start === end ? start : `${start} ~ ${end}`
   }
