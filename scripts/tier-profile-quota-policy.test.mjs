@@ -19,8 +19,8 @@ function writeProfile(value) {
 describe("tier 3 fallback quota policy", () => {
   it("returns safe accounts, quota thresholds, interval, and recovery signals", () => {
     const { dir, file } = writeProfile(profile({
-      accounts: [{ name: "primary", home: "/private/home" }, "backup", { name: "<ACCOUNT_1>" }, { name: "sk-secret" }],
-      accountNames: ["backup", "third", "backup"],
+      accounts: [{ name: "primary", home: "/private/home" }, "backup", { name: "<ACCOUNT_1>" }, { name: "sk-secret" }, 42, ["nested"]],
+      accountNames: ["backup", "third", "backup", "<ACCOUNT_2>", 42],
       quota_policy: { min_remaining_pct: 20, switch_threshold_pct: 10, recovery_check_interval_sec: 60 },
       recovery: { accept_any_of: ["quota-restored", "manual"] },
     }))
