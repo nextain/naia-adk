@@ -1,7 +1,7 @@
 import React from "react"
 import type { Metadata } from "next"
 import { loadWorkspaceSettingsSnapshot } from "../settings-data.ts"
-import { getWorkspaceDisplayName, resolveAdkWorkspaceRoot } from "@naia-adk/core"
+import { getWorkspaceDisplayName, resolveAdkWorkspaceRoot } from "@naia-adk/core/src/workspace-settings"
 import { LLMSettingsView } from "./llm-settings-view.tsx"
 import { getRequestLocale } from "../../i18n/server"
 

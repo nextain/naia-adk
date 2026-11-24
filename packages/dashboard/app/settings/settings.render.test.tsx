@@ -66,6 +66,8 @@ const configuredSnapshot: WorkspaceSettingsSnapshot = {
   tierProfile: {
     status: "configured",
     path: "config/tier-profile.json",
+    sourcePath: "config/tier-profile.json",
+    sourceKind: "workspace-default",
     examplePath: "config/tier-profile.example.json",
     exampleExists: true,
     priority: ["agy", "muse"],
@@ -185,6 +187,8 @@ describe("SettingsView and LLMSettingsView render", () => {
       tierProfile: {
         status: "missing",
         path: "config/tier-profile.json",
+        sourcePath: "config/tier-profile.json",
+        sourceKind: "workspace-default",
         examplePath: "config/tier-profile.example.json",
         exampleExists: true,
         priority: [],

@@ -8,7 +8,7 @@ import { buildLocaleInitScript } from "./i18n/index.ts"
 import { getRequestLocale } from "./i18n/server"
 import { I18nProvider } from "./i18n/provider.tsx"
 import type { Locale } from "./i18n/types.ts"
-import { getWorkspaceDisplayName, resolveAdkWorkspaceRoot } from "@naia-adk/core"
+import { getWorkspaceDisplayName, resolveAdkWorkspaceRoot } from "@naia-adk/core/src/workspace-settings"
 
 export async function generateMetadata(): Promise<Metadata> {
   const name = getWorkspaceDisplayName(resolveAdkWorkspaceRoot(process.cwd()))
