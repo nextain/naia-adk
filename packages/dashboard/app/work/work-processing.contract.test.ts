@@ -10,7 +10,7 @@ describe("processing board render contract", () => {
     assert.match(workBoardSource, /data-testid=\"work-processing-section\"/)
     assert.match(workBoardSource, /summaryColumns\.processingItems\.length === 0/)
     assert.match(workBoardSource, /summaryColumns\.processingItems\.map\(/)
-    assert.match(workBoardSource, /data-testid=\{`work-processing-card-\$\{item\.id\}`\}/)
+    assert.match(workBoardSource, /summaryColumns\.processingItems\.map\(\(item\) => <LedgerCard/)
     assert.match(workBoardSource, /maxSubagents !== null \? `/)
   })
 
