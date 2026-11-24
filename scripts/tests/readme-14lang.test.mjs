@@ -57,19 +57,14 @@ for (const { file, label } of READMES) {
         `${file} language bar is missing link to ${target.file}`,
       );
     }
-    // All 14 file names appear in the bar (self as text context, others as links).
+    // All 14 languages are represented in the bar: self as a bold label,
+    // the other 13 as relative-file links.
     for (const target of READMES) {
-      if (target.file === 'README.md') {
-        assert.ok(
-          bar.includes('README.md'),
-          `${file} language bar is missing README.md`,
-        );
-      } else {
-        assert.ok(
-          bar.includes(target.file),
-          `${file} language bar is missing ${target.file}`,
-        );
-      }
+      if (target.file === file) continue;
+      assert.ok(
+        bar.includes(target.file),
+        `${file} language bar is missing ${target.file}`,
+      );
     }
   });
 
