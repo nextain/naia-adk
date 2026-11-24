@@ -367,7 +367,7 @@ describe("업무 장부(work-ledger) → 통합 일정(/schedule) 투영 및 딥
     }
   })
 
-  it("⑤ Nav/NavTabs: hasBoard=false, hasLedger=true, todoBadgeCount=4에서 5개 탭과 활성 작업 링크, 할 일 4 배지를 표시한다", () => {
+  it("⑤ Nav/NavTabs: hasBoard=false, hasLedger=true, todoBadgeCount를 넘겨도 배지는 숨기고 작업 링크는 연다", () => {
     const html = renderToStaticMarkup(
       React.createElement(Nav, {
         initialTheme: "dark",
@@ -386,8 +386,8 @@ describe("업무 장부(work-ledger) → 통합 일정(/schedule) 투영 및 딥
     assert.ok(workTabMatch, "작업 탭은 span이 아니라 활성 <a> 링크여야 한다")
     assert.ok(workTabMatch[0].includes('href="/work"'))
 
-    assert.ok(html.includes('data-testid="nav-todo-badge"'))
-    assert.ok(html.includes(">할 일 4<"))
+    assert.equal(html.includes('data-testid="nav-todo-badge"'), false)
+    assert.equal(html.includes(">할 일 4<"), false)
 
     // hasBoard=false, hasLedger=false 일 때는 작업 탭이 비활성 span 이어야 한다
     const disabledHtml = renderToStaticMarkup(

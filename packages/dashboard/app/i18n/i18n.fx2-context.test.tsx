@@ -457,12 +457,14 @@ describe("fx2 finding H1/H2/S1: Context isolation and reactive subscriptions", (
       </I18nProvider>,
     )
     assert.ok(koHtml.includes(">문서<"))
+    assert.equal(koHtml.includes('data-testid="nav-todo-badge"'), false)
 
     releaseEn()
     const enStream = await enStreamPromise
     const enHtml = await new Response(enStream).text()
 
     assert.ok(enHtml.includes(">Docs<"), "en stream Nav must stay English after concurrent ko render")
+    assert.equal(enHtml.includes('data-testid="nav-todo-badge"'), false)
     assert.ok(enHtml.includes("Work board"), "en stream WorkBoard must stay English")
     assert.ok(enHtml.includes("Task summary"), "en stream HomeTodoSummary must stay English")
     assert.ok(enHtml.includes("2026-11"), "en stream ScheduleView must stay English")

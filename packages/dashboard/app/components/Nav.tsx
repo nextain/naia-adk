@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation"
 import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
 import { observeAxMessengerStatus } from "./ax-messenger-status.mjs"
 import { useI18n, useOptionalLocale } from "../i18n/provider.tsx"
-import { formatMessage, tFor } from "../i18n/index.ts"
+import { tFor } from "../i18n/index.ts"
 import type { Locale } from "../i18n/types.ts"
 import {
   DEFAULT_FONT_SIZE_STEP,
@@ -37,6 +37,7 @@ export interface NavProps {
   hasLedger?: boolean | null
   hasMessenger?: boolean | null
   hasAxMessenger?: boolean | null
+  /** @deprecated The navigation no longer displays ledger todo counts. */
   todoBadgeCount?: number | null
   workspaceDisplayName?: string
 }
@@ -148,7 +149,6 @@ export function Nav({
   hasLedger: hasLedgerProp,
   hasMessenger: hasMessengerProp,
   hasAxMessenger: hasAxMessengerProp,
-  todoBadgeCount: todoBadgeCountProp,
   locale: localeProp,
   workspaceDisplayName = "Naia ADK",
 }: NavProps & { locale?: Locale } = {}) {
@@ -160,7 +160,6 @@ export function Nav({
   const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
   const [fetchedHasMessenger, setFetchedHasMessenger] = useState<boolean | null>(null)
   const [fetchedHasAxMessenger, setFetchedHasAxMessenger] = useState(false)
-  const [fetchedTodoCount, setFetchedTodoCount] = useState<number | null>(null)
   const [themePref, setThemePref] = useState<ThemePreference>(initialTheme)
   const [fontSize, setFontSize] = useState<FontSizeStep>(initialFontSize)
 
@@ -168,7 +167,6 @@ export function Nav({
   const hasLedger = hasLedgerProp !== undefined ? hasLedgerProp : fetchedHasLedger
   const hasMessenger = hasMessengerProp !== undefined ? hasMessengerProp : fetchedHasMessenger
   const hasAxMessenger = hasAxMessengerProp !== undefined ? hasAxMessengerProp : fetchedHasAxMessenger
-  const todoCount = todoBadgeCountProp !== undefined ? todoBadgeCountProp : fetchedTodoCount
 
   useEffect(() => {
     if (hasBoardProp !== undefined && hasMessengerProp !== undefined) return
@@ -197,23 +195,16 @@ export function Nav({
   }, [hasAxMessengerProp])
 
   useEffect(() => {
-    if (todoBadgeCountProp !== undefined && hasLedgerProp !== undefined) return
+    if (hasLedgerProp !== undefined) return
     fetch("/api/portal/ledger?status=todo", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { configured?: boolean; summary?: { todoCount?: number } } | null) => {
-        if (data?.configured) {
-          setFetchedHasLedger(true)
-          setFetchedTodoCount(typeof data.summary?.todoCount === "number" ? data.summary.todoCount : 0)
-        } else {
-          setFetchedHasLedger(false)
-          setFetchedTodoCount(null)
-        }
+      .then((data: { configured?: boolean } | null) => {
+        setFetchedHasLedger(Boolean(data?.configured))
       })
       .catch(() => {
         setFetchedHasLedger(false)
-        setFetchedTodoCount(null)
       })
-  }, [todoBadgeCountProp, hasLedgerProp])
+  }, [hasLedgerProp])
 
   useEffect(() => {
     const storedTheme = readThemePreference()
@@ -276,16 +267,6 @@ export function Nav({
       <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={localeProp} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
-        {typeof todoCount === "number" && (
-          <Link
-            href="/work"
-            data-testid="nav-todo-badge"
-            title={t("nav.todoBadgeTitle")}
-            className="px-2 sm:px-2.5 py-1 rounded-full border border-blue-800/70 bg-blue-950/60 text-blue-300 hover:bg-blue-900/60 text-[11px] sm:text-xs font-medium whitespace-nowrap transition-colors"
-          >
-            {formatMessage(t("nav.todoBadge"), { count: todoCount })}
-          </Link>
-        )}
         {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
         <div className="hidden xl:flex items-center gap-1">
           <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">{t("nav.devTools")}</span>
