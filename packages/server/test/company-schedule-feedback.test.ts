@@ -14,6 +14,8 @@ import {
   listScheduleComments,
   readScheduleComment,
   readScheduleOverrides,
+  saveScheduleComment,
+  saveScheduleOverrides,
   validateScheduleCommentBody,
   type ScheduleComment,
 } from "../src/company-schedule-feedback.js"
@@ -402,6 +404,99 @@ describe("FT-schedule-comments: 회사 일정 댓글 저장소", () => {
           NAIA_SCHEDULE_OVERRIDES_FILE: linkPath,
         })
         expect(data.overrides).toEqual({})
+      } finally {
+        fs.rmSync(linkRoot, { recursive: true, force: true })
+        fs.rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it("존재하지 않는 일정의 PATCH·DELETE는 상태나 피드백을 만들지 않는다", async () => {
+      const unknownId = "company:md:not-found"
+      const patch = await app.inject({
+        method: "PATCH",
+        url: `/api/portal/schedule/company/${encodeURIComponent(unknownId)}`,
+        headers: { ...TRUSTED_HEADERS, "content-type": "application/json" },
+        payload: JSON.stringify({ title: "유령 일정" }),
+      })
+      expect(patch.statusCode).toBe(404)
+      const remove = await app.inject({
+        method: "DELETE",
+        url: `/api/portal/schedule/company/${encodeURIComponent(unknownId)}`,
+        headers: TRUSTED_HEADERS,
+      })
+      expect(remove.statusCode).toBe(404)
+      expect(readScheduleOverrides(root, process.env).overrides[unknownId]).toBeUndefined()
+      expect(listScheduleComments(root, unknownId, process.env)).toEqual([])
+    })
+
+    it("단일 날짜 수정도 기존 날짜와 결합해 역전되면 400이다", async () => {
+      const liveId = findItemId(root, "댓글 대상 일정")
+      const badStart = await app.inject({
+        method: "PATCH",
+        url: `/api/portal/schedule/company/${encodeURIComponent(liveId)}`,
+        headers: { ...TRUSTED_HEADERS, "content-type": "application/json" },
+        payload: JSON.stringify({ startDate: "2026-12-01" }),
+      })
+      expect(badStart.statusCode).toBe(400)
+      const badEnd = await app.inject({
+        method: "PATCH",
+        url: `/api/portal/schedule/company/${encodeURIComponent(liveId)}`,
+        headers: { ...TRUSTED_HEADERS, "content-type": "application/json" },
+        payload: JSON.stringify({ endDate: "2026-11-01" }),
+      })
+      expect(badEnd.statusCode).toBe(400)
+    })
+
+    it("피드백 저장 실패 시 PATCH·DELETE 오버레이를 남기지 않는다", async () => {
+      const liveId = findItemId(root, "댓글 대상 일정")
+      const commentsBlocker = path.join(stateDir, "comments-blocker")
+      fs.writeFileSync(commentsBlocker, "not a directory")
+      process.env.NAIA_SCHEDULE_COMMENTS_DIR = commentsBlocker
+      try {
+        const patch = await app.inject({
+          method: "PATCH",
+          url: `/api/portal/schedule/company/${encodeURIComponent(liveId)}`,
+          headers: { ...TRUSTED_HEADERS, "content-type": "application/json" },
+          payload: JSON.stringify({ title: "피드백 실패 고침" }),
+        })
+        expect(patch.statusCode).toBe(500)
+        expect(readScheduleOverrides(root, process.env).overrides[liveId]).toBeUndefined()
+        const remove = await app.inject({
+          method: "DELETE",
+          url: `/api/portal/schedule/company/${encodeURIComponent(liveId)}`,
+          headers: TRUSTED_HEADERS,
+        })
+        expect(remove.statusCode).toBe(500)
+        expect(readScheduleOverrides(root, process.env).overrides[liveId]).toBeUndefined()
+      } finally {
+        process.env.NAIA_SCHEDULE_COMMENTS_DIR = path.join(stateDir, "comments")
+        fs.rmSync(commentsBlocker, { force: true })
+      }
+    })
+
+    it("상태 디렉터리 심볼릭 링크를 통해 쓰지 않는다", () => {
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "adk-sched-write-outside-"))
+      const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "adk-sched-write-link-"))
+      const commentLink = path.join(linkRoot, "comments")
+      const overrideLink = path.join(linkRoot, "overrides")
+      fs.symlinkSync(outside, commentLink, "dir")
+      fs.symlinkSync(outside, overrideLink, "dir")
+      const comment: ScheduleComment = {
+        schemaVersion: 1,
+        id: generateScheduleCommentId(new Date("2026-11-24T12:00:00Z")),
+        scheduleId: targetId,
+        scheduleTitle: "x",
+        targetRole: null,
+        sourceDocPath: null,
+        author: "portal",
+        action: "comment",
+        body: "x",
+        createdAt: new Date().toISOString(),
+      }
+      try {
+        expect(() => saveScheduleComment(linkRoot, comment, { NAIA_SCHEDULE_COMMENTS_DIR: commentLink })).toThrow()
+        expect(() => saveScheduleOverrides(linkRoot, { schemaVersion: 1, overrides: {} }, { NAIA_SCHEDULE_OVERRIDES_FILE: path.join(overrideLink, "state.json") })).toThrow()
+        expect(fs.readdirSync(outside)).toEqual([])
       } finally {
         fs.rmSync(linkRoot, { recursive: true, force: true })
         fs.rmSync(outside, { recursive: true, force: true })
