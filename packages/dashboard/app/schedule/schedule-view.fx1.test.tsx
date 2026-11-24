@@ -47,7 +47,9 @@ describe("fx1 finding 3: ScheduleView follows the active locale", () => {
     )
     assert.equal(periodTitleOf(html), "2026-11")
     assert.equal(HANGUL.test(periodTitleOf(html)), false)
-    assert.ok(html.includes("Due (0/1)"), "milestone timeLabel must be English in en")
+    assert.ok(html.includes("Done 0/1"), "milestone event subtitle must be English in en")
+    assert.ok(html.includes("Due 2026-11-18"), "milestone list due label must be English in en")
+    assert.equal(HANGUL.test(html), false, "en ScheduleView must not render Korean")
   })
 
   it("ko renders the Korean period title and Korean milestone labels", () => {
@@ -57,6 +59,7 @@ describe("fx1 finding 3: ScheduleView follows the active locale", () => {
       </I18nProvider>,
     )
     assert.equal(periodTitleOf(html), "2026년 11월")
-    assert.ok(html.includes("기한 (0/1)"), "milestone timeLabel must be Korean in ko")
+    assert.ok(html.includes("완료 0/1"), "milestone event subtitle must be Korean in ko")
+    assert.ok(html.includes("마감 2026-11-18"), "milestone list due label must be Korean in ko")
   })
 })
