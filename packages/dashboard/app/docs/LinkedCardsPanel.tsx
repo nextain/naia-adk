@@ -15,24 +15,26 @@ import { useLocale, useT } from "../i18n/provider.tsx"
 export function LinkedCardsPanel({
   cards,
   nowMs,
+  hideWhenEmpty = true,
 }: {
   cards: LedgerCardItem[]
   nowMs?: number
+  hideWhenEmpty?: boolean
 }) {
   const locale = useLocale()
   const t = useT()
-  if (!cards || cards.length === 0) return null
+  if ((!cards || cards.length === 0) && hideWhenEmpty) return null
 
   return (
     <section
       data-testid="doc-linked-cards"
-      aria-label={t("docs.linkedCards")}
+      aria-label={t("docs.linkedCardsStatus")}
       className="rounded-lg border border-blue-900/60 bg-blue-950/20 p-4 space-y-3"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-sm font-semibold text-white">
           <Briefcase className="w-4 h-4 text-blue-300 shrink-0" />
-          <span>{t("docs.linkedCards")}</span>
+          <span>{t("docs.linkedCardsStatus")}</span>
           <span className="rounded-full bg-blue-900/60 px-2 py-0.5 text-xs text-blue-200">
             {cards.length}
           </span>
@@ -45,7 +47,9 @@ export function LinkedCardsPanel({
         </Link>
       </div>
 
-      <ul className="space-y-2.5">
+      {cards.length === 0 ? (
+        <p className="text-xs text-neutral-400">{t("docs.noLinkedCards")}</p>
+      ) : <ul className="space-y-2.5">
         {cards.map((card) => (
           <li
             key={`${card.role}:${card.id}`}
@@ -99,7 +103,7 @@ export function LinkedCardsPanel({
             </div>
           </li>
         ))}
-      </ul>
+      </ul>}
     </section>
   )
 }
