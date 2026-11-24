@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  detailStatusFilters,
   filterLedgerCards,
   formatDueLabel,
+  isProcessingWorkerItem,
   isSafeHttpUrl,
   normalizeWorkTab,
   sortLedgerCards,
@@ -69,6 +71,30 @@ describe("work-ledger-view pure helpers", () => {
       { role: "jina", total: 2, todoCount: 1, overdueCount: 0 },
       { role: "minho", total: 1, todoCount: 1, overdueCount: 1 },
     ])
+  })
+
+  it("separates processing worker items from unit-task open items", () => {
+    const running = { ...card({ id: "run-1", status: "open" }), workerName: "w1", note: "현재 단계" }
+    const queued = card({ id: "open-1", status: "open" })
+    const doneWorker = { ...card({ id: "done-1", status: "done", isTodo: false }), workerName: "w9" }
+
+    assert.equal(isProcessingWorkerItem(running), true)
+    assert.equal(isProcessingWorkerItem(queued), false)
+    assert.equal(isProcessingWorkerItem(doneWorker), false)
+
+    const cols = splitSummaryColumns([running, queued, doneWorker], {})
+    assert.deepEqual(cols.processingItems.map((i) => i.id), ["run-1"])
+    assert.deepEqual(cols.openItems.map((i) => i.id), ["open-1"])
+
+    assert.deepEqual(
+      filterLedgerCards([running, queued, doneWorker], { statusFilter: "processing" }).map((i) => i.id),
+      ["run-1"],
+    )
+
+    const koFilters = detailStatusFilters("ko")
+    assert.ok(koFilters.some((f) => f.id === "processing" && f.label === "서브에이전트 작업 중"))
+    const enFilters = detailStatusFilters("en")
+    assert.ok(enFilters.some((f) => f.id === "processing" && f.label === "Agent Processing"))
   })
 
   it("formats due labels and validates URLs and tabs safely", () => {
