@@ -36,6 +36,23 @@ import {
   parseStatesQueryParam,
   readCompanySchedules,
 } from "../company-schedule.js"
+import {
+  deleteScheduleComment,
+  generateScheduleCommentId,
+  getScheduleCommentFilePath,
+  getScheduleOverridesFilePath,
+  inferTargetRole,
+  isValidScheduleCommentId,
+  isValidScheduleItemId,
+  listScheduleComments,
+  readScheduleComment,
+  readScheduleOverrides,
+  saveScheduleComment,
+  saveScheduleOverrides,
+  validateScheduleCommentBody,
+  validateScheduleOverridePatch,
+  type ScheduleComment,
+} from "../company-schedule-feedback.js"
 
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
@@ -1191,6 +1208,245 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     })
 
     return reply.send(result)
+  })
+
+  function buildScheduleFeedback(
+    scheduleId: string,
+    action: "comment" | "edit" | "delete",
+    input: { body: string; scheduleTitle?: unknown; targetRole?: unknown; sourceDocPath?: unknown },
+  ): ScheduleComment {
+    const now = new Date().toISOString()
+    const scheduleTitle =
+      typeof input.scheduleTitle === "string" ? input.scheduleTitle.slice(0, 500) : ""
+    const sourceDocPath =
+      typeof input.sourceDocPath === "string" && input.sourceDocPath.trim()
+        ? input.sourceDocPath.trim().slice(0, 500)
+        : null
+    return {
+      schemaVersion: 1,
+      id: generateScheduleCommentId(),
+      scheduleId,
+      scheduleTitle,
+      targetRole: inferTargetRole({ role: input.targetRole, sourceDocPath }),
+      sourceDocPath,
+      author: "portal",
+      action,
+      body: input.body,
+      createdAt: now,
+    }
+  }
+
+  // GET /api/portal/schedule/company/:id/comments — 해당 회사 일정 댓글 목록
+  app.get("/schedule/company/:id/comments", async (req, reply) => {
+    if (!isNewViewAllowed(req)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+    const { id } = req.params as { id: string }
+    if (!isValidScheduleItemId(id)) {
+      return reply.code(400).send({ error: "Invalid schedule id" })
+    }
+    const comments = listScheduleComments(root, id, process.env)
+    return reply.send({ comments })
+  })
+
+  // POST /api/portal/schedule/company/:id/comments — 댓글 작성 + 담당 AI 피드백 레코드
+  app.post("/schedule/company/:id/comments", async (req, reply) => {
+    if (!checkWriteSecurity(req, reply, true)) {
+      return
+    }
+    const { id } = req.params as { id: string }
+    if (!isValidScheduleItemId(id)) {
+      return reply.code(400).send({ error: "Invalid schedule id" })
+    }
+    const body = req.body as
+      | { body?: unknown; scheduleTitle?: unknown; targetRole?: unknown; sourceDocPath?: unknown }
+      | undefined
+    const lengthCheck = validateScheduleCommentBody(body?.body)
+    if (!lengthCheck.valid) {
+      return reply.code(400).send({ error: lengthCheck.error })
+    }
+    const comment = buildScheduleFeedback(id, "comment", {
+      body: body!.body as string,
+      scheduleTitle: body?.scheduleTitle,
+      targetRole: body?.targetRole,
+      sourceDocPath: body?.sourceDocPath,
+    })
+    const filePath = getScheduleCommentFilePath(root, comment.id, process.env)
+    try {
+      await withFileLock(filePath, () => {
+        saveScheduleComment(root, comment, process.env)
+      })
+      return reply.code(201).send({ ok: true, comment })
+    } catch (err) {
+      if (err instanceof FileLockTimeoutError) {
+        return reply.code(409).send({ error: "changed" })
+      }
+      throw err
+    }
+  })
+
+  // DELETE /api/portal/schedule/company/:id/comments/:commentId — 댓글 삭제
+  app.delete("/schedule/company/:id/comments/:commentId", async (req, reply) => {
+    if (!checkWriteSecurity(req, reply, false)) {
+      return
+    }
+    const { id, commentId } = req.params as { id: string; commentId: string }
+    if (!isValidScheduleItemId(id) || !isValidScheduleCommentId(commentId)) {
+      return reply.code(400).send({ error: "Invalid id" })
+    }
+    const filePath = getScheduleCommentFilePath(root, commentId, process.env)
+    try {
+      const deleted = await withFileLock(filePath, () => {
+        const existing = readScheduleComment(root, commentId, process.env)
+        if (!existing || existing.scheduleId !== id) return false
+        deleteScheduleComment(root, commentId, process.env)
+        return true
+      })
+      if (!deleted) {
+        return reply.code(404).send({ error: "Comment not found" })
+      }
+      return reply.send({ ok: true })
+    } catch (err) {
+      if (err instanceof FileLockTimeoutError) {
+        return reply.code(409).send({ error: "changed" })
+      }
+      throw err
+    }
+  })
+
+  // PATCH /api/portal/schedule/company/:id — 회사 일정 직접 수정(오버레이) + edit 피드백 레코드
+  app.patch("/schedule/company/:id", async (req, reply) => {
+    if (!checkWriteSecurity(req, reply, true)) {
+      return
+    }
+    const { id } = req.params as { id: string }
+    if (!isValidScheduleItemId(id)) {
+      return reply.code(400).send({ error: "Invalid schedule id" })
+    }
+    const current = readCompanySchedules({ adkRoot: root })
+    const existing = current.items.find((item) => item.id === id)
+    if (!existing) {
+      return reply.code(404).send({ error: "Schedule not found" })
+    }
+    const check = validateScheduleOverridePatch(req.body, existing)
+    if (!check.valid) {
+      return reply.code(400).send({ error: check.error })
+    }
+    const now = new Date().toISOString()
+    const filePath = getScheduleOverridesFilePath(root, process.env)
+    let previousOverride: ReturnType<typeof readScheduleOverrides>["overrides"][string] | undefined
+    try {
+      const override = await withFileLock(filePath, () => {
+        const data = readScheduleOverrides(root, process.env)
+        previousOverride = data.overrides[id]
+        const prev = previousOverride ?? {
+          updatedAt: now,
+          updatedBy: "portal",
+        }
+        data.overrides[id] = {
+          ...prev,
+          ...check.patch,
+          deleted: false,
+          updatedAt: now,
+          updatedBy: "portal",
+        }
+        saveScheduleOverrides(root, data, process.env)
+        return data.overrides[id]
+      })
+
+      const feedbackBody = req.body as
+        | { scheduleTitle?: unknown; targetRole?: unknown; sourceDocPath?: unknown }
+        | undefined
+      const changedKeys = Object.keys(check.patch).join(", ")
+      const feedback = buildScheduleFeedback(id, "edit", {
+        body: `일정 직접 수정: ${changedKeys}`,
+        scheduleTitle: feedbackBody?.scheduleTitle,
+        targetRole: feedbackBody?.targetRole,
+        sourceDocPath: feedbackBody?.sourceDocPath,
+      })
+      const feedbackPath = getScheduleCommentFilePath(root, feedback.id, process.env)
+      try {
+        await withFileLock(feedbackPath, () => {
+          saveScheduleComment(root, feedback, process.env)
+        })
+      } catch (err) {
+        await withFileLock(filePath, () => {
+          const data = readScheduleOverrides(root, process.env)
+          if (previousOverride) data.overrides[id] = previousOverride
+          else delete data.overrides[id]
+          saveScheduleOverrides(root, data, process.env)
+        })
+        throw err
+      }
+
+      return reply.send({ ok: true, id, override })
+    } catch (err) {
+      if (err instanceof FileLockTimeoutError) {
+        return reply.code(409).send({ error: "changed" })
+      }
+      throw err
+    }
+  })
+
+  // DELETE /api/portal/schedule/company/:id — 회사 일정 직접 삭제(오버레이) + delete 피드백 레코드
+  app.delete("/schedule/company/:id", async (req, reply) => {
+    if (!checkWriteSecurity(req, reply, false)) {
+      return
+    }
+    const { id } = req.params as { id: string }
+    if (!isValidScheduleItemId(id)) {
+      return reply.code(400).send({ error: "Invalid schedule id" })
+    }
+    const current = readCompanySchedules({ adkRoot: root })
+    if (!current.items.some((item) => item.id === id)) {
+      return reply.code(404).send({ error: "Schedule not found" })
+    }
+    const now = new Date().toISOString()
+    const filePath = getScheduleOverridesFilePath(root, process.env)
+    let previousOverride: ReturnType<typeof readScheduleOverrides>["overrides"][string] | undefined
+    try {
+      await withFileLock(filePath, () => {
+        const data = readScheduleOverrides(root, process.env)
+        previousOverride = data.overrides[id]
+        data.overrides[id] = {
+          deleted: true,
+          updatedAt: now,
+          updatedBy: "portal",
+        }
+        saveScheduleOverrides(root, data, process.env)
+      })
+
+      const feedbackBody = req.body as
+        | { scheduleTitle?: unknown; targetRole?: unknown; sourceDocPath?: unknown }
+        | undefined
+      const feedback = buildScheduleFeedback(id, "delete", {
+        body: "일정 직접 삭제",
+        scheduleTitle: feedbackBody?.scheduleTitle,
+        targetRole: feedbackBody?.targetRole,
+        sourceDocPath: feedbackBody?.sourceDocPath,
+      })
+      const feedbackPath = getScheduleCommentFilePath(root, feedback.id, process.env)
+      try {
+        await withFileLock(feedbackPath, () => {
+          saveScheduleComment(root, feedback, process.env)
+        })
+      } catch (err) {
+        await withFileLock(filePath, () => {
+          const data = readScheduleOverrides(root, process.env)
+          if (previousOverride) data.overrides[id] = previousOverride
+          else delete data.overrides[id]
+          saveScheduleOverrides(root, data, process.env)
+        })
+        throw err
+      }
+
+      return reply.send({ ok: true, id })
+    } catch (err) {
+      if (err instanceof FileLockTimeoutError) {
+        return reply.code(409).send({ error: "changed" })
+      }
+      throw err
+    }
   })
 
   // GET /api/portal/search?q=<검색어>[&archived=1]

@@ -130,6 +130,7 @@ export function ScheduleListSection({ view }: { view: View }) {
         <ScheduleDetailDialog
           event={view.selectedWorkEvent ?? null}
           onClose={() => view.setSelectedWorkEvent?.(null)}
+          onMutate={() => void view.loadCompanySchedule()}
         />
       )}
 

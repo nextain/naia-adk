@@ -146,6 +146,7 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
           <ScheduleDetailDialog
             event={selectedWorkEvent}
             onClose={() => setSelectedWorkEvent(null)}
+            onMutate={() => void view.loadCompanySchedule()}
           />
 
           {/* 아래쪽 보조 구역: 개인 일정 관리 카드 · 마일스톤 현황 · 날짜 없는 작업 */}
