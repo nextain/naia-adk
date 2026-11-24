@@ -49,7 +49,7 @@ AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터
 워크스페이스를 눈으로 관리하는 Next.js 대시보드와, 그 뒤를 받치는 Fastify API 서버가
 포함됩니다. 상단 내비게이션의 **문서**(`/docs`)와 **작업** 탭에서 회사 공유 문서와 공동작업 보드를
 한눈에 볼 수 있으며, `pnpm adk:setup -- --company <저장소주소>` 명령으로 회사 문서와 프로젝트 저장소를
-한 번에 세팅할 수 있습니다. 자세한 설정과 사용법은 [온보딩 가이드](docs/guides/onboarding.ko.md)를 참고하세요.
+한 번에 세팅할 수 있습니다. 자세한 설정과 사용법은 [온보딩 가이드](docs/guides/onboarding.ko.md)([English](docs/guides/onboarding.en.md))를 참고하세요.
 
 개발 문서의 구조와 근거를 정리할 때는 [개발 문서 작성 기준](docs/guides/dev-docs-writing.md)을 참고하세요.
 API는 워크스페이스 메타데이터(`/api/workspace`), 스킬 카탈로그(`/api/skills`), 회사 문서 포털(`/api/portal`),
@@ -94,7 +94,7 @@ PDF와 전자서명), `copyright-reg`(저작권 등록 서류), `patent-draft`�
 `upstream-pr-review`(오픈소스에 내보내기 전 점검), `payroll`,
 `finetune-persona`(캐릭터 LoRA 학습).
 
-스킬을 새로 만들 때는 `SKILL_TEMPLATE.md`에서 시작하고, 만든 뒤에는 색인에도
+스킬을 새로 만들 때는 `.agents/skills/SKILL_TEMPLATE.md`에서 시작하고, 만든 뒤에는 색인에도
 한 줄을 남깁니다. 색인이 실제와 어긋나면 다음 세션이 있는 줄도 모르는 스킬을
 다시 만들게 됩니다.
 
@@ -177,7 +177,7 @@ API 키는 설정 파일이 아니라 환경 변수나 운영체제 키 저장�
 Naia ADK의 핵심은 특정 도구가 아니라 **포맷**입니다. 디렉터리 레이아웃(`.agents/`, `.users/`,
 `skills/`, `data-*/`)과 파일 스키마(`agents-rules.json`, `SKILL.md`)가 정해진 약속이고, 이
 약속을 읽을 수 있는 도구라면 무엇이든 같은 워크스페이스를 소비할 수 있습니다. Claude Code,
-opencode, Codex, naia-agent가 서로의 코드를 내장하지 않고도 같은 워크스페이스를 각자 읽습니다.
+Codex, opencode, naia-agent, agy, muse가 서로의 코드를 내장하지 않고도 같은 워크스페이스를 각자 읽습니다.
 그래서 도구를 바꾸거나 여러 도구를 섞어 써도, 워크스페이스는 그대로 동작합니다.
 
 이 규칙 강제(enforcement) 자체도 도구에 매이지 않습니다. 호스트 중립 코어(`.agents/hooks/core/`)와
@@ -234,8 +234,9 @@ Discord 운영 경계를 다루는 어댑터 기준선입니다. 개인 포크�
 | `templates/` | 문서 템플릿 |
 | `docs/` | 아키텍처 문서, 설계 스펙 |
 | `packages/` | 런타임 패키지 (pnpm 워크스페이스) |
+| `config/` | 작업자 티어 프로파일과 배포 예제 설정 |
 
-### 런타임 패키지 (packages/, 10개)
+### 런타임 패키지 (packages/, 12개)
 
 세 개는 실제로 도는 프로그램이고, 나머지는 포맷과 규격을 정의하는 얇은 패키지입니다.
 
@@ -250,6 +251,16 @@ Discord 운영 경계를 다루는 어댑터 기준선입니다. 개인 포크�
 - `naia-anyllm` — any-llm 게이트웨이 / 직접 프로바이더 LLM 어댑터.
 - `artifacts-spec` — 권한(RBAC)과 개발 수명주기(SDLC) 산출물의 표준 스키마. 15종 산출물을
   JSON Schema로 정의하고, 각 산출물이 git으로 추적되는지 세션 한정인지까지 규정합니다.
+- `ax-messenger` — Matrix 메신저 중계·관리 패키지(AI 중계, 장부, 프로바이더, `matrix-js-sdk` 기반).
+- `benchmark-contract` — `naia-adk`와 `naia-agent`가 공유하는 영속 벤치마크·거버넌스 근거 계약.
+
+### 작업자 티어와 리뷰어 오버라이드
+
+역할과 모델은 분리해 설정합니다. 아키텍처에 특정 모델 버전을 고정하지 않습니다.
+
+- `config/tier-profile.example.json`(`tier-profile/v1`)은 모델 비종속 4티어 작업자 프로파일입니다. 티어는 *역할*(가벼운 확인, 설계·구현, 역할 세션, 독립 검수)을 정의하고, 각 티어의 후보가 CLI와 모델을 따로 묶으므로 모델을 바꿔도 역할 구조는 그대로입니다.
+- 승인 관문 리뷰어 오버라이드는 인스턴스의 `.claude/deploy/config.json`에 `review_models`(리뷰어 ID → 정확한 모델, 최소 강도, 실행기)로 둡니다. `CFG-` 승인이 있어야 적용되고, 없으면 코드 기본값을 씁니다. 실행기에는 `agy`, `muse`, `codex`, `claude`가 있습니다. 자세한 내용은 [승인 계획 관문 안내](docs/guides/approval-plan-gate.md)를 참고하세요.
+- `naia-settings/review.json`은 `review-pass` 스킬과 `naia-agent`가 소비하는 저장소 간 리뷰 패널과 모델 티어 정책을 담습니다.
 
 ### 데이터 디렉터리 (gitignore, 포크마다 채움)
 

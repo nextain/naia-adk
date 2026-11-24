@@ -1,3 +1,5 @@
+[English](adk-2.0-structure.en.md) | [한국어](adk-2.0-structure.md)
+
 범위: 공통
 상태: 1판(2026-10-21). Naia ADK 2.0 의 공통 부분, 인스턴스가 덮어쓰는 부분, 1~4층 역할 구조, naia-shell 이 받는 약속을 한 곳에 모은 문서
 

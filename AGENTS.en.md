@@ -1,4 +1,4 @@
-[한국어](AGENTS.md) | [English](AGENTS.en.md)
+[English (canonical)](AGENTS.md) | **English (mirror)**
 
 # AGENTS.md (English index)
 

@@ -73,12 +73,12 @@ SoT for Claude Code (via `.claude/skills/` symlinks); indexed by
 | `webapp-testing` | Playwright E2E for local web apps |
 | `doc-coauthoring` | Structured document co-authoring (3-step) |
 | `project-create` / `project-migration` / `migrate-ctx` | Scaffold / extract / migrate workspace repos & context |
-| `payroll` | 급여명세서 PDF + 이메일 발송 |
-| `press-release` | 보도자료 작성·기자 조사·발송 |
-| `patent-draft` | KIPO 특허 명세서 초안 |
-| `patent-pipeline` | 특허 발굴·평가·출원 |
-| `copyright-reg` | 어문저작권 등록 서류 |
-| `weekly-report` | 주간 업무 결과 (git 커밋 기반) |
+| `payroll` | Payslip PDFs + email delivery |
+| `press-release` | Press-release drafting, journalist research, distribution |
+| `patent-draft` | KIPO patent specification drafts |
+| `patent-pipeline` | Patent discovery, evaluation, filing pipeline |
+| `copyright-reg` | Literary-copyright registration filings |
+| `weekly-report` | Weekly work summaries (git-commit based) |
 
 ### `skills/` — operational / runtime tree
 
@@ -88,7 +88,7 @@ and served at `/api/skills`.
 | Skill | Description |
 |-------|-------------|
 | `email` | SMTP email with templates |
-| `sms` | SMS / 알림톡 via gateway adapter |
+| `sms` | SMS / notification-talk (Korean business messaging) via gateway adapter |
 | `notify` | Channel-agnostic notification |
 | `channel-management` | Discord/Slack channel management |
 | `service-management` | Service monitoring, cost, incident response |
@@ -104,11 +104,11 @@ base trees above. Examples (not exhaustive, and not shipped in this base repo):
 
 | Skill | Description |
 |-------|-------------|
-| `contract` | 근로계약서 (근로기준법) + 디지털 서명 |
-| `expense` | 지출결의서 + 영수증 OCR |
-| `accounting` | 장부 기록, 월마감, 세무 |
-| `crm` | 파일 기반 경량 CRM |
-| `client-communication` | 고객 소통 관리 |
+| `contract` | Employment contracts (labor-law compliant) + digital signatures |
+| `expense` | Expense approvals + receipt OCR |
+| `accounting` | Bookkeeping, month-end close, tax filings |
+| `crm` | File-based lightweight CRM |
+| `client-communication` | Client communication management |
 
 ## Governance in the Organization Lineage
 
