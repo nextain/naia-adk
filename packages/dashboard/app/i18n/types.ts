@@ -2,7 +2,7 @@
 // The union below is the single source of truth: `ko.ts` and `en.ts` both
 // `satisfies TranslationDict`, so `tsc` fails the build on any key mismatch.
 
-export type Locale = "en" | "ko" | "ja"
+export type Locale = "en" | "ko"
 
 export type TranslationKey =
   | "nav.docs"
