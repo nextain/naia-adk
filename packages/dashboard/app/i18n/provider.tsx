@@ -145,8 +145,11 @@ export function I18nProvider({
 
   useEffect(() => {
     // Re-sync from cookie/localStorage on mount (client-only correction).
+    // Publish so the module-global read by getActiveLocale() and the
+    // useActiveLocale subscribers follow the corrected locale too.
     const stored = readStoredLocale()
     if (stored && stored !== locale) {
+      publishLocale(stored)
       setLocaleState(stored)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

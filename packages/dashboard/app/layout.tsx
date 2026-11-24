@@ -5,6 +5,7 @@ import { Nav } from "./components/Nav"
 import { MainArea } from "./components/MainArea"
 import { buildThemeInitScript } from "./theme-prefs"
 import { buildLocaleInitScript } from "./i18n/index.ts"
+import { getRequestLocale } from "./i18n/server"
 import { I18nProvider } from "./i18n/provider.tsx"
 import type { Locale } from "./i18n/types.ts"
 
@@ -13,14 +14,16 @@ export const metadata: Metadata = {
   description: "AI Development Kit Dashboard",
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
-  initialLocale = "ko",
+  initialLocale,
 }: {
   children: React.ReactNode
   initialLocale?: Locale
 }) {
-  const locale: Locale = initialLocale === "en" ? "en" : "ko"
+  // Per-request locale (cookie > Accept-Language > default) so SSR HTML and
+  // <html lang> match the viewer's language. Unit renders pass initialLocale.
+  const locale: Locale = initialLocale ?? (await getRequestLocale())
   return (
     <html lang={locale} suppressHydrationWarning>
       <head>
