@@ -2,7 +2,7 @@
 // The union below is the single source of truth: `ko.ts` and `en.ts` both
 // `satisfies TranslationDict`, so `tsc` fails the build on any key mismatch.
 
-export type Locale = "en" | "ko"
+export type Locale = "en" | "ko" | "ja"
 
 export type TranslationKey =
   | "nav.docs"
@@ -198,6 +198,12 @@ export type TranslationKey =
   | "docs.companySetupCmd"
   | "docs.searchResults"
   | "docs.linkedCards"
+  | "docs.linkedCardsStatus"
+  | "docs.noLinkedCards"
+  | "docs.hideSidePanel"
+  | "docs.showSidePanel"
+  | "docs.notesTab"
+  | "docs.cardsTab"
   | "docs.docPath"
   | "docs.folderPath"
   | "docs.filePath"
@@ -419,6 +425,9 @@ export type TranslationKey =
   | "sched.addShort"
   | "sched.editShort"
   | "sched.noMilestones"
+  | "sched.showAchieved"
+  | "sched.hideAchieved"
+  | "sched.noIncompleteMilestones"
   | "sched.undated"
   | "sched.noCompanyList"
   | "sched.prev"

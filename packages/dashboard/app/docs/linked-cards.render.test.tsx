@@ -64,10 +64,8 @@ describe("문서↔카드 연결, Nav 할 일 배지, 대시보드 요약 할 �
         linkedCards={sampleCards}
       />,
     )
-    assert.ok(htmlWith.includes('data-testid="doc-linked-cards"'))
+    assert.ok(htmlWith.includes('data-testid="docs-side-tab-cards"'))
     assert.ok(htmlWith.includes("대시보드 결과 문서 작성"))
-    assert.ok(htmlWith.includes('href="/work?role=minho"'))
-    assert.ok(htmlWith.includes('href="https://discord.com/channels/999/100/200"'))
 
     const htmlWithout = renderToStaticMarkup(
       <DocsView
@@ -81,7 +79,7 @@ describe("문서↔카드 연결, Nav 할 일 배지, 대시보드 요약 할 �
         linkedCards={[]}
       />,
     )
-    assert.ok(!htmlWithout.includes('data-testid="doc-linked-cards"'))
+    assert.ok(!htmlWithout.includes('data-testid="doc-linked-card-card-doc-1"'))
 
     const fileHtml = renderToStaticMarkup(
       <FileView
@@ -114,7 +112,6 @@ describe("문서↔카드 연결, Nav 할 일 배지, 대시보드 요약 할 �
     assert.match(html, /data-testid="docs-side-tabs"/)
     assert.match(html, /data-testid="docs-side-tab-notes"[^>]*aria-selected="true"/)
     assert.match(html, /data-testid="docs-side-tab-cards"[^>]*aria-selected="false"/)
-    assert.ok(!html.includes("연결된 업무 카드 현황"))
   })
 
   it("Nav 머리줄에 장부 기반 '할 일 N' 배지를 띄우고 hasLedger면 작업 탭을 연다", () => {

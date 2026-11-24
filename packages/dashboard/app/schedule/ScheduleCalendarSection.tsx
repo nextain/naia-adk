@@ -11,9 +11,21 @@ import { useLocale, useT } from "../i18n/provider.tsx"
 
 type View = ReturnType<typeof useScheduleView>
 
+type Milestone = { id: string; completed: number; total: number; name: string; dueDate?: string | null }
+export function isMilestoneCompleted(ms: Pick<Milestone, "completed" | "total">): boolean {
+  return ms.total > 0 && ms.completed >= ms.total
+}
+export function partitionMilestones<T extends Pick<Milestone, "completed" | "total">>(milestones: T[]) {
+  return milestones.reduce<{ completed: T[]; incomplete: T[] }>((result, ms) => {
+    result[isMilestoneCompleted(ms) ? "completed" : "incomplete"].push(ms)
+    return result
+  }, { completed: [], incomplete: [] })
+}
+
 export function ScheduleCalendarSection({ view }: { view: View }) {
   const locale = useLocale()
   const t = useT()
+  const [showCompletedMilestones, setShowCompletedMilestones] = React.useState(false)
   const {
     mode, unit, layers, workFilter,
     setAnchorDate, userLabel, personalIdentityRequired, personalWarningsLocked,
@@ -266,18 +278,24 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                 data-testid="milestone-schedule-panel"
                 className="rounded-lg border border-amber-900/60 bg-neutral-900/50 p-3 space-y-2"
               >
-                <h3 className="text-xs font-bold text-amber-300">
+                {(() => {
+                  const partitioned = partitionMilestones(boardSchedule.milestones)
+                  const visible = showCompletedMilestones ? boardSchedule.milestones : partitioned.incomplete
+                  return <>
+                <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-bold text-amber-300">
                   {t("sched.milestone")} ({formatMessage(t("work.count"), { count: boardSchedule.milestones.length })})
-                </h3>
+                </h3>{partitioned.completed.length > 0 && <button type="button" data-testid="milestone-toggle-completed" aria-pressed={showCompletedMilestones} onClick={() => setShowCompletedMilestones((value) => !value)} className="text-[11px] text-amber-300 underline">{showCompletedMilestones ? t("sched.hideAchieved") : formatMessage(t("sched.showAchieved"), { count: partitioned.completed.length })}</button>}</div>
                 {boardSchedule.milestones.length === 0 ? (
                   <p className="text-xs text-neutral-500">{t("sched.noMilestones")}</p>
+                ) : visible.length === 0 ? (
+                  <p className="text-xs text-neutral-500">{t("sched.noIncompleteMilestones")}</p>
                 ) : (
                   <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                    {boardSchedule.milestones.map((ms) => (
+                    {visible.map((ms) => (
                       <li
                         key={ms.id}
                         data-testid={`milestone-item-${ms.id}`}
-                        className="p-2 rounded border border-neutral-800 bg-neutral-950/80 flex items-center justify-between gap-2 text-xs"
+                        className={`p-2 rounded border border-neutral-800 bg-neutral-950/80 flex items-center justify-between gap-2 text-xs ${isMilestoneCompleted(ms) ? "opacity-60" : ""}`}
                       >
                         <div className="min-w-0">
                           <span className="font-semibold text-amber-200">{ms.name}</span>
@@ -292,6 +310,8 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                     ))}
                   </ul>
                 )}
+                  </>
+                })()}
               </section>
             )}
 

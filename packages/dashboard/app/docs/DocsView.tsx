@@ -430,6 +430,8 @@ export function DocsView({
   const docBody = parsedDoc ? convertWikiLinks(parsedDoc.body) : null
 
   const [forbiddenNotice, setForbiddenNotice] = useState(false)
+  const [sidePanelOpen, setSidePanelOpen] = useState(true)
+  const [sidePanelTab, setSidePanelTab] = useState<"notes" | "cards">("notes")
   const [localSelection, setLocalSelection] = useState<string | null>(null)
   const activeSelection = selectionQuote !== null && selectionQuote !== undefined ? selectionQuote : localSelection
 
@@ -953,6 +955,15 @@ export function DocsView({
                                   <span className="text-xs text-amber-400 font-normal">{starError}</span>
                                 )}
                                 {currentSource && currentPath && <ShortLinkButton source={currentSource} path={currentPath} />}
+                                <button
+                                  type="button"
+                                  data-testid="docs-side-panel-toggle"
+                                  aria-expanded={sidePanelOpen}
+                                  onClick={() => setSidePanelOpen((open) => !open)}
+                                  className="px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900 text-xs text-neutral-300 hover:text-white"
+                                >
+                                  {sidePanelOpen ? t("docs.hideSidePanel") : t("docs.showSidePanel")}
+                                </button>
                               </div>
                             </div>
 
@@ -1007,7 +1018,7 @@ export function DocsView({
                             {/* 마크다운 본문 (2열) */}
                             <div
                               onMouseUp={handleBodyMouseUp}
-                              className="lg:col-span-2 prose prose-invert max-w-none space-y-4 text-neutral-200"
+                              className={`${sidePanelOpen ? "lg:col-span-2" : "lg:col-span-3"} prose prose-invert max-w-none space-y-4 text-neutral-200`}
                             >
                               {parsedDoc?.meta && (
                                 <pre className="p-3 rounded bg-neutral-900/60 border border-neutral-800 text-xs text-neutral-400 whitespace-pre-wrap font-mono">
@@ -1051,9 +1062,13 @@ export function DocsView({
                             </div>
 
                             {/* 연결된 업무 카드 + 메모 목록 (1열, SP-05) */}
-                            <div className="lg:col-span-1 space-y-4">
-                              <LinkedCardsPanel cards={linkedCards} />
-                              <div className="rounded-lg border border-neutral-800 bg-neutral-900/30 p-4">
+                            {sidePanelOpen && <div className="lg:col-span-1 space-y-4">
+                              <div role="tablist" data-testid="docs-side-tabs" className="grid grid-cols-2 rounded-lg border border-neutral-800 bg-neutral-900 p-1">
+                                <button type="button" role="tab" data-testid="docs-side-tab-notes" aria-selected={sidePanelTab === "notes"} onClick={() => setSidePanelTab("notes")} className="rounded px-2 py-1.5 text-xs text-neutral-300">{t("docs.notesTab")} ({notes.length})</button>
+                                <button type="button" role="tab" data-testid="docs-side-tab-cards" aria-selected={sidePanelTab === "cards"} onClick={() => setSidePanelTab("cards")} className="rounded px-2 py-1.5 text-xs text-neutral-300">{t("docs.cardsTab")} ({linkedCards.length})</button>
+                              </div>
+                              <div hidden={sidePanelTab !== "cards"}><LinkedCardsPanel cards={linkedCards} hideWhenEmpty={false} /></div>
+                              <div hidden={sidePanelTab !== "notes"} className="rounded-lg border border-neutral-800 bg-neutral-900/30 p-4">
                                 <NotesPanel
                                   source={currentSource || "adk"}
                                   path={currentPath || ""}
@@ -1068,7 +1083,7 @@ export function DocsView({
                                   onNavigate={onNavigate}
                                 />
                               </div>
-                            </div>
+                            </div>}
                           </div>
                         </div>
                       )}

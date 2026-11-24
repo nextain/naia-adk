@@ -49,7 +49,7 @@ describe("locale parsing and precedence", () => {
   it("isLocale accepts only en/ko", () => {
     assert.equal(isLocale("en"), true)
     assert.equal(isLocale("ko"), true)
-    assert.equal(isLocale("ja"), false)
+    assert.equal(isLocale("ja"), true)
     assert.equal(isLocale(""), false)
     assert.equal(isLocale(null), false)
   })
@@ -142,7 +142,7 @@ describe("locale parsing and precedence", () => {
     assert.equal(LOCALE_STORAGE_KEY, "naia-adk-lang")
     assert.ok(serializeLocaleCookie("en").startsWith(`${LOCALE_COOKIE}=en;`))
     assert.ok(serializeLocaleCookie("ko").includes("path=/"))
-    assert.deepEqual([...availableLocales()].sort(), ["en", "ko"])
+    assert.deepEqual([...availableLocales()].sort(), ["en", "ja", "ko"])
   })
 
   it("buildLocaleInitScript syncs documentElement.lang without throwing", () => {

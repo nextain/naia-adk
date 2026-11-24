@@ -4,17 +4,18 @@
 import type { Locale, TranslationDict, TranslationKey } from "./types.ts"
 import { en } from "./en.ts"
 import { ko } from "./ko.ts"
+import { ja } from "./ja.ts"
 
 export type { Locale, TranslationDict, TranslationKey }
-export { en, ko }
+export { en, ko, ja }
 
 export const LOCALE_COOKIE = "naia-adk-lang"
 export const LOCALE_STORAGE_KEY = "naia-adk-lang"
 
-const LOCALES: readonly Locale[] = ["en", "ko"]
+const LOCALES: readonly Locale[] = ["en", "ko", "ja"]
 
 export function isLocale(value: unknown): value is Locale {
-  return value === "en" || value === "ko"
+  return value === "en" || value === "ko" || value === "ja"
 }
 
 export function parseLocale(value: unknown): Locale | null {
@@ -22,6 +23,7 @@ export function parseLocale(value: unknown): Locale | null {
   const clean = value.trim().toLowerCase()
   if (clean === "en" || clean.startsWith("en-")) return "en"
   if (clean === "ko" || clean.startsWith("ko-")) return "ko"
+  if (clean === "ja" || clean.startsWith("ja-")) return "ja"
   return null
 }
 
@@ -140,7 +142,7 @@ function defaultEnv(): Record<string, string | undefined> {
   }
 }
 
-const DICTS: Record<Locale, TranslationDict> = { en, ko }
+const DICTS: Record<Locale, TranslationDict> = { en, ko, ja }
 
 export function getDict(locale: Locale = "ko"): TranslationDict {
   return DICTS[isLocale(locale) ? locale : "ko"] ?? ko
