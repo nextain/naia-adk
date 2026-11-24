@@ -128,14 +128,16 @@ describe("dual-locale chrome: ko shows Korean, en shows zero Korean", () => {
     assert.ok(koHtml.includes('data-testid="locale-btn-en"'))
     assert.ok(koHtml.includes('data-testid="locale-btn-ko"'))
     assert.ok(koHtml.includes(">문서<"))
-    assert.ok(koHtml.includes(">할 일 3<"))
+    assert.equal(koHtml.includes('data-testid="nav-todo-badge"'), false)
+    assert.equal(koHtml.includes(">할 일 3<"), false)
 
     const enHtml = renderEn(
       <Nav initialTheme="light" initialFontSize="md" hasBoard={true} hasLedger={false} hasMessenger={true} hasAxMessenger={true} todoBadgeCount={3} />,
     )
     assert.ok(enHtml.includes('data-testid="locale-switcher"'))
     assert.ok(enHtml.includes(">Docs<"))
-    assert.ok(enHtml.includes(">Tasks 3<"))
+    assert.equal(enHtml.includes('data-testid="nav-todo-badge"'), false)
+    assert.equal(enHtml.includes(">Tasks 3<"), false)
     assert.equal(HANGUL.test(enHtml), false, `unexpected Korean in en Nav: ${enHtml.slice(0, 400)}`)
   })
 

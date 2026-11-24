@@ -114,13 +114,13 @@ describe("문서↔카드 연결, Nav 할 일 배지, 대시보드 요약 할 �
     assert.match(html, /data-testid="docs-side-tab-cards"[^>]*aria-selected="false"/)
   })
 
-  it("Nav 머리줄에 장부 기반 '할 일 N' 배지를 띄우고 hasLedger면 작업 탭을 연다", () => {
+  it("Nav는 할 일 배지를 숨기고 hasLedger면 작업 탭을 연다", () => {
     const html = renderToStaticMarkup(
       <Nav initialTheme="dark" initialFontSize="md" hasBoard={false} hasLedger={true} todoBadgeCount={7} />,
     )
-    assert.ok(html.includes('data-testid="nav-todo-badge"'))
-    assert.ok(html.includes(">할 일 7<"))
-    assert.ok(html.includes('href="/work"'))
+    assert.equal(html.includes('data-testid="nav-todo-badge"'), false)
+    assert.equal(html.includes(">할 일 7<"), false)
+    assert.match(html, /<a[^>]*data-testid="nav-tab-work"[^>]*href="\/work"/)
     const textTokens = html.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean)
     for (const token of textTokens) {
       assert.equal(isSafeVisibleText(token), true, `unsafe token: ${token}`)
