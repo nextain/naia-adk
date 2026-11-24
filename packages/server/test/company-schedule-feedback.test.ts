@@ -164,9 +164,7 @@ describe("FT-schedule-comments: 회사 일정 댓글 저장소", () => {
 
       // adkRoot가 아닌 외부 상태 디렉터리에 기록됨
       expect(fs.existsSync(getScheduleCommentFilePath(root, created.id))).toBe(true)
-      expect(
-        fs.readdirSync(path.join(root, ".agents", "work", "schedule-comments")).length,
-      ).toBe(0)
+      expect(fs.existsSync(path.join(root, ".agents", "work", "schedule-comments"))).toBe(false)
 
       const list = await app.inject({
         method: "GET",

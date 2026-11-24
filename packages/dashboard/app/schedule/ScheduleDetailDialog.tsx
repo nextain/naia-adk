@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useRef } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import {
   buildCompanyDocLink,
   formatWorkStatusLabel,
@@ -25,6 +25,409 @@ function taskStatusBadgeClass(badge: string, locale: Locale = "ko"): string {
 export interface ScheduleDetailDialogProps {
   event: CalendarCellEvent | null
   onClose: () => void
+  onMutate?: () => void
+}
+
+export interface CompanyScheduleComment {
+  schemaVersion: 1
+  id: string
+  scheduleId: string
+  scheduleTitle: string
+  targetRole: string | null
+  sourceDocPath: string | null
+  author: string
+  action: "comment" | "edit" | "delete"
+  body: string
+  createdAt: string
+}
+
+export interface CompanyScheduleFeedbackSectionProps {
+  scheduleId: string
+  scheduleTitle: string
+  targetRole?: string | null
+  sourceDocPath?: string | null
+  initialComments?: CompanyScheduleComment[]
+  onMutate?: () => void
+}
+
+/**
+ * 회사 일정 댓글 목록 및 작성 폼. 담당 AI(targetRole) 표시를 포함한다.
+ * initialComments가 주어지면 그대로 그리고, 없으면 API에서 불러온다.
+ */
+export function CompanyScheduleFeedbackSection({
+  scheduleId,
+  scheduleTitle,
+  targetRole,
+  sourceDocPath,
+  initialComments,
+  onMutate,
+}: CompanyScheduleFeedbackSectionProps) {
+  const t = useT()
+  const [comments, setComments] = useState<CompanyScheduleComment[]>(initialComments ?? [])
+  const [loaded, setLoaded] = useState<boolean>(initialComments !== undefined)
+  const [draft, setDraft] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (initialComments !== undefined) {
+      setComments(initialComments)
+      setLoaded(true)
+      return
+    }
+    let cancelled = false
+    setLoaded(false)
+    setError(null)
+    fetch(`/api/portal/schedule/company/${encodeURIComponent(scheduleId)}/comments`, {
+      cache: "no-store",
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data) => {
+        if (cancelled) return
+        setComments(Array.isArray(data?.comments) ? data.comments : [])
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoaded(true)
+        setError(t("sched.errSaveNet"))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [scheduleId, initialComments, t])
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const body = draft.trim()
+    if (!body || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/portal/schedule/company/${encodeURIComponent(scheduleId)}/comments`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body, scheduleTitle, targetRole, sourceDocPath }),
+        },
+      )
+      const data = (await res.json().catch(() => null)) as { comment?: CompanyScheduleComment } | null
+      if (!res.ok || !data?.comment) {
+        setError(t("sched.errSave"))
+        return
+      }
+      setComments((prev) => [...prev, data.comment as CompanyScheduleComment])
+      setDraft("")
+      onMutate?.()
+    } catch {
+      setError(t("sched.errSaveNet"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (commentId: string) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/portal/schedule/company/${encodeURIComponent(scheduleId)}/comments/${encodeURIComponent(commentId)}`,
+        { method: "DELETE" },
+      )
+      if (!res.ok) {
+        setError(t("sched.errDelete"))
+        return
+      }
+      setComments((prev) => prev.filter((c) => c.id !== commentId))
+      onMutate?.()
+    } catch {
+      setError(t("sched.errDeleteNet"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section
+      data-testid="company-schedule-comments"
+      className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3"
+    >
+      <h3 className="text-xs font-bold text-neutral-100">
+        {t("sched.companyComments")}
+        {targetRole ? <span className="ml-1 font-normal text-neutral-400">· {targetRole}</span> : null}
+      </h3>
+      {!loaded ? (
+        <p className="text-xs text-neutral-500">{t("common.loading")}</p>
+      ) : comments.length === 0 ? (
+        <p data-testid="company-schedule-comments-empty" className="text-xs text-neutral-500">
+          {t("sched.noDesc")}
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {comments.map((c) => (
+            <li
+              key={c.id}
+              data-testid={`company-schedule-comment-${c.id}`}
+              className="rounded border border-neutral-800 bg-neutral-900 p-2 text-xs"
+            >
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-neutral-400">
+                  {c.targetRole ?? t("sched.unspecified")} · {c.createdAt.slice(0, 16).replace("T", " ")}
+                </span>
+                <button
+                  type="button"
+                  data-testid={`company-schedule-comment-delete-${c.id}`}
+                  onClick={() => void remove(c.id)}
+                  disabled={busy}
+                  className="px-1.5 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                >
+                  {t("sched.deleteBtn")}
+                </button>
+              </div>
+              <p className="whitespace-pre-wrap break-words text-neutral-100">{c.body}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-rose-300">
+          {error}
+        </p>
+      )}
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-1.5">
+        <textarea
+          data-testid="company-schedule-comment-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={2}
+          maxLength={2000}
+          placeholder={t("sched.memoLabel")}
+          className="w-full rounded border border-neutral-700 bg-neutral-900 p-2 text-xs text-neutral-100 placeholder:text-neutral-500"
+        />
+        <button
+          type="submit"
+          data-testid="company-schedule-comment-submit"
+          disabled={busy || !draft.trim()}
+          className="self-end px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white disabled:opacity-50"
+        >
+          {busy ? t("common.saving") : t("common.save")}
+        </button>
+      </form>
+    </section>
+  )
+}
+
+export interface CompanyScheduleMutateProps {
+  scheduleId: string
+  title: string
+  startDate: string
+  endDate: string
+  startTime?: string | null
+  endTime?: string | null
+  status?: string | null
+  scheduleTitle: string
+  targetRole?: string | null
+  sourceDocPath?: string | null
+  onMutate?: () => void
+  onDeleted?: () => void
+}
+
+/** 회사 일정 직접 수정 폼 토글 및 삭제 버튼. 저장·삭제 뒤 onMutate로 목록을 새로고침한다. */
+export function CompanyScheduleMutate({
+  scheduleId,
+  title,
+  startDate,
+  endDate,
+  startTime,
+  endTime,
+  status,
+  scheduleTitle,
+  targetRole,
+  sourceDocPath,
+  onMutate,
+  onDeleted,
+}: CompanyScheduleMutateProps) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const [formTitle, setFormTitle] = useState(title)
+  const [formStart, setFormStart] = useState(startDate)
+  const [formEnd, setFormEnd] = useState(endDate)
+  const [formStartTime, setFormStartTime] = useState(startTime ?? "")
+  const [formEndTime, setFormEndTime] = useState(endTime ?? "")
+  const [formStatus, setFormStatus] = useState(status ?? "")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/portal/schedule/company/${encodeURIComponent(scheduleId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: formTitle.trim() || undefined,
+          startDate: formStart || undefined,
+          endDate: formEnd || undefined,
+          startTime: formStartTime.trim() ? formStartTime.trim() : null,
+          endTime: formEndTime.trim() ? formEndTime.trim() : null,
+          status: formStatus.trim() || undefined,
+          scheduleTitle,
+          targetRole,
+          sourceDocPath,
+        }),
+      })
+      if (!res.ok) {
+        setError(t("sched.errSave"))
+        return
+      }
+      setOpen(false)
+      onMutate?.()
+    } catch {
+      setError(t("sched.errSaveNet"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeSchedule = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/portal/schedule/company/${encodeURIComponent(scheduleId)}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scheduleTitle, targetRole, sourceDocPath }),
+      })
+      if (!res.ok) {
+        setError(t("sched.errDelete"))
+        return
+      }
+      onMutate?.()
+      onDeleted?.()
+    } catch {
+      setError(t("sched.errDeleteNet"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          data-testid="company-schedule-edit-btn"
+          onClick={() => setOpen((v) => !v)}
+          className="px-2.5 py-1 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200"
+        >
+          {t("sched.companyEditSchedule")}
+        </button>
+        <button
+          type="button"
+          data-testid="company-schedule-delete-btn"
+          onClick={() => void removeSchedule()}
+          disabled={busy}
+          className="px-2.5 py-1 rounded border border-rose-800 bg-rose-950/60 hover:bg-rose-900/60 text-xs text-rose-200 disabled:opacity-50"
+        >
+          {t("sched.companyDeleteSchedule")}
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs text-rose-300">
+          {error}
+        </p>
+      )}
+      {open && (
+        <form
+          data-testid="company-schedule-edit-form"
+          onSubmit={(e) => void save(e)}
+          className="grid grid-cols-1 sm:grid-cols-2 gap-1.5"
+        >
+          <label className="sm:col-span-2 flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.fieldTitle")}
+            <input
+              data-testid="company-schedule-edit-title"
+              value={formTitle}
+              onChange={(e) => setFormTitle(e.target.value)}
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.fieldStartDate")}
+            <input
+              type="date"
+              data-testid="company-schedule-edit-start"
+              value={formStart}
+              onChange={(e) => setFormStart(e.target.value)}
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.fieldEndDate")}
+            <input
+              type="date"
+              data-testid="company-schedule-edit-end"
+              value={formEnd}
+              onChange={(e) => setFormEnd(e.target.value)}
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.fieldStartTime")}
+            <input
+              data-testid="company-schedule-edit-start-time"
+              value={formStartTime}
+              onChange={(e) => setFormStartTime(e.target.value)}
+              placeholder="09:00"
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.fieldEndTime")}
+            <input
+              data-testid="company-schedule-edit-end-time"
+              value={formEndTime}
+              onChange={(e) => setFormEndTime(e.target.value)}
+              placeholder="10:00"
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <label className="sm:col-span-2 flex flex-col gap-0.5 text-[11px] text-neutral-400">
+            {t("sched.statusLabel")}
+            <input
+              data-testid="company-schedule-edit-status"
+              value={formStatus}
+              onChange={(e) => setFormStatus(e.target.value)}
+              className="rounded border border-neutral-700 bg-neutral-900 p-1.5 text-xs text-neutral-100"
+            />
+          </label>
+          <div className="sm:col-span-2 flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="px-2.5 py-1 rounded border border-neutral-700 text-xs text-neutral-300"
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="submit"
+              data-testid="company-schedule-edit-save"
+              disabled={busy}
+              className="px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {busy ? t("common.saving") : t("common.save")}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
 }
 
 export interface ScheduleDayListDialogProps {
@@ -87,7 +490,7 @@ function formatMilestoneDaysLabel(daysRemaining: number | null, overdue: boolean
  * - 마일스톤: 이름, 기한, D-n(지났으면 경과), 설명, 묶인 작업 완료/전체.
  * - 개인 일정(쓰기 불가일 때): 제목, 기간·시각, 메모.
  */
-export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogProps) {
+export function ScheduleDetailDialog({ event, onClose, onMutate }: ScheduleDetailDialogProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
   const locale = useLocale()
   const t = useT()
@@ -461,6 +864,32 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                     {t("sched.viewSourceDoc")}
                   </a>
                 </div>
+              )}
+
+              {c && (
+                <>
+                  <CompanyScheduleFeedbackSection
+                    scheduleId={c.id}
+                    scheduleTitle={c.title}
+                    targetRole={c.role ?? null}
+                    sourceDocPath={c.sourceDocPath ?? null}
+                    onMutate={onMutate}
+                  />
+                  <CompanyScheduleMutate
+                    scheduleId={c.id}
+                    title={c.title}
+                    startDate={c.startDate}
+                    endDate={c.endDate}
+                    startTime={c.startTime ?? null}
+                    endTime={c.endTime ?? null}
+                    status={c.state ?? c.status ?? null}
+                    scheduleTitle={c.title}
+                    targetRole={c.role ?? null}
+                    sourceDocPath={c.sourceDocPath ?? null}
+                    onMutate={onMutate}
+                    onDeleted={onClose}
+                  />
+                </>
               )}
             </>
           )}

@@ -2,6 +2,10 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import matter from "gray-matter"
+import {
+  readScheduleOverrides,
+  type ScheduleOverridesData,
+} from "./company-schedule-feedback.js"
 
 export const MAX_COMPANY_SCHEDULE_BYTES = 2 * 1024 * 1024
 export const MAX_COMPANY_RANGE_DAYS = 62
@@ -1118,7 +1122,8 @@ export function readCompanySchedules(options: ReadCompanyScheduleOptions): Compa
       })
     : []
 
-  const items = [...mdItems, ...regItems].sort(
+  const merged = applyScheduleOverrides([...mdItems, ...regItems], readScheduleOverrides(options.adkRoot, env))
+  merged.sort(
     (a, b) =>
       a.startDate.localeCompare(b.startDate) ||
       (a.startTime ?? "").localeCompare(b.startTime ?? "") ||
@@ -1129,10 +1134,47 @@ export function readCompanySchedules(options: ReadCompanyScheduleOptions): Compa
   return {
     from: range.from,
     to: range.to,
-    items,
+    items: merged,
     sources: {
       companyDocPath: companyDoc?.sourceDocPath ?? null,
       regularDocPath: regularDoc?.sourceDocPath ?? null,
     },
   }
+}
+
+/**
+ * 직접 수정·삭제 오버레이 적용: deleted=true 항목은 제외하고,
+ * 수정 필드가 있으면 해당 CompanyScheduleItem에 병합한다.
+ * 원본 읽기 전용 schedule.md에는 쓰지 않는다.
+ */
+export function applyScheduleOverrides(
+  items: CompanyScheduleItem[],
+  data: ScheduleOverridesData,
+): CompanyScheduleItem[] {
+  const overrides = data?.overrides
+  if (!overrides || Object.keys(overrides).length === 0) return items
+  const out: CompanyScheduleItem[] = []
+  for (const item of items) {
+    const ov = overrides[item.id]
+    if (!ov) {
+      out.push(item)
+      continue
+    }
+    if (ov.deleted === true) continue
+    const next: CompanyScheduleItem = { ...item }
+    if (typeof ov.title === "string") next.title = ov.title
+    if (typeof ov.startDate === "string") next.startDate = ov.startDate
+    if (typeof ov.endDate === "string") next.endDate = ov.endDate
+    if (ov.startTime !== undefined) {
+      if (ov.startTime === null) delete next.startTime
+      else next.startTime = ov.startTime
+    }
+    if (ov.endTime !== undefined) {
+      if (ov.endTime === null) delete next.endTime
+      else next.endTime = ov.endTime
+    }
+    if (typeof ov.status === "string") next.status = ov.status
+    out.push(next)
+  }
+  return out
 }
