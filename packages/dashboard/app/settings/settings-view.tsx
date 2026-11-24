@@ -129,7 +129,10 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
         <h2 className="text-lg font-semibold mb-3 text-neutral-300">
           {t("settings.tierProfile")} (<code className="text-sm font-mono">{tierProfile.path}</code>)
         </h2>
-        <div className="p-4 rounded-lg border border-neutral-800 space-y-3">
+          <div className="p-4 rounded-lg border border-neutral-800 space-y-3">
+          <div className="text-xs text-neutral-400">
+            Source: <code className="font-mono text-neutral-200">{tierProfile.sourcePath}</code> ({tierProfile.sourceKind})
+          </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-neutral-400">{t("settings.tierStatus")}</span>
             <span
@@ -169,13 +172,23 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
                   <div
                     key={tier.tier}
                     data-testid={`tier-summary-${tier.tier}`}
-                    className="p-2.5 rounded bg-neutral-900/70 border border-neutral-800 flex items-center justify-between text-xs"
+                    className="p-2.5 rounded bg-neutral-900/70 border border-neutral-800 text-xs space-y-2"
                   >
-                    <div>
+                    <div className="flex items-center justify-between">
+                      <span>
                       <span className="font-mono font-medium text-neutral-200">Tier {tier.tier}</span>
                       {tier.purpose && <span className="text-neutral-400 ml-2">— {tier.purpose}</span>}
+                      </span>
+                      <span className="font-mono text-neutral-300">{tier.mode ?? "default"} · {tier.maxParallel ?? "-"} parallel</span>
                     </div>
-                    <div className="font-mono text-neutral-300">
+                    <div className="space-y-1">
+                      {(tier.candidates ?? []).map((candidate) => (
+                        <div key={candidate.id} className="font-mono text-neutral-400">
+                          {candidate.id}: {candidate.cli}{candidate.model ? ` · ${candidate.model}` : ""}{candidate.effort ? ` · ${candidate.effort}` : ""}{candidate.weight !== undefined ? ` · w=${candidate.weight}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="font-mono text-neutral-500">
                       {formatMessage(t("settings.tierCandidates"), {
                         clis: tier.clis.join(", "),
                         count: tier.candidateCount,
@@ -185,6 +198,7 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
                   </div>
                 ))}
               </div>
+              {(snapshot.roleBindings ?? tierProfile.roleBindings ?? []).length > 0 && <div className="pt-2 space-y-1"><div className="text-neutral-400">Role bindings</div>{(snapshot.roleBindings ?? tierProfile.roleBindings ?? []).map((binding) => <div key={binding.role} className="text-xs font-mono text-neutral-300">{binding.role}: {binding.configuredCli ?? "default"} → {binding.effectiveCli ?? "-"}{binding.fallbackActive ? " (fallback)" : ""}</div>)}</div>}
             </div>
           )}
 

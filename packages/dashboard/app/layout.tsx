@@ -8,10 +8,14 @@ import { buildLocaleInitScript } from "./i18n/index.ts"
 import { getRequestLocale } from "./i18n/server"
 import { I18nProvider } from "./i18n/provider.tsx"
 import type { Locale } from "./i18n/types.ts"
+import { getWorkspaceDisplayName, resolveAdkWorkspaceRoot } from "@naia-adk/core"
 
-export const metadata: Metadata = {
-  title: "Naia ADK",
-  description: "AI Development Kit Dashboard",
+export async function generateMetadata(): Promise<Metadata> {
+  const name = getWorkspaceDisplayName(resolveAdkWorkspaceRoot(process.cwd()))
+  return {
+    title: name,
+    description: "AI Development Kit Dashboard",
+  }
 }
 
 export default async function RootLayout({
@@ -24,6 +28,7 @@ export default async function RootLayout({
   // Per-request locale (cookie > Accept-Language > default) so SSR HTML and
   // <html lang> match the viewer's language. Unit renders pass initialLocale.
   const locale: Locale = initialLocale ?? (await getRequestLocale())
+  const name = getWorkspaceDisplayName(resolveAdkWorkspaceRoot(process.cwd()))
   return (
     <html lang={locale} suppressHydrationWarning>
       <head>
@@ -32,7 +37,7 @@ export default async function RootLayout({
       </head>
       <body className="bg-neutral-950 text-neutral-100 antialiased">
         <I18nProvider initialLocale={locale}>
-          <Nav />
+          <Nav workspaceDisplayName={name} />
           <MainArea>{children}</MainArea>
         </I18nProvider>
       </body>

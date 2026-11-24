@@ -4,6 +4,9 @@ export {
   type RunnerId,
   type WorkspaceRunnerStatus,
   type TierSummaryItem,
+  type TierCandidateSummary,
+  type TierRoleBindingItem,
+  type TierFallbackSummary,
   type WorkspaceTierProfileStatus,
   type ReviewModelOverrideItem,
   type WorkspaceReviewModelsStatus,
@@ -14,4 +17,5 @@ export {
   type WorkspaceConfigFileItem,
   type WorkspaceSettingsSnapshot,
   type InspectWorkspaceSettingsOptions,
+  getWorkspaceDisplayName,
 } from "@naia-adk/core"
