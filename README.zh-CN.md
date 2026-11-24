@@ -278,9 +278,9 @@ PJ 是处理多项目上下文漂移、调用成本和 Discord 运营边界的�
    `git submodule add <repo> projects/<name>`
 5. 每位成员再 fork 组织的 ADK，作为个人工作区使用。
 
-### 与 Naia OS 集成(可选)
+### 与 Naia Shell 集成(可选)
 
-如果使用 [Naia OS](https://github.com/nextain/naia-os) 桌面应用，请把工作区路径指定为你自己的 ADK 目录。
+如果使用 [Naia Shell](https://github.com/nextain/naia-shell) 桌面/网页应用，请把工作区路径指定为你自己的 ADK 目录。
 技能和数据会通过 API 提供。
 
 ## 贡献
@@ -302,8 +302,11 @@ issue、PR、讨论可以用你习惯的语言来写，AI 会居中协调沟通�
 
 代码基于 [Apache License 2.0 (`Apache-2.0`)](LICENSE) 授权；关于专利边界与附条件专利承诺（[`PATENTS.md`](PATENTS.md)）、商业与企业版许可证（[`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)）以及贡献者协议（[`CONTRIBUTING.md`](CONTRIBUTING.md)、[`CLA.md`](CLA.md)、[`CLA-CORPORATE.md`](CLA-CORPORATE.md)）的完整内容，请参阅英文版 [`README.md` 的 License & Patent Notice](README.md#license--patent-notice) 章节。
 
-## 链接
+## Naia 生态
 
-- **Naia OS** — [github.com/nextain/naia-os](https://github.com/nextain/naia-os)
+- **naia-shell** — [github.com/nextain/naia-shell](https://github.com/nextain/naia-shell) (桌面与网页终端客户端)
+- **naia-agent** — [github.com/nextain/naia-agent](https://github.com/nextain/naia-agent) (Agent 运行时与工具编排)
+- **naia-memory** — [github.com/nextain/naia-memory](https://github.com/nextain/naia-memory) (Agent 持久记忆层)
+- **naia-kb-compiler** — [github.com/nextain/naia-kb-compiler](https://github.com/nextain/naia-kb-compiler) (结构化知识库编译器)
 - **Nextain** — [nextain.io](https://nextain.io)
-- **Naia Dashboard** — [naia.nextain.io](https://naia.nextain.io)
+- **Naia** — [naia.nextain.io](https://naia.nextain.io)

@@ -309,9 +309,9 @@ Discord 운영 경계를 다루는 어댑터 기준선입니다. 개인 포크�
    `git submodule add <repo> projects/<name>`
 5. 각 멤버는 조직 ADK를 다시 포크해 개인 워크스페이스로 씁니다.
 
-### Naia OS 연동 (선택)
+### Naia Shell 연동 (선택)
 
-[Naia OS](https://github.com/nextain/naia-os) 데스크톱 앱을 쓴다면 워크스페이스 경로를 본인의
+[Naia Shell](https://github.com/nextain/naia-shell) 데스크톱·웹 앱을 쓴다면 워크스페이스 경로를 본인의
 ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니다.
 
 ## 기여
@@ -335,8 +335,11 @@ ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니�
 
 코드는 [Apache License 2.0 (`Apache-2.0`)](LICENSE)으로 배포되며, 특허 경계 및 조건부 특허 서약([`PATENTS.md`](PATENTS.md)), 상용·엔터프라이즈 라이선스([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)), 기여자 약정([`CONTRIBUTING.md`](CONTRIBUTING.md), [`CLA.md`](CLA.md), [`CLA-CORPORATE.md`](CLA-CORPORATE.md)) 전문은 영문 [`README.md`의 License & Patent Notice](README.md#license--patent-notice) 절을 참고하세요.
 
-## 링크
+## Naia 생태계
 
-- **Naia OS** — [github.com/nextain/naia-os](https://github.com/nextain/naia-os)
+- **naia-shell** — [github.com/nextain/naia-shell](https://github.com/nextain/naia-shell) (데스크톱·웹 셸 클라이언트)
+- **naia-agent** — [github.com/nextain/naia-agent](https://github.com/nextain/naia-agent) (에이전트 런타임·도구 오케스트레이션)
+- **naia-memory** — [github.com/nextain/naia-memory](https://github.com/nextain/naia-memory) (에이전트 장기 기억 계층)
+- **naia-kb-compiler** — [github.com/nextain/naia-kb-compiler](https://github.com/nextain/naia-kb-compiler) (구조화 지식 베이스 컴파일러)
 - **Nextain** — [nextain.io](https://nextain.io)
-- **Naia Dashboard** — [naia.nextain.io](https://naia.nextain.io)
+- **Naia** — [naia.nextain.io](https://naia.nextain.io)
