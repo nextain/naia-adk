@@ -59,6 +59,59 @@ describe("workspace profile visibility", () => {
     }
   })
 
+  it("keeps fallback inactive for an empty marker directory", () => {
+    const root = fixture()
+    try {
+      const marker = path.join(root, ".agents", "state", "tier3-fallback")
+      fs.mkdirSync(marker, { recursive: true })
+      const result = inspectWorkspaceSettings(root, { env: {} })
+      assert.ok(result.roleBindings.every((item) => item.fallbackActive === false))
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("activates only the role named by a marker file and resolves default target", () => {
+    const root = fixture()
+    try {
+      const profile = path.join(root, "config", "tier-profile.json")
+      const document = JSON.parse(fs.readFileSync(profile, "utf8"))
+      document.tiers["3"].candidates[1].id = "configured-default"
+      fs.writeFileSync(profile, JSON.stringify(document))
+      const marker = path.join(root, ".agents", "state", "tier3-fallback")
+      fs.mkdirSync(marker, { recursive: true })
+      fs.writeFileSync(path.join(marker, "implementation.muse"), "active")
+      const result = inspectWorkspaceSettings(root, { env: {} })
+      const implementation = result.roleBindings.find((item) => item.role === "implementation")
+      const review = result.roleBindings.find((item) => item.role === "review")
+      assert.equal(implementation?.fallbackActive, true)
+      assert.equal(implementation?.effectiveCli, "runner-b")
+      assert.equal(implementation?.effectiveModel, "model-default")
+      assert.equal(implementation?.effectiveEffort, undefined)
+      assert.equal(review?.fallbackActive, false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("keeps a regular marker file backward compatible and filters invalid quota values", () => {
+    const root = fixture()
+    try {
+      const marker = path.join(root, ".agents", "state", "tier3-fallback")
+      fs.mkdirSync(path.dirname(marker), { recursive: true })
+      fs.writeFileSync(marker, "active")
+      const profile = path.join(root, "config", "tier-profile.json")
+      const document = JSON.parse(fs.readFileSync(profile, "utf8"))
+      document.tiers["3"].fallback.quota_policy = { min_remaining_pct: 101, switch_threshold_pct: -1, recovery_check_interval_sec: 30 }
+      fs.writeFileSync(profile, JSON.stringify(document))
+      const result = inspectWorkspaceSettings(root, { env: {} })
+      assert.ok(result.roleBindings.every((item) => item.fallbackActive === true))
+      assert.equal(result.tierProfile.fallbackSummary?.quotaPolicy, undefined)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("uses safe env display/profile overrides and the default display name", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-visibility-empty-"))
     try {
