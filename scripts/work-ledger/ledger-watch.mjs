@@ -29,6 +29,35 @@ import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-tim
 import { reconcileWorkerRuns } from "./worker-run.mjs";
 import { deliverIntake } from "./work-intake.mjs";
 
+const REPORT_CADENCE_FIELDS = ["day_every_min", "night_every_min", "night_hours", "timezone"];
+
+function validateReportCadence(report) {
+  for (const field of ["day_every_min", "night_every_min"])
+    if (report[field] !== undefined && (!Number.isFinite(report[field]) || report[field] <= 0)) throw new Error(`Invalid ${field}`);
+  if (report.night_hours !== undefined && (!Array.isArray(report.night_hours) || report.night_hours.length !== 2 || !report.night_hours.every(Number.isInteger) || report.night_hours.some(hour => hour < 0 || hour > 23) || report.night_hours[0] === report.night_hours[1])) throw new Error("Invalid night_hours");
+  const timezone = report.timezone ?? "UTC";
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "2-digit", hourCycle: "h23" }); } catch { throw new Error(`Invalid timezone: ${timezone}`); }
+}
+
+export function effectiveReportEveryMin(report, now) {
+  validateReportCadence(report);
+  const day = report.day_every_min ?? report.every_min;
+  const night = report.night_every_min ?? report.every_min;
+  if (report.night_hours === undefined) return day;
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: report.timezone ?? "UTC", hour: "2-digit", hourCycle: "h23" }).formatToParts(new Date(now)).find(part => part.type === "hour").value);
+  const [start, end] = report.night_hours;
+  return (start < end ? hour >= start && hour < end : hour >= start || hour < end) ? night : day;
+}
+
+function mergeReport(ledgerReport, configuredReport) {
+  if (!configuredReport) return ledgerReport;
+  const report = { ...ledgerReport };
+  if (report.every_min === 0 && configuredReport.every_min !== undefined) report.every_min = configuredReport.every_min;
+  if (!report.channel && configuredReport.channel) report.channel = configuredReport.channel;
+  for (const field of REPORT_CADENCE_FIELDS) if (report[field] === undefined && configuredReport[field] !== undefined) report[field] = configuredReport[field];
+  return report;
+}
+
 export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details, once = false }) {
   const filename = (nonce = "") => ledgerWakeName({ stamp, role, id, reason }, nonce);
   const content = ledgerWakeBody({ reason, title, details });
@@ -202,6 +231,7 @@ export async function watch({
               channel: initialReport?.channel || "",
               last_msg_id: null,
               last_at: null,
+              ...Object.fromEntries(REPORT_CADENCE_FIELDS.filter(field => initialReport?.[field] !== undefined).map(field => [field, initialReport[field]])),
             };
           });
           ledger = await readLedger(root, role);
@@ -311,22 +341,18 @@ export async function watch({
         }
       }
       const configuredReport = roleOption(roleConfig, config, "report", undefined);
-      const report =
-        ledger.report.every_min === 0 && configuredReport
-          ? {
-              ...ledger.report,
-              every_min: configuredReport.every_min,
-              channel: configuredReport.channel,
-            }
-          : ledger.report;
+      let report;
+      try { report = mergeReport(ledger.report, configuredReport); } catch (error) { errors.push(`report:${role}: ${error.message}`); continue; }
+      let effectiveEveryMin;
+      try { effectiveEveryMin = effectiveReportEveryMin(report, now); } catch (error) { errors.push(`report:${role}: ${error.message}`); await wake(role, "report-error", "감시 실패", "보고 주기 설정 오류", error.message); continue; }
       if (
-        report.every_min > 0 &&
+        effectiveEveryMin > 0 &&
         (report.last_at === null ||
-          now - Date.parse(report.last_at) >= report.every_min * 60000)
+          now - Date.parse(report.last_at) >= effectiveEveryMin * 60000)
       )
-        await cardWakes.observe({ role, item: { id: "report", title: `${report.every_min}분 정기 보고` }, reason: reportReason,
-          details: `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
-          revision: [report.channel, report.every_min, report.last_msg_id, report.last_at],
+        await cardWakes.observe({ role, item: { id: "report", title: `${effectiveEveryMin}분 정기 보고` }, reason: reportReason,
+          details: `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + effectiveEveryMin * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
+          revision: [report.channel, effectiveEveryMin, report.last_msg_id, report.last_at],
           evidenceAt: Date.parse(report.last_at) || 0,
           legacyKey: JSON.stringify([role, "report", reportReason]) });
       const intake = intakeSettings(config, roleConfig);
