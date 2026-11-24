@@ -4,14 +4,16 @@ import React, { useEffect, useState } from "react"
 import Link from "next/link"
 import { AlertTriangle, ArrowRight, ExternalLink, FileText } from "lucide-react"
 import {
-  LEDGER_STATUS_LABEL,
   formatDueLabel,
   isSafeHttpUrl,
+  ledgerStatusLabel,
   sortLedgerCards,
   summarizeRoles,
   type LedgerPayload,
 } from "../work/work-ledger-view"
 import { statusBadgeClass } from "../work/WorkBoard"
+import { formatMessage, tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
 
 export function HomeTodoSummary({
   initialLedger,
@@ -21,6 +23,8 @@ export function HomeTodoSummary({
   nowMs?: number
 }) {
   const [ledger, setLedger] = useState<LedgerPayload | null>(initialLedger ?? null)
+  const locale = getActiveLocale()
+  const t = tFor(locale)
 
   useEffect(() => {
     if (initialLedger !== undefined) return
@@ -40,20 +44,20 @@ export function HomeTodoSummary({
 
   if (!ledger || !ledger.configured) return null
 
-  const todoItems = sortLedgerCards(ledger.items.filter((i) => i.isTodo)).slice(0, 8)
-  const roleBuckets = summarizeRoles(ledger.items, ledger.roles)
+  const todoItems = sortLedgerCards(ledger.items.filter((i) => i.isTodo), locale).slice(0, 8)
+  const roleBuckets = summarizeRoles(ledger.items, ledger.roles, locale)
 
   return (
     <section
       data-testid="home-todo-summary"
-      aria-label="업무 장부 할 일 요약"
+      aria-label={t("home.todoSectionLabel")}
       className="rounded-lg border border-neutral-800 bg-neutral-950 p-5 space-y-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white">할 일 요약</h2>
+          <h2 className="text-lg font-semibold text-white">{t("home.todoTitle")}</h2>
           <p className="text-xs text-neutral-400 mt-0.5">
-            업무 장부의 진행 중·사람 확인 대기 항목입니다. 기한이 넘은 일부터 보여 줍니다.
+            {t("home.todoDesc")}
           </p>
         </div>
         <Link
@@ -61,7 +65,7 @@ export function HomeTodoSummary({
           data-testid="home-todo-more"
           className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs font-medium text-neutral-200 hover:border-neutral-600 transition-colors"
         >
-          작업 보드 전체 보기
+          {t("home.viewAll")}
           <ArrowRight className="w-3.5 h-3.5" />
         </Link>
       </div>
@@ -71,21 +75,21 @@ export function HomeTodoSummary({
           <div data-testid="home-todo-count" className="text-2xl font-bold text-white">
             {ledger.summary.todoCount}
           </div>
-          <div className="text-xs text-neutral-400 mt-1">할 일 (열림+대기)</div>
+          <div className="text-xs text-neutral-400 mt-1">{t("home.todoCount")}</div>
         </div>
         <div className="rounded-lg border border-rose-900/60 bg-rose-950/20 p-3">
           <div data-testid="home-overdue-count" className="text-2xl font-bold text-rose-300">
             {ledger.summary.overdue}
           </div>
-          <div className="text-xs text-rose-300 mt-1">기한 넘음</div>
+          <div className="text-xs text-rose-300 mt-1">{t("home.overdue")}</div>
         </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
           <div className="text-2xl font-bold text-blue-300">{ledger.summary.open}</div>
-          <div className="text-xs text-neutral-400 mt-1">진행 중</div>
+          <div className="text-xs text-neutral-400 mt-1">{t("home.open")}</div>
         </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
           <div className="text-2xl font-bold text-amber-300">{ledger.summary.waiting_human}</div>
-          <div className="text-xs text-neutral-400 mt-1">사람 확인 대기</div>
+          <div className="text-xs text-neutral-400 mt-1">{t("home.waiting")}</div>
         </div>
       </div>
 
@@ -100,7 +104,7 @@ export function HomeTodoSummary({
               <span className="font-semibold">{rb.role}</span>
               <span className="text-neutral-400">{rb.todoCount}</span>
               {rb.overdueCount > 0 && (
-                <span className="text-rose-300">· 넘음 {rb.overdueCount}</span>
+                <span className="text-rose-300">{formatMessage(t("home.overdueShort"), { count: rb.overdueCount })}</span>
               )}
             </Link>
           ))}
@@ -108,7 +112,7 @@ export function HomeTodoSummary({
       )}
 
       {todoItems.length === 0 ? (
-        <p className="text-xs text-neutral-500 py-2">열려 있는 할 일이 없습니다.</p>
+        <p className="text-xs text-neutral-500 py-2">{t("home.noTodo")}</p>
       ) : (
         <ul className="space-y-2">
           {todoItems.map((item) => {
@@ -131,16 +135,16 @@ export function HomeTodoSummary({
                     <span
                       className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(item.status)}`}
                     >
-                      {LEDGER_STATUS_LABEL[item.status]}
+                      {ledgerStatusLabel(item.status, locale)}
                     </span>
                     {item.overdue && (
                       <span className="inline-flex items-center gap-0.5 rounded-full border border-rose-600/80 bg-rose-950/70 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
                         <AlertTriangle className="w-3 h-3" />
-                        기한 넘음
+                        {t("home.overdue")}
                       </span>
                     )}
                     <span className={`font-mono ${item.overdue ? "text-rose-300 font-semibold" : "text-neutral-400"}`}>
-                      {formatDueLabel(item.due, item.overdue, nowMs)}
+                      {formatDueLabel(item.due, item.overdue, nowMs, "Asia/Seoul", locale)}
                     </span>
                   </div>
                   <div className="text-sm font-medium text-white truncate">{item.title}</div>
@@ -155,7 +159,7 @@ export function HomeTodoSummary({
                       className="inline-flex items-center gap-1 rounded border border-blue-800/70 bg-blue-950/40 px-2 py-1 text-[11px] text-blue-300 hover:bg-blue-900/50"
                     >
                       <ExternalLink className="w-3 h-3" />
-                      원글
+                      {t("home.sourcePost")}
                     </a>
                   )}
                   {firstDoc && firstDoc.href && (

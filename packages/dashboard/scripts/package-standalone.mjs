@@ -55,6 +55,12 @@ ensureDirectory(nextTarget)
 if (!fs.realpathSync(nextTarget).startsWith(output + path.sep)) throw new Error("Next output escapes standalone")
 fs.cpSync(nextPackage, nextTarget, { recursive: true, force: false })
 for (const file of ["server.mjs", "app/docs/tabs.ts"]) copy(path.relative(root, path.join(dashboard, file)))
+// Short-link tab rules run through the zero-dependency dashboard i18n helpers.
+for (const name of fs.readdirSync(path.join(dashboard, "app/i18n"))) {
+  if (name.endsWith(".ts") || name.endsWith(".tsx")) {
+    copy(path.relative(root, path.join(dashboard, "app/i18n", name)))
+  }
+}
 const standaloneDashboard = path.join(output, path.relative(root, dashboard))
 fs.cpSync(path.join(dashboard, ".next/static"), path.join(standaloneDashboard, ".next/static"), { recursive: true })
 const publicDir = path.join(dashboard, "public")

@@ -1,23 +1,30 @@
+"use client"
+
 import React from "react"
 import type { WorkspaceSettingsSnapshot } from "../settings-data.ts"
+import { tFor } from "../../i18n/index.ts"
+import { getActiveLocale } from "../../i18n/provider.tsx"
+import type { Locale } from "../../i18n/types.ts"
 
 export interface LLMSettingsViewProps {
   snapshot: WorkspaceSettingsSnapshot
+  locale?: Locale
 }
 
-export function LLMSettingsView({ snapshot }: LLMSettingsViewProps) {
+export function LLMSettingsView({ snapshot, locale: localeProp }: LLMSettingsViewProps) {
+  const locale = localeProp ?? getActiveLocale()
   const { llm, tierProfile } = snapshot
+  const t = tFor(locale)
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">LLM Settings</h1>
+      <h1 className="text-2xl font-bold">{t("llm.title")}</h1>
       <p className="text-neutral-400 text-sm">
-        Read-only view of model-agnostic LLM provider slots and role bindings. Concrete model selections are
-        bound in workspace configuration files without hardcoding vendor model versions in UI code.
+        {t("llm.desc")}
       </p>
 
       <div data-testid="llm-providers-section">
-        <h2 className="text-lg font-semibold mb-3 text-neutral-300">Provider Slots</h2>
+        <h2 className="text-lg font-semibold mb-3 text-neutral-300">{t("llm.providerSlots")}</h2>
         <div className="space-y-3">
           {llm.providers.map((p) => (
             <div
@@ -60,11 +67,11 @@ export function LLMSettingsView({ snapshot }: LLMSettingsViewProps) {
 
       <div data-testid="llm-role-slots-section">
         <h2 className="text-lg font-semibold mb-3 text-neutral-300">
-          Runtime Role Slots (<code className="text-sm font-mono">{llm.jsonPath}</code>)
+          {t("llm.roleSlots")} (<code className="text-sm font-mono">{llm.jsonPath}</code>)
         </h2>
         <div className="p-4 rounded-lg border border-neutral-800 space-y-2">
           <div className="flex items-center justify-between text-xs mb-2">
-            <span className="text-neutral-400">File Status</span>
+            <span className="text-neutral-400">{t("llm.fileStatus")}</span>
             <span className="font-mono text-neutral-300">
               {llm.jsonExists ? "present" : "missing"}
             </span>
@@ -84,30 +91,30 @@ export function LLMSettingsView({ snapshot }: LLMSettingsViewProps) {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3 text-neutral-300">Configuration Sources</h2>
+        <h2 className="text-lg font-semibold mb-3 text-neutral-300">{t("llm.configSources")}</h2>
         <div className="p-4 rounded-lg border border-neutral-800 space-y-2 text-sm text-neutral-400">
           <div>
-            Default Provider:{" "}
+            {t("llm.defaultProvider")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono text-neutral-200">
-              {llm.defaultProvider ?? "not declared"}
+              {llm.defaultProvider ?? t("llm.notDeclared")}
             </code>
           </div>
           <div>
-            Provider overrides:{" "}
+            {t("llm.providerOverrides")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono">
               {llm.yamlPath}
             </code>{" "}
             ({llm.yamlExists ? "present" : "not present — using defaults"})
           </div>
           <div>
-            Role slot bindings:{" "}
+            {t("llm.roleBindings")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono">
               {llm.jsonPath}
             </code>{" "}
             ({llm.jsonExists ? "present" : "missing"})
           </div>
           <div>
-            Runner tier profile template:{" "}
+            {t("llm.runnerTemplate")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono">
               {tierProfile.examplePath}
             </code>{" "}
@@ -120,16 +127,15 @@ export function LLMSettingsView({ snapshot }: LLMSettingsViewProps) {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3 text-neutral-300">API Keys</h2>
+        <h2 className="text-lg font-semibold mb-3 text-neutral-300">{t("llm.apiKeys")}</h2>
         <div className="p-4 rounded-lg border border-neutral-800 text-sm text-neutral-400">
           <p>
-            API keys are stored in{" "}
+            {t("llm.apiKeysDesc")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">data-private/.env</code>{" "}
-            (gitignored) or process environment variables referenced by{" "}
-            <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">apiKeyEnv</code>.
+            (gitignored) + process env <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">apiKeyEnv</code>
           </p>
           <p className="mt-1 text-neutral-500">
-            Secrets are never read or displayed by the Settings inspector.
+            {t("llm.apiKeysSecret")}
           </p>
         </div>
       </div>

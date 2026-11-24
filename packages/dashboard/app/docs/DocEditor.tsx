@@ -2,11 +2,12 @@
 
 import React, { useEffect, useState } from "react"
 import {
+  docsMessage,
   mapDocSaveError,
-  MSG_ARCHIVED_DOC,
-  MSG_CONFIRM_DISCARD,
-  MSG_SAVED_DOC,
 } from "./kinds"
+import { getDict, tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
+import type { Locale } from "../i18n/types.ts"
 
 export interface SaveDocRequest {
   source: string
@@ -14,6 +15,7 @@ export interface SaveDocRequest {
   content: string
   baseHash: string
   fetchFn?: typeof fetch
+  locale?: Locale
 }
 
 export interface SaveDocResponse {
@@ -29,6 +31,7 @@ export interface SaveDocResponse {
 // PUT 본문에 { content, baseHash } 만 보내고, If-Match 헤더는 보내지 않는다.
 export async function saveDocument(req: SaveDocRequest): Promise<SaveDocResponse> {
   const fetcher = req.fetchFn ?? fetch
+  const locale = req.locale ?? "ko"
   const url = `/api/portal/doc?source=${encodeURIComponent(req.source)}&path=${encodeURIComponent(req.path)}`
 
   try {
@@ -61,7 +64,7 @@ export async function saveDocument(req: SaveDocRequest): Promise<SaveDocResponse
         ok: false,
         status: 409,
         conflict: true,
-        error: mapDocSaveError(409, json),
+        error: mapDocSaveError(409, json, locale),
       }
     }
 
@@ -70,20 +73,20 @@ export async function saveDocument(req: SaveDocRequest): Promise<SaveDocResponse
         ok: false,
         status: 403,
         forbidden: true,
-        error: mapDocSaveError(403, json),
+        error: mapDocSaveError(403, json, locale),
       }
     }
 
     return {
       ok: false,
       status: res.status,
-      error: mapDocSaveError(res.status, json),
+      error: mapDocSaveError(res.status, json, locale),
     }
   } catch (err: unknown) {
     return {
       ok: false,
       status: 0,
-      error: "네트워크 오류로 문서를 저장하지 못했습니다.",
+      error: getDict(locale)["docs.editorNetworkFailed"],
     }
   }
 }
@@ -115,6 +118,8 @@ export function DocEditor({
   onCancel,
   renderPreview,
 }: DocEditorProps) {
+  const locale = getActiveLocale()
+  const t = tFor(locale)
   const [localContent, setLocalContent] = useState(initialContent)
   const content = propContent !== undefined ? propContent : localContent
   const [currentBaseHash, setCurrentBaseHash] = useState(initialBaseHash)
@@ -135,8 +140,8 @@ export function DocEditor({
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
-      e.returnValue = MSG_CONFIRM_DISCARD
-      return MSG_CONFIRM_DISCARD
+      e.returnValue = t("docs.discardConfirm")
+      return t("docs.discardConfirm")
     }
 
     window.addEventListener("beforeunload", handleBeforeUnload)
@@ -146,7 +151,7 @@ export function DocEditor({
   // [취소] 클릭 시 변경 확인
   const handleCancelClick = () => {
     if (isDirty) {
-      if (typeof window !== "undefined" && !window.confirm(MSG_CONFIRM_DISCARD)) {
+      if (typeof window !== "undefined" && !window.confirm(t("docs.discardConfirm"))) {
         return
       }
     }
@@ -164,16 +169,17 @@ export function DocEditor({
       path,
       content,
       baseHash: currentBaseHash,
+      locale,
     })
 
     setSaving(false)
 
     if (result.ok && result.sha256) {
       setCurrentBaseHash(result.sha256)
-      setMessage({ text: MSG_SAVED_DOC, type: "success" })
+      setMessage({ text: docsMessage("docs.saved", locale), type: "success" })
       onSaveSuccess?.(content, result.sha256)
     } else {
-      setMessage({ text: result.error || "문서를 저장하지 못했습니다.", type: "error" })
+      setMessage({ text: result.error || t("docs.editorSaveFailed"), type: "error" })
     }
   }
 
@@ -182,7 +188,7 @@ export function DocEditor({
       {/* 보관 문서 표시 (SP-04) */}
       {isArchived && (
         <div className="px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-400 font-medium">
-          {MSG_ARCHIVED_DOC}
+          {t("docs.archivedDoc")}
         </div>
       )}
 
@@ -209,7 +215,7 @@ export function DocEditor({
               mobileTab === "editor" ? "bg-neutral-800 text-white font-medium" : "text-neutral-400 hover:text-white"
             }`}
           >
-            원문
+            {t("docs.originalTab")}
           </button>
           <button
             type="button"
@@ -218,7 +224,7 @@ export function DocEditor({
               mobileTab === "preview" ? "bg-neutral-800 text-white font-medium" : "text-neutral-400 hover:text-white"
             }`}
           >
-            미리보기
+            {t("docs.previewTab")}
           </button>
         </div>
       </div>
@@ -231,7 +237,7 @@ export function DocEditor({
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             disabled={saving}
-            placeholder="마크다운 문서 내용을 입력하세요..."
+            placeholder={t("docs.editorPlaceholder")}
             className="w-full h-[600px] p-4 rounded-lg bg-neutral-950 border border-neutral-800 text-xs font-mono text-neutral-200 focus:outline-none focus:border-neutral-600 resize-y leading-relaxed disabled:opacity-50"
           />
         </div>
@@ -258,7 +264,7 @@ export function DocEditor({
           disabled={saving}
           className="px-4 py-2 rounded-md bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 text-xs font-medium text-neutral-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          취소
+          {t("common.cancel")}
         </button>
         <button
           type="button"
@@ -266,7 +272,7 @@ export function DocEditor({
           disabled={saving}
           className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? "저장 중..." : "저장"}
+          {saving ? t("common.saving") : t("common.save")}
         </button>
       </div>
     </div>

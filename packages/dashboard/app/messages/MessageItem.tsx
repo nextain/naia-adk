@@ -11,11 +11,12 @@ import {
   docLinkKey,
   formatBytes,
   formatMessageTime,
-  MSG,
+  getMessengerStrings,
   parseApprovalForm,
   REACTION_EMOJIS,
   type Message,
 } from "./messenger"
+import { getActiveLocale } from "../i18n/provider.tsx"
 
 export interface MessageActions {
   onReact?: (m: Message, emoji: string) => void
@@ -51,6 +52,7 @@ function Avatar({ id, kind }: { id: string; kind: "human" | "agent" }) {
 }
 
 export function ReactionBar({ message, onReact }: { message: Message; onReact?: (m: Message, emoji: string) => void }) {
+  const S = getMessengerStrings(getActiveLocale())
   const [picker, setPicker] = useState(false)
   const shown = message.reactions.filter((r) => r.count > 0)
   return (
@@ -61,7 +63,7 @@ export function ReactionBar({ message, onReact }: { message: Message; onReact?: 
           type="button"
           data-testid="msg-reaction"
           aria-pressed={r.mine}
-          title={r.mine ? "내 반응 지우기" : "반응 더하기"}
+          title={r.mine ? S.removeReaction : S.addReaction}
           onClick={() => onReact?.(message, r.emoji)}
           className={`px-1.5 py-0.5 rounded-full border text-xs leading-5 transition-colors ${
             r.mine ? "border-blue-700 bg-blue-950/60 text-blue-200" : "border-neutral-800 bg-neutral-900 text-neutral-300 hover:border-neutral-600"
@@ -75,7 +77,7 @@ export function ReactionBar({ message, onReact }: { message: Message; onReact?: 
         <button
           type="button"
           data-testid="msg-reaction-add"
-          aria-label="반응 고르기"
+          aria-label={S.pickReaction}
           aria-expanded={picker}
           onClick={() => setPicker((v) => !v)}
           className={`p-1 rounded-full text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900 transition-colors ${
@@ -118,6 +120,8 @@ export function ApprovalCard({
   onDecide?: MessageActions["onDecide"]
   onOpenDoc?: (key: string) => void
 }) {
+  const locale = getActiveLocale()
+  const S = getMessengerStrings(locale)
   const approval = message.approval!
   const form = parseApprovalForm(message.body, approval)
   const [busy, setBusy] = useState(false)
@@ -125,7 +129,7 @@ export function ApprovalCard({
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle")
   const docKey = form.docUrl ? docLinkKey(form.docUrl) : null
   const status = approval.status
-  const statusLabel = status === "approved" ? MSG.approvalApproved : status === "rejected" ? MSG.approvalRejected : MSG.approvalPending
+  const statusLabel = status === "approved" ? S.approvalApproved : status === "rejected" ? S.approvalRejected : S.approvalPending
   const statusClass =
     status === "approved"
       ? "bg-emerald-950/60 border-emerald-800 text-emerald-300"
@@ -148,9 +152,9 @@ export function ApprovalCard({
     <div data-testid="approval-card" data-status={status} className="dashboard-card mt-1 rounded-lg border border-neutral-800 bg-neutral-900/70 p-3 sm:p-4 max-w-2xl">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs text-neutral-500 mb-0.5">승인 요청</div>
+          <div className="text-xs text-neutral-500 mb-0.5">{S.approvalRequest}</div>
           <div data-testid="approval-title" className="font-semibold text-neutral-100 break-words">
-            {form.title || "제목 없음"}
+            {form.title || S.noTitle}
           </div>
         </div>
         <span data-testid="approval-status" className={`shrink-0 px-2 py-0.5 rounded-full border text-xs ${statusClass}`}>
@@ -197,7 +201,7 @@ export function ApprovalCard({
                 onClick={() => decide("approve")}
                 className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50 transition-colors"
               >
-                {MSG.approve}
+                {S.approve}
               </button>
               <button
                 type="button"
@@ -206,7 +210,7 @@ export function ApprovalCard({
                 onClick={() => decide("reject")}
                 className="px-3 py-1.5 rounded-md border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-sm font-medium disabled:opacity-50 transition-colors"
               >
-                {MSG.reject}
+                {S.reject}
               </button>
             </>
           )}
@@ -221,19 +225,19 @@ export function ApprovalCard({
               }}
               className="px-3 py-1.5 rounded-md border border-neutral-800 bg-neutral-950 hover:bg-neutral-800 text-neutral-300 text-sm transition-colors"
             >
-              {copy === "copied" ? MSG.copied : copy === "failed" ? MSG.copyFailed : MSG.copyCode}
+              {copy === "copied" ? S.copied : copy === "failed" ? S.copyFailed : S.copyCode}
             </button>
           )}
         </div>
       )}
       {status !== "pending" && approval.decided_by && (
         <div className="mt-2 text-xs text-neutral-500">
-          {authorLabel(approval.decided_by)} · {approval.decided_at ? formatMessageTime(approval.decided_at) : ""}
+          {authorLabel(approval.decided_by)} · {approval.decided_at ? formatMessageTime(approval.decided_at, new Date(), locale) : ""}
         </div>
       )}
       {error && (
         <div role="status" className="mt-2 text-xs text-red-400">
-          {MSG.approvalFailed}
+          {S.approvalFailed}
         </div>
       )}
     </div>
@@ -254,6 +258,8 @@ export function MessageItem({
   onDecide,
   onAddToSchedule,
 }: MessageItemProps) {
+  const locale = getActiveLocale()
+  const S = getMessengerStrings(locale)
   const addToSchedule = viewerKind === "human" ? onAddToSchedule : undefined
   return (
     <article
@@ -269,10 +275,10 @@ export function MessageItem({
         <div className="flex items-baseline gap-2 flex-wrap">
           <span className="text-sm font-semibold text-neutral-100">{messageAuthorLabel(message)}</span>
           {message.author_kind === "agent" && (
-            <span className="px-1.5 rounded bg-sky-950/70 border border-sky-800/70 text-[10px] leading-4 text-sky-300">{MSG.agent}</span>
+            <span className="px-1.5 rounded bg-sky-950/70 border border-sky-800/70 text-[10px] leading-4 text-sky-300">{S.agent}</span>
           )}
           <time dateTime={message.created_at} className="text-xs text-neutral-500">
-            {formatMessageTime(message.created_at, now)}
+            {formatMessageTime(message.created_at, now, locale)}
           </time>
         </div>
         {message.approval ? (
@@ -312,7 +318,7 @@ export function MessageItem({
               className="mt-1 inline-flex items-center gap-1 text-xs text-blue-300 hover:text-blue-200"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              {MSG.replies(replyCount)}
+              {S.replies(replyCount)}
             </button>
           )}
         </div>
@@ -323,8 +329,8 @@ export function MessageItem({
             <button
               type="button"
               data-testid="msg-add-schedule"
-              title={MSG.addToSchedule}
-              aria-label={MSG.addToSchedule}
+              title={S.addToSchedule}
+              aria-label={S.addToSchedule}
               onClick={() => addToSchedule(message)}
               className="p-1 rounded-md text-neutral-500 hover:text-emerald-200 hover:bg-neutral-800"
             >
@@ -335,8 +341,8 @@ export function MessageItem({
           <button
             type="button"
             data-testid="msg-reply"
-            title={MSG.reply}
-            aria-label={MSG.reply}
+            title={S.reply}
+            aria-label={S.reply}
             onClick={() => onReply(message)}
             className="p-1 rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
           >

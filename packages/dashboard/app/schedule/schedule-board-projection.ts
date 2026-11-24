@@ -1,4 +1,6 @@
 import { localDateOnly, daysBetweenDates, MAX_WORK_DOCUMENT_TASKS, MAX_TASK_TEXT_LENGTH, MAX_QUEUE_DESCRIPTION_LENGTH, type TaskStatusBadge } from "./schedule-calendar-base"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
 
 // ── 작업보드 스냅숏 → 작업 일정 & 마일스톤 추출 ──────────────────────────────
 
@@ -101,12 +103,17 @@ export function isTaskDoneStatus(status: unknown): boolean {
  * - 대기/todo/pending/예정/보류/blocked/(빈 값) → "대기"
  * - 그 밖 → "미완료"
  */
-export function taskStatusBadge(status: unknown): TaskStatusBadge {
+export function taskStatusBadge(status: unknown): TaskStatusBadge
+export function taskStatusBadge(status: unknown, locale: Locale): string
+export function taskStatusBadge(status: unknown, locale: Locale = "ko"): TaskStatusBadge | string {
   const normalized = String(status ?? "")
     .trim()
     .toLowerCase()
-  if (!normalized) return "대기"
-  if (isTaskDoneStatus(normalized)) return "완료"
+  const dict = locale === "en" ? getDict("en") : null
+  const pick = (ko: TaskStatusBadge, key: "sched.taskBadgeDone" | "sched.taskBadgeProgress" | "sched.taskBadgeWaiting" | "sched.taskBadgeTodo"): TaskStatusBadge | string =>
+    dict ? dict[key] : ko
+  if (!normalized) return pick("대기", "sched.taskBadgeWaiting")
+  if (isTaskDoneStatus(normalized)) return pick("완료", "sched.taskBadgeDone")
   if (
     normalized.startsWith("진행") ||
     normalized.startsWith("doing") ||
@@ -115,7 +122,7 @@ export function taskStatusBadge(status: unknown): TaskStatusBadge {
     normalized.startsWith("in_progress") ||
     normalized.startsWith("working")
   ) {
-    return "진행"
+    return pick("진행", "sched.taskBadgeProgress")
   }
   if (
     normalized.startsWith("대기") ||
@@ -127,9 +134,9 @@ export function taskStatusBadge(status: unknown): TaskStatusBadge {
     normalized.startsWith("보류") ||
     normalized.startsWith("blocked")
   ) {
-    return "대기"
+    return pick("대기", "sched.taskBadgeWaiting")
   }
-  return "미완료"
+  return pick("미완료", "sched.taskBadgeTodo")
 }
 
 /**
@@ -230,10 +237,11 @@ function isQueueEntryComplete(entry: Record<string, unknown>, schedule: Record<s
  * 작업보드(/api/snapshot) 응답에서 그룹(작업) 일정(날짜 있는 항목·날짜 없는 항목)과 마일스톤을 추출한다.
  * board/index.html 의 scheduleEntries / renderSchedule 규칙과 1:1 동등하게 동작한다.
  */
-export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string): BoardScheduleProjection {
+export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string, locale: Locale = "ko"): BoardScheduleProjection {
   const s = (snapshot && typeof snapshot === "object" ? snapshot : {}) as Record<string, unknown>
   const observedAt = typeof s.observedAt === "string" ? s.observedAt : null
   const todayDate = fallbackToday ?? localDateOnly(observedAt) ?? localDateOnly(new Date()) ?? "2000-01-01"
+  const untitled = getDict(locale)["sched.untitled"]
 
   const allEntries: WorkScheduleItem[] = []
   const rawItems = Array.isArray(s.items) ? s.items : []
@@ -248,7 +256,7 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string):
     >
 
     const id = String(itemObj.id || itemObj.issue || itemObj.title || "unknown")
-    const title = String(itemObj.title || itemObj.id || "제목 없음")
+    const title = String(itemObj.title || itemObj.id || untitled)
     const issue = typeof itemObj.issue === "string" ? itemObj.issue : ""
     const status = typeof entry.status === "string" ? entry.status : "unknown"
     const cancelled = entry.cancelled === true
@@ -323,7 +331,7 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string):
 
     const sched = (doc.schedule && typeof doc.schedule === "object" ? doc.schedule : {}) as Record<string, unknown>
     const id = String(doc.id || doc.path || "document")
-    const title = String(doc.title || doc.id || "제목 없음")
+    const title = String(doc.title || doc.id || untitled)
     const status = typeof doc.status === "string" ? doc.status : "unknown"
     const completed = sched.completed === true || COMPLETE_STATUS_SET.has(status.trim().toLowerCase())
     const startDate = localDateOnly(sched.startAt)
@@ -412,7 +420,7 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string):
         overdue,
       }
     })
-    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ko"))
+    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, locale))
 
   return {
     observedAt,
@@ -459,21 +467,22 @@ function sanitizeLedgerItemId(rawId: unknown): string | null {
   return cleaned && SAFE_SCHEDULE_LOCAL_ID_RE.test(cleaned) ? cleaned : null
 }
 
-function formatLedgerStatusLabel(rawStatus: unknown): string {
+export function formatLedgerStatusLabel(rawStatus: unknown, locale: Locale = "ko"): string {
   const status = typeof rawStatus === "string" ? rawStatus.trim() : ""
+  const dict = getDict(locale)
   switch (status) {
     case "open":
-      return "진행 중"
+      return dict["sched.statusInProgress"]
     case "waiting_human":
-      return "확인 대기"
+      return dict["sched.statusReview"]
     case "escalated_human":
-      return "사람 개입"
+      return dict["sched.statusEscalated2"]
     case "done":
-      return "완료"
+      return dict["sched.statusDone2"]
     case "dropped":
-      return "제외"
+      return dict["sched.statusDropped2"]
     default:
-      return truncateText(status, MAX_TASK_TEXT_LENGTH) || "미확인"
+      return truncateText(status, MAX_TASK_TEXT_LENGTH) || dict["sched.statusUnknown"]
   }
 }
 

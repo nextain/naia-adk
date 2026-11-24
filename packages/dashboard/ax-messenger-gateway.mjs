@@ -47,12 +47,39 @@ const AX_KIND_STATUS = {
   unknown: 502,
 }
 
+/** Machine-readable error code for a gateway failure (mirrors ax.err.* keys). */
+export function codeFromGatewayError(error) {
+  if (error?.errcode === 'M_USER_IN_USE' || error?.kind === 'duplicate') {
+    return 'user-in-use'
+  }
+  if (typeof error?.kind === 'string' && error.kind) {
+    return error.kind
+  }
+  if (error?.errcode === 'M_FORBIDDEN' || error?.status === 403) {
+    return 'no-permission'
+  }
+  if (error?.status === 401) {
+    return 'login-required'
+  }
+  if (error?.status === 400) {
+    return 'bad-request'
+  }
+  if (error?.status === 413) {
+    return 'too-large'
+  }
+  return 'server'
+}
+
 function statusFromGatewayError(error) {
-  if (error?.errcode === 'M_USER_IN_USE' || (typeof error?.userMessage === 'string' && error.userMessage.includes('이미 사용 중'))) {
+  if (error?.errcode === 'M_USER_IN_USE' || error?.kind === 'duplicate') {
     return 409
   }
   if (typeof error?.kind === 'string' && Object.hasOwn(AX_KIND_STATUS, error.kind)) {
     return AX_KIND_STATUS[error.kind]
+  }
+  // Legacy string fallback (kept last): older providers only surface a Korean message.
+  if (typeof error?.userMessage === 'string' && error.userMessage.includes('이미 사용 중')) {
+    return 409
   }
   if (error?.status === 400 || error?.status === 413) return error.status
   return 500
@@ -69,10 +96,42 @@ async function readJson(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw Object.assign(new Error('Invalid request'), { status: 400 }) }
 }
 
+const ERROR_CODE_BY_MESSAGE = {
+  '메신저 서버가 종료되었습니다.': 'service-stopped',
+  '메신저 설정을 읽지 못했습니다.': 'config-error',
+  '메신저가 꺼져 있습니다.': 'messenger-off',
+  '로그인이 필요합니다.': 'login-required',
+  '메신저 접근 권한이 없습니다.': 'no-permission',
+  '요청 출처를 확인해 주세요.': 'origin-not-allowed',
+  '요청을 확인해 주세요.': 'bad-request',
+  '연결할 계정을 확인해 주세요.': 'account-mismatch',
+  '메신저 접근 권한이 변경되었습니다.': 'permission-changed',
+  '관리 기능은 연결되지 않았습니다.': 'admin-disabled',
+  'Matrix 로그인이 필요합니다.': 'login-required',
+  '대화방 접근 권한이 없습니다.': 'room-denied',
+  '메시지를 입력해 주세요.': 'message-required',
+  '요청한 경로가 없습니다.': 'route-not-found',
+  '요청을 처리하지 못했습니다.': 'server',
+  '전송에 실패했습니다.': 'server',
+  '연결에 실패했습니다.': 'matrix-conn',
+  'Matrix 인증에 실패했습니다.': 'matrix-auth',
+  'Matrix 접근 권한이 없습니다.': 'no-permission',
+  '이미 처리된 요청입니다.': 'duplicate',
+  '요청이 너무 큽니다.': 'too-large',
+  '요청이 많아 잠시 막혔습니다. 잠시 뒤 다시 시도해 주세요.': 'rate-limited',
+  '메신저 요청을 처리하지 못했습니다.': 'server',
+  'Matrix 연결에 실패했습니다.': 'matrix-conn',
+}
+
 function respond(res, status, data) {
   res.statusCode = status
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.setHeader('cache-control', 'no-store')
+  // Every JSON error carries a stable machine-readable `code` so the dashboard
+  // can localize it (`ax.err.*`) instead of showing raw Korean banners.
+  if (data && typeof data === 'object' && typeof data.error === 'string' && !data.code) {
+    data = { ...data, code: ERROR_CODE_BY_MESSAGE[data.error] ?? codeFromGatewayError({ status }) ?? 'server' }
+  }
   res.end(JSON.stringify(data))
 }
 
@@ -168,7 +227,7 @@ export function createAxMessengerHandler({
       const message = error?.name === 'AxMessengerError' && typeof error.userMessage === 'string' && error.userMessage
         ? error.userMessage
         : ERROR_BY_STATUS[status]
-      return respond(res, status, { error: message })
+      return respond(res, status, { error: message, code: codeFromGatewayError(error) })
     }
   }
   handle.close = () => {

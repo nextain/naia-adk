@@ -8,10 +8,11 @@ import { DocPreview } from "./DocPreview"
 import { MessageItem } from "./MessageItem"
 import { ScheduleAddPanel } from "./ScheduleAddPanel"
 import {
-  alertText,
+  alertTextFor,
   applyStreamEvent,
   channelLabel,
   decideApproval,
+  getMessengerStrings,
   loadAlerts,
   loadChannels,
   loadRoles,
@@ -21,7 +22,6 @@ import {
   markRead,
   messagesHref,
   messengerUrl,
-  MSG,
   optimisticReaction,
   postMessage,
   reconnectDelay,
@@ -37,6 +37,7 @@ import {
   type MessengerState,
   type StreamEventType,
 } from "./messenger"
+import { getActiveLocale } from "../i18n/provider.tsx"
 
 const STREAM_EVENTS: StreamEventType[] = ["message", "attachment", "reaction", "read", "approval", "alert"]
 const PAGE_SIZE = 50
@@ -145,6 +146,8 @@ export function AlertBanner({
   onOpen: (a: MessengerAlert) => void
   onDismiss: (a: MessengerAlert) => void
 }) {
+  const locale = getActiveLocale()
+  const S = getMessengerStrings(locale)
   if (alerts.length === 0) return null
   const shown = alerts.slice(0, 3)
   return (
@@ -152,8 +155,8 @@ export function AlertBanner({
       {shown.map((a) => (
         <div key={`${a.message_id}-${a.target_id ?? ""}`} className="flex items-center gap-2 px-3 sm:px-4 py-1.5 text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0" />
-          <span className="font-semibold shrink-0 max-sm:hidden">{MSG.alertTitle}</span>
-          <span className="min-w-0 flex-1 truncate">{alertText(a, channels)}</span>
+          <span className="font-semibold shrink-0 max-sm:hidden">{S.alertTitle}</span>
+          <span className="min-w-0 flex-1 truncate">{alertTextFor(a, channels, locale)}</span>
           {a.channel_id && (
             <button
               type="button"
@@ -161,15 +164,15 @@ export function AlertBanner({
               onClick={() => onOpen(a)}
               className="shrink-0 px-2 py-0.5 rounded-md border border-white/60 bg-white/15 hover:bg-white/30 text-xs font-medium"
             >
-              {MSG.alertOpen}
+              {S.alertOpen}
             </button>
           )}
-          <button type="button" aria-label="이 알림 숨기기" onClick={() => onDismiss(a)} className="shrink-0 p-0.5 rounded hover:bg-white/20">
+          <button type="button" aria-label={S.dismissAlert} onClick={() => onDismiss(a)} className="shrink-0 p-0.5 rounded hover:bg-white/20">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
       ))}
-      {alerts.length > shown.length && <div className="px-4 pb-1.5 text-xs text-rose-100">외 {alerts.length - shown.length}건</div>}
+      {alerts.length > shown.length && <div className="px-4 pb-1.5 text-xs text-rose-100">{S.moreAlerts(alerts.length - shown.length)}</div>}
     </div>
   )
 }
@@ -183,12 +186,13 @@ export function ChannelList({
   activeId: string | null
   onSelect: (c: Channel) => void
 }) {
+  const S = getMessengerStrings(getActiveLocale())
   const groups: Array<{ title: string; items: Channel[] }> = [
-    { title: MSG.channels, items: channels.filter((c) => c.kind !== "dm") },
-    { title: MSG.dms, items: channels.filter((c) => c.kind === "dm") },
+    { title: S.channels, items: channels.filter((c) => c.kind !== "dm") },
+    { title: S.dms, items: channels.filter((c) => c.kind === "dm") },
   ]
   return (
-    <nav aria-label="채널 목록" data-testid="channel-list" className="py-2">
+    <nav aria-label={S.channelList} data-testid="channel-list" className="py-2">
       {groups.map((g) =>
         g.items.length === 0 ? null : (
           <div key={g.title} className="mb-3">
@@ -267,21 +271,22 @@ export function ThreadPanel({
   onUpload,
   draftControl,
 }: ThreadPanelProps) {
+  const S = getMessengerStrings(getActiveLocale())
   return (
-    <section data-testid="thread-panel" aria-label={MSG.thread} className="flex h-full min-h-0 flex-col bg-neutral-950">
+    <section data-testid="thread-panel" aria-label={S.thread} className="flex h-full min-h-0 flex-col bg-neutral-950">
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-neutral-100">{MSG.thread}</div>
+          <div className="text-sm font-semibold text-neutral-100">{S.thread}</div>
           {activeChannel && <div className="text-xs text-neutral-500">{channelLabel(activeChannel)}</div>}
         </div>
-        <button type="button" aria-label={MSG.closePanel} onClick={onClose} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-900">
+        <button type="button" aria-label={S.closePanel} onClick={onClose} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-900">
           <X className="w-4 h-4" />
         </button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto py-2">
         <MessageItem message={threadRoot} now={now} compact {...actions} onReply={undefined} />
         <div className="mx-4 my-1 flex items-center gap-2 text-xs text-neutral-500">
-          <span>{MSG.replies(threadReplies.length)}</span>
+          <span>{S.replies(threadReplies.length)}</span>
           <span className="h-px flex-1 bg-neutral-800" />
         </div>
         {threadReplies.map((m) => (
@@ -291,7 +296,7 @@ export function ThreadPanel({
       <Composer
         key={threadRoot.id}
         testId="thread-composer"
-        placeholder="스레드에 답글 쓰기"
+        placeholder={S.threadReplyPlaceholder}
         draftControl={draftControl}
         onSend={onSend}
         onUpload={onUpload}
@@ -309,6 +314,8 @@ export function MessengerView({
   disableStream = false,
   now,
 }: MessengerViewProps) {
+  const locale = getActiveLocale()
+  const S = getMessengerStrings(locale)
   const f = fetchFn ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   const [state, setState] = useState<MessengerState>(initialState ?? { channels: [], messages: {}, alerts: [] })
   const [activeId, setActiveId] = useState<string | null>(initialChannelId ?? null)
@@ -591,9 +598,9 @@ export function MessengerView({
           data-testid="messenger-sidebar"
           className={`${showListOnly ? "flex w-full" : "hidden"} sm:flex sm:w-60 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950 min-h-0`}
         >
-          <div className="px-3 pt-3 pb-1 text-base font-bold text-white">{MSG.title}</div>
+          <div className="px-3 pt-3 pb-1 text-base font-bold text-white">{S.title}</div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {channelsError && <p className="px-3 py-2 text-xs text-red-300">{MSG.channelsFailed}</p>}
+            {channelsError && <p className="px-3 py-2 text-xs text-red-300">{S.channelsFailed}</p>}
             <ChannelList channels={state.channels} activeId={activeId} onSelect={(c) => selectChannel(c)} />
           </div>
         </aside>
@@ -603,7 +610,7 @@ export function MessengerView({
             <button
               type="button"
               data-testid="messenger-back"
-              aria-label={MSG.backToList}
+              aria-label={S.backToList}
               onClick={() => {
                 setActiveId(null)
                 setPanel((p) => (p?.kind === "thread" ? null : p))
@@ -618,11 +625,11 @@ export function MessengerView({
             </h1>
             <span
               data-testid="messenger-stream-status"
-              title={status === "live" ? MSG.live : MSG.reconnecting}
+              title={status === "live" ? S.live : S.reconnecting}
               className={`ml-auto inline-flex items-center gap-1.5 text-xs ${status === "live" ? "text-neutral-500" : "text-amber-300"}`}
             >
               <span className={`w-2 h-2 rounded-full ${status === "live" ? "bg-emerald-500" : "bg-amber-400 animate-pulse"}`} />
-              <span className={status === "live" ? "max-sm:hidden" : ""}>{status === "live" ? MSG.live : MSG.reconnecting}</span>
+              <span className={status === "live" ? "max-sm:hidden" : ""}>{status === "live" ? S.live : S.reconnecting}</span>
             </span>
           </header>
 
@@ -638,14 +645,14 @@ export function MessengerView({
             {activeId && hasMore[activeId] && (
               <div className="flex justify-center py-1">
                 <button type="button" onClick={loadOlder} className="px-3 py-1 rounded-md text-xs text-neutral-400 hover:text-white hover:bg-neutral-900">
-                  이전 글 더 보기
+                  {S.loadMore}
                 </button>
               </div>
             )}
-            {loadState === "loading" && messages.length === 0 && <p className="px-4 py-6 text-sm text-neutral-400">{MSG.loading}</p>}
-            {loadState === "error" && <p className="px-4 py-2 text-sm text-red-300">{MSG.loadFailed}</p>}
+            {loadState === "loading" && messages.length === 0 && <p className="px-4 py-6 text-sm text-neutral-400">{S.loading}</p>}
+            {loadState === "error" && <p className="px-4 py-2 text-sm text-red-300">{S.loadFailed}</p>}
             {loadState !== "loading" && activeId && messages.length === 0 && loadState !== "error" && (
-              <p className="px-4 py-6 text-sm text-neutral-500">{MSG.empty}</p>
+              <p className="px-4 py-6 text-sm text-neutral-500">{S.empty}</p>
             )}
             {roots.map((m) => (
               <MessageItem
@@ -662,7 +669,7 @@ export function MessengerView({
           {activeChannel && (
             <Composer
               key={activeChannel.id}
-              placeholder={MSG.placeholder(channelLabel(activeChannel).replace("# ", "#"))}
+              placeholder={S.placeholder(channelLabel(activeChannel).replace("# ", "#"))}
               onSend={(body, ids) => send(body, ids, null)}
               onUpload={upload}
             />
@@ -678,7 +685,7 @@ export function MessengerView({
                 max={900}
                 defaultValue={440}
                 mode="right-px"
-                ariaLabel="오른쪽 창 너비"
+                ariaLabel={S.rightPaneWidth}
                 onChange={(v) => {
                   setSideWidth(v)
                   window.localStorage.setItem(SIDE_WIDTH_KEY, String(v))

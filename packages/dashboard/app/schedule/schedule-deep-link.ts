@@ -1,6 +1,8 @@
 // /schedule?item=<layer>:<id>&date=YYYY-MM-DD (messenger reminders, "일정에 넣기" result) opens that item's detail.
 import { parseScheduleDetailSearch, type ScheduleLinkTarget } from "@naia-adk/core/src/schedule-link"
 import type { CalendarCellEvent, CalendarDayCell, ScheduleDisplayMode, WorkScheduleFilter } from "./schedule-calendar"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
 
 export type { ScheduleLinkTarget }
 
@@ -39,6 +41,10 @@ export function findLinkedEvent(cells: CalendarDayCell[], target: ScheduleLinkTa
 }
 
 export const DEEP_LINK_MISSING_NOTICE = "일정을 찾지 못했습니다. 지워졌거나 지금 볼 수 없는 일정입니다."
+
+export function deepLinkMissingNotice(locale: Locale = "ko"): string {
+  return getDict(locale)["sched.deepLinkMissing"]
+}
 
 export type DeepLinkLookup =
   | { status: "wait" }

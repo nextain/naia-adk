@@ -15,8 +15,6 @@ import {
 import {
   determineDocViewMode,
   inferKindFromPath,
-  MSG_FORBIDDEN,
-  MSG_SAVED_DOC,
   type DocNoteItem,
   type FavoriteItem,
   type FileKind,
@@ -25,6 +23,8 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
+import { tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
 import type { LedgerCardItem } from "../work/work-ledger-view"
 
 interface PortalResponse {
@@ -35,6 +35,8 @@ interface PortalResponse {
 function DocsViewer() {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const locale = getActiveLocale()
+  const t = tFor(locale)
 
   const sourceParam = searchParams.get("source")
   const pathParam = searchParams.get("path")
@@ -75,6 +77,7 @@ function DocsViewer() {
     return canNavigateWithDiscardConfirm({
       isDirty,
       targetHref,
+      locale,
       confirmFn: (msg) => (typeof window !== "undefined" ? window.confirm(msg) : true),
       navigateFn: (url) => {
         setIsEditing(false)
@@ -139,7 +142,7 @@ function DocsViewer() {
     setPortalStatus("loading")
     fetch("/api/portal")
       .then((res) => {
-        if (!res.ok) throw new Error("포털 정보를 불러오지 못했습니다")
+        if (!res.ok) throw new Error(t("docs.portalFailed"))
         return res.json()
       })
       .then((data: PortalResponse) => {
@@ -263,6 +266,7 @@ function DocsViewer() {
       source: sourceParam,
       path: pathParam,
       sources,
+      locale,
     })
       .then((state) => {
         if (canceled) return
@@ -280,7 +284,7 @@ function DocsViewer() {
       })
       .catch((err) => {
         if (canceled) return
-        setDocError(err?.message || "데이터를 불러오지 못했습니다")
+        setDocError(err?.message || t("docs.dataFailed"))
         setDocLoading(false)
       })
 
@@ -368,30 +372,30 @@ function DocsViewer() {
   const handleToggleFavorite = async () => {
     if (!sourceParam) return
     if (forbidden) {
-      setStarError(MSG_FORBIDDEN)
+      setStarError(t("docs.forbidden"))
       return
     }
     setStarError(null)
     const currentP = pathParam || ""
     if (isFavorite) {
-      const res = await removeFavorite({ source: sourceParam, path: currentP })
+      const res = await removeFavorite({ source: sourceParam, path: currentP, locale })
       if (res.ok) refreshFavorites()
-      else setStarError(res.error || "즐겨찾기에서 빼지 못했습니다.")
+      else setStarError(res.error || t("docs.favRemoveFailed"))
     } else {
-      const res = await addFavorite({ source: sourceParam, path: currentP })
+      const res = await addFavorite({ source: sourceParam, path: currentP, locale })
       if (res.ok) refreshFavorites()
-      else setStarError(res.error || "즐겨찾기에 추가하지 못했습니다.")
+      else setStarError(res.error || t("docs.favAddFailed"))
     }
   }
 
   const handleRemoveFavorite = async (src: string, p: string) => {
     setGroupFavoriteError(null)
-    const res = await removeFavorite({ source: src, path: p })
+    const res = await removeFavorite({ source: src, path: p, locale })
     if (res.ok) refreshFavorites()
-    else setGroupFavoriteError(res.error || "즐겨찾기에서 빼지 못했습니다.")
+    else setGroupFavoriteError(res.error || t("docs.favRemoveFailed"))
   }
 
-  const tabSections = sectionsForTab(sources, activeTab)
+  const tabSections = sectionsForTab(sources, activeTab, undefined, locale)
   const hasCompanySource = sources.some((s) => s.id.startsWith("company:"))
 
   return (
@@ -461,7 +465,7 @@ function DocsViewer() {
         setDocBaseHash(newHash)
         setEditContent(null)
         setIsEditing(false)
-        setSaveMessage(MSG_SAVED_DOC)
+        setSaveMessage(t("docs.saved"))
       }}
       notes={notes}
       selectedQuote={selectedQuote}
@@ -476,8 +480,9 @@ function DocsViewer() {
 }
 
 export default function DocsPage() {
+  const t = tFor(getActiveLocale())
   return (
-    <Suspense fallback={<div className="text-neutral-500 py-12 text-center text-sm">문서 포털 로딩 중...</div>}>
+    <Suspense fallback={<div className="text-neutral-500 py-12 text-center text-sm">{t("docs.portalLoadingLong")}</div>}>
       <DocsViewer />
     </Suspense>
   )

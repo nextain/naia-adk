@@ -1,5 +1,8 @@
 // 나이아 워크스페이스 문서 화면 공용 도우미 및 순수 함수 (SP-01 ~ SP-06, FE 9장)
 
+import type { Locale } from "../i18n/types.ts"
+import { formatMessage, getDict } from "../i18n/index.ts"
+
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
 export interface FolderGridEntry {
@@ -53,8 +56,8 @@ export const MSG_READ_ONLY = "보기 전용"
 export const MSG_NOT_FOUND = "찾을 수 없음"
 export const MSG_QUOTE_WHOLE_DOC = "문서 전체"
 
-export function getOpenNotesBannerText(count: number): string {
-  return `열린 메모 ${count}건 · AI에게 '메모 처리해'라고 말하면 처리합니다`
+export function getOpenNotesBannerText(count: number, locale: Locale = "ko"): string {
+  return formatMessage(getDict(locale)["docs.openNotesBanner"], { count })
 }
 
 // ── 파일 종류 판정 ──────────────────────────────────────────────────────────
@@ -125,13 +128,34 @@ export function formatDimensions(width?: number | null, height?: number | null):
 }
 
 // ── 격자 항목 정렬 및 500개 자르기 (SP-02) ──────────────────────────────────
-export function sortGridEntries(entries: FolderGridEntry[]): FolderGridEntry[] {
+export function sortGridEntries(entries: FolderGridEntry[], locale: Locale = "ko"): FolderGridEntry[] {
   return [...entries].sort((a, b) => {
     if (a.type !== b.type) {
       return a.type === "directory" ? -1 : 1
     }
-    return a.name.localeCompare(b.name, "ko")
+    return a.name.localeCompare(b.name, locale)
   })
+}
+
+export type DocsMessageKey =
+  | "docs.truncatedGrid"
+  | "docs.truncatedText"
+  | "docs.saveConflict"
+  | "docs.saved"
+  | "docs.archivedDoc"
+  | "docs.noPreview"
+  | "docs.discardConfirm"
+  | "docs.favoritesInvalid"
+  | "docs.retryLater"
+  | "docs.favoritesLimit"
+  | "docs.readOnly"
+  | "docs.notFound"
+  | "docs.wholeDoc"
+  | "docs.readOnlyDoc"
+
+/** Localized docs fixed message (defaults to Korean so existing callers stay compatible). */
+export function docsMessage(key: DocsMessageKey, locale: Locale = "ko"): string {
+  return getDict(locale)[key] ?? getDict("ko")[key] ?? key
 }
 
 export function limitGridEntries(
@@ -189,46 +213,49 @@ export function determineDocViewMode(params: {
 }
 
 // ── 오류 문구 매핑 (검수 반영 6번) ──────────────────────────────────────────
-export function mapDocSaveError(status: number, data?: { error?: string }): string {
+export function mapDocSaveError(status: number, data?: { error?: string }, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
   if (status === 409 && data?.error === "changed") {
-    return MSG_CONFLICT_DOC
+    return dict["docs.saveConflict"]
   }
   if (status === 403) {
     if (data?.error === "Source is read-only") {
-      return MSG_READ_ONLY_DOC
+      return dict["docs.readOnlyDoc"]
     }
-    return MSG_FORBIDDEN
+    return dict["docs.forbidden"] ?? MSG_FORBIDDEN
   }
-  return "문서를 저장하지 못했습니다. 다시 시도해 주세요."
+  return dict["docs.saveFailed"]
 }
 
-export function mapFavoritesError(status: number, data?: { error?: string }): string {
+export function mapFavoritesError(status: number, data?: { error?: string }, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
   if (status === 403) {
-    return MSG_FORBIDDEN
+    return dict["docs.forbidden"] ?? MSG_FORBIDDEN
   }
   if (status === 409) {
     if (data?.error === "favorites_file_invalid") {
-      return MSG_FAVORITES_INVALID
+      return dict["docs.favoritesInvalid"]
     }
-    return MSG_RETRY_LATER
+    return dict["docs.retryLater"]
   }
   if (status === 400) {
     if (data?.error === "Favorites limit reached (200)") {
-      return MSG_FAVORITES_LIMIT
+      return dict["docs.favoritesLimit"]
     }
-    return "즐겨찾기를 변경하지 못했습니다. 다시 시도해 주세요."
+    return dict["docs.favoritesFailed"]
   }
-  return "즐겨찾기를 변경하지 못했습니다. 다시 시도해 주세요."
+  return dict["docs.favoritesFailed"]
 }
 
-export function mapNotesError(status: number, data?: { error?: string }): string {
+export function mapNotesError(status: number, data?: { error?: string }, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
   if (status === 403) {
-    return MSG_FORBIDDEN
+    return dict["docs.forbidden"] ?? MSG_FORBIDDEN
   }
   if (status === 409) {
-    return MSG_RETRY_LATER
+    return dict["docs.retryLater"]
   }
-  return "메모를 처리하지 못했습니다. 다시 시도해 주세요."
+  return dict["docs.notesFailed"]
 }
 
 // ── 경로 도우미 ─────────────────────────────────────────────────────────────

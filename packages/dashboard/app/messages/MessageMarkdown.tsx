@@ -8,6 +8,8 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { convertWikiLinks, resolveRelativePath, splitFrontmatter, WIKI_HREF_PREFIX } from "../docs/markdown"
 import { copyTextToClipboard, extractPreText } from "../docs/clipboard"
+import { getMessengerStrings } from "./messenger"
+import { getActiveLocale } from "../i18n/provider.tsx"
 import type { DocTab } from "../docs/tabs"
 
 type CopyStatus = "idle" | "copied" | "failed"
@@ -20,6 +22,7 @@ export function CodeBlock({
   copyFn?: (text: string) => Promise<boolean>
 }) {
   const [status, setStatus] = useState<CopyStatus>("idle")
+  const S = getMessengerStrings(getActiveLocale())
   const preRef = useRef<HTMLPreElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -39,7 +42,7 @@ export function CodeBlock({
     if (next === "copied") timerRef.current = setTimeout(() => setStatus("idle"), 1500)
   }
 
-  const label = status === "copied" ? "복사됨" : status === "failed" ? "복사 실패" : "복사"
+  const label = status === "copied" ? S.copied : status === "failed" ? S.copyFailed : S.copyOk
   return (
     <div className="relative my-4">
       <pre
@@ -53,7 +56,7 @@ export function CodeBlock({
         onClick={copy}
         data-print="hide"
         aria-live="polite"
-        aria-label={status === "idle" ? "코드 복사" : label}
+        aria-label={status === "idle" ? S.copyCode : label}
         className={`print:hidden absolute top-2 right-2 px-2 py-1 rounded text-xs bg-neutral-800 hover:bg-neutral-700 ${
           status === "failed" ? "text-red-400" : "text-neutral-300"
         }`}

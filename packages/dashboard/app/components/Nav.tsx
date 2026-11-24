@@ -5,17 +5,20 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
 import { observeAxMessengerStatus } from "./ax-messenger-status.mjs"
+import { getActiveLocale, useI18n } from "../i18n/provider.tsx"
+import { formatMessage, tFor } from "../i18n/index.ts"
+import type { Locale } from "../i18n/types.ts"
 import {
   DEFAULT_FONT_SIZE_STEP,
   DEFAULT_THEME_PREFERENCE,
-  FONT_SIZE_STEPS,
-  THEME_OPTIONS,
   applyDocumentPreferences,
   detectSystemPrefersDark,
+  fontSizeSteps,
   readFontSizeStep,
   readThemePreference,
   resolveTheme,
   stepFontSize,
+  themeOptions,
   writeFontSizeStep,
   writeThemePreference,
   type FontSizeStep,
@@ -26,8 +29,6 @@ interface PortalData {
   board: { port: number } | null
   messenger?: { enabled: boolean }
 }
-
-const BOARD_DISABLED_TITLE = "회사 설정이 없어 작업보드가 없습니다. pnpm adk:setup으로 회사 설정을 먼저 하세요."
 
 export interface NavProps {
   initialTheme?: ThemePreference
@@ -52,10 +53,21 @@ export interface NavTabsProps {
   hasAxMessenger?: boolean | null
 }
 
-export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger, hasAxMessenger }: NavTabsProps) {
+export function NavTabs({
+  pathname,
+  hasBoard,
+  hasLedger,
+  hasMessenger,
+  hasAxMessenger,
+  locale: localeProp,
+}: NavTabsProps & { locale?: Locale }) {
+  const activeLocale = getActiveLocale()
+  const t = tFor(localeProp ?? activeLocale)
+  const locale = localeProp ?? activeLocale
+  const boardDisabledTitle = t("nav.boardDisabled")
   return (
     <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-      {visibleTopNavTabs(hasMessenger, hasAxMessenger).map((tab) => {
+      {visibleTopNavTabs(hasMessenger, hasAxMessenger, locale).map((tab) => {
         if (tab.requiresBoard && hasBoard === false && hasLedger !== true) {
           return (
             <span
@@ -63,7 +75,7 @@ export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger, hasAxMess
               data-testid={`nav-tab-${tab.id}`}
               aria-disabled="true"
               className="px-1.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-sm font-medium text-neutral-600 cursor-not-allowed whitespace-nowrap"
-              title={BOARD_DISABLED_TITLE}
+              title={boardDisabledTitle}
             >
               {tab.label}
             </span>
@@ -86,6 +98,47 @@ export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger, hasAxMess
   )
 }
 
+export function LocaleSwitcher({ locale: localeProp }: { locale?: Locale } = {}) {
+  const ctx = useI18n()
+  const locale = localeProp ?? getActiveLocale()
+  const t = tFor(locale)
+  const switchLocale = (next: Locale) => {
+    if (next === locale) return
+    try {
+      ctx.setLocale(next)
+    } catch {
+      // Switching outside the provider must never throw.
+    }
+  }
+  return (
+    <div
+      role="group"
+      aria-label={t("nav.localeGroup")}
+      data-testid="locale-switcher"
+      className="inline-flex items-center rounded-md border border-neutral-800 bg-neutral-900 p-0.5"
+    >
+      {(["en", "ko"] as const).map((value) => {
+        const active = locale === value
+        return (
+          <button
+            key={value}
+            type="button"
+            onClick={() => switchLocale(value)}
+            aria-label={value === "en" ? t("nav.switchToEn") : t("nav.switchToKo")}
+            aria-pressed={active}
+            data-testid={`locale-btn-${value}`}
+            className={`px-1 sm:px-2 py-1 rounded text-[11px] sm:text-[12px] leading-none font-medium transition-colors whitespace-nowrap ${
+              active ? "bg-neutral-800 text-white" : "text-neutral-400 hover:text-white"
+            }`}
+          >
+            {value === "en" ? "EN" : "KO"}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function Nav({
   initialTheme = DEFAULT_THEME_PREFERENCE,
   initialFontSize = DEFAULT_FONT_SIZE_STEP,
@@ -94,8 +147,12 @@ export function Nav({
   hasMessenger: hasMessengerProp,
   hasAxMessenger: hasAxMessengerProp,
   todoBadgeCount: todoBadgeCountProp,
-}: NavProps = {}) {
+  locale: localeProp,
+}: NavProps & { locale?: Locale } = {}) {
   const pathname = usePathname() || "/"
+  const activeLocale = getActiveLocale()
+  const locale = localeProp ?? activeLocale
+  const t = tFor(locale)
   const [fetchedHasBoard, setFetchedHasBoard] = useState<boolean | null>(null)
   const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
   const [fetchedHasMessenger, setFetchedHasMessenger] = useState<boolean | null>(null)
@@ -213,43 +270,45 @@ export function Nav({
         Naia ADK
       </Link>
 
-      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} />
+      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={locale} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
         {typeof todoCount === "number" && (
           <Link
             href="/work"
             data-testid="nav-todo-badge"
-            title="업무 장부 열린 할 일 (진행 중 + 사람 확인 대기)"
+            title={t("nav.todoBadgeTitle")}
             className="px-2 sm:px-2.5 py-1 rounded-full border border-blue-800/70 bg-blue-950/60 text-blue-300 hover:bg-blue-900/60 text-[11px] sm:text-xs font-medium whitespace-nowrap transition-colors"
           >
-            할 일 {todoCount}
+            {formatMessage(t("nav.todoBadge"), { count: todoCount })}
           </Link>
         )}
         {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
         <div className="hidden xl:flex items-center gap-1">
-          <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">개발자 도구</span>
+          <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">{t("nav.devTools")}</span>
           <Link href="/" className={tabClass(pathname === "/")}>
-            Overview
+            {t("nav.overview")}
           </Link>
           <Link href="/workspace" className={tabClass(isActive("/workspace"))}>
-            Workspace
+            {t("nav.workspace")}
           </Link>
           <Link href="/skills" className={tabClass(isActive("/skills"))}>
-            Skills
+            {t("nav.skills")}
           </Link>
           <Link href="/settings" className={tabClass(isActive("/settings"))}>
-            Settings
+            {t("nav.settings")}
           </Link>
         </div>
+
+        <LocaleSwitcher locale={locale} />
 
         {/* 화면 테마(라이트·다크·시스템)와 글자 크기(4단계)는 좁은 화면에서도 항상 보인다. */}
         <div
           role="group"
-          aria-label="테마 선택"
+          aria-label={t("nav.themeGroup")}
           className="inline-flex items-center rounded-md border border-neutral-800 bg-neutral-900 p-0.5"
         >
-          {THEME_OPTIONS.map((opt) => {
+          {themeOptions(locale).map((opt) => {
             const active = themePref === opt.value
             return (
               <button
@@ -271,15 +330,15 @@ export function Nav({
 
         <div
           role="group"
-          aria-label="글자 크기 조정"
+          aria-label={t("nav.fontGroup")}
           className="inline-flex items-center rounded-md border border-neutral-800 bg-neutral-900 p-0.5"
         >
           <button
             type="button"
             onClick={() => adjustFontSize(-1)}
             disabled={fontSize === "sm"}
-            aria-label="글자 작게"
-            title="글자 작게 (A−)"
+            aria-label={t("nav.fontDecrease")}
+            title={t("nav.fontDecreaseTitle")}
             data-testid="font-size-dec"
             className="px-1 sm:px-2 py-1 rounded text-[11px] sm:text-[12px] leading-none font-semibold text-neutral-200 hover:text-white hover:bg-neutral-800 disabled:text-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
@@ -288,11 +347,11 @@ export function Nav({
           <select
             value={fontSize}
             onChange={(e) => selectFontSize(e.target.value as FontSizeStep)}
-            aria-label="글자 크기 단계 선택"
+            aria-label={t("nav.fontStepSelect")}
             data-testid="font-size-select"
             className="w-[38px] sm:w-auto appearance-none bg-transparent px-0.5 sm:px-1.5 py-1 text-[11px] sm:text-[12px] leading-none font-medium text-neutral-200 text-center cursor-pointer focus:outline-none"
           >
-            {FONT_SIZE_STEPS.map((step) => (
+            {fontSizeSteps(locale).map((step) => (
               <option key={step.value} value={step.value} className="bg-neutral-900 text-neutral-100">
                 {step.label}
               </option>
@@ -302,8 +361,8 @@ export function Nav({
             type="button"
             onClick={() => adjustFontSize(1)}
             disabled={fontSize === "xl"}
-            aria-label="글자 크게"
-            title="글자 크게 (A+)"
+            aria-label={t("nav.fontIncrease")}
+            title={t("nav.fontIncreaseTitle")}
             data-testid="font-size-inc"
             className="px-1 sm:px-2 py-1 rounded text-[11px] sm:text-[12px] leading-none font-semibold text-neutral-200 hover:text-white hover:bg-neutral-800 disabled:text-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >

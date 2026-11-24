@@ -1,6 +1,8 @@
 import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 import { addDays, daysBetweenDates, formatUtcDate, parseDateParts, type CalendarUnit, type ScheduleLayerKey, type SpanPosition, type ScheduleLayers, type WorkScheduleFilter } from "./schedule-calendar-base"
 import type { WorkScheduleItem, MilestoneScheduleItem } from "./schedule-board-projection"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
 
 // ── 달력 칸 생성 및 5개 겹 배치 ──────────────────────────────────────────────
 
@@ -124,31 +126,41 @@ function extractTimePart(dateTimeStr: string): string | null {
   return m ? m[1] : null
 }
 
-function formatPersonalTimeLabel(item: PersonalScheduleItem, spanPos: SpanPosition): string {
-  if (item.allDay) return "종일"
+function formatPersonalTimeLabel(item: PersonalScheduleItem, spanPos: SpanPosition, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
+  const allDay = dict["sched.allDay"]
+  const start = dict["sched.spanStart"]
+  const end = dict["sched.spanEnd"]
+  const middle = dict["sched.spanMiddle"]
+  if (item.allDay) return allDay
   const startTime = extractTimePart(item.start)
   const endTime = extractTimePart(item.end)
   if (spanPos === "single") {
     if (startTime && endTime && startTime !== endTime) return `${startTime}~${endTime}`
-    return startTime ?? "종일"
+    return startTime ?? allDay
   }
-  if (spanPos === "start") return startTime ? `${startTime}~` : "시작"
-  if (spanPos === "end") return endTime ? `~${endTime}` : "종료"
-  return "계속"
+  if (spanPos === "start") return startTime ? `${startTime}~` : start
+  if (spanPos === "end") return endTime ? `~${endTime}` : end
+  return middle
 }
 
-function formatCompanyTimeLabel(item: CompanyScheduleItem, spanPos: SpanPosition): string {
+function formatCompanyTimeLabel(item: CompanyScheduleItem, spanPos: SpanPosition, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
+  const allDay = dict["sched.allDay"]
+  const start = dict["sched.spanStart"]
+  const end = dict["sched.spanEnd"]
+  const middle = dict["sched.spanMiddle"]
   const startTime = item.startTime || null
   const endTime = item.endTime || null
-  if (!startTime && !endTime) return "종일"
+  if (!startTime && !endTime) return allDay
   if (spanPos === "single") {
     if (item.times && item.times.length > 1) return item.times.join(", ")
     if (startTime && endTime && startTime !== endTime) return `${startTime}~${endTime}`
-    return startTime ?? endTime ?? "종일"
+    return startTime ?? endTime ?? allDay
   }
-  if (spanPos === "start") return startTime ? `${startTime}~` : "시작"
-  if (spanPos === "end") return endTime ? `~${endTime}` : "종료"
-  return "계속"
+  if (spanPos === "start") return startTime ? `${startTime}~` : start
+  if (spanPos === "end") return endTime ? `~${endTime}` : end
+  return middle
 }
 
 export function buildCompanyDocLink(sourceDocPath: unknown): string | null {
@@ -188,7 +200,7 @@ export function eventSortGroup(ev: CalendarCellEvent): number {
  * 마일스톤 → 개인 일정 → 작업 문서 → 큐 항목 순,
  * 같은 종류 안에서는 기간이 긴 것 먼저 · 시작 이른 것 먼저 · (종일 먼저) · 제목 순.
  */
-export function compareCalendarEvents(a: CalendarCellEvent, b: CalendarCellEvent): number {
+export function compareCalendarEvents(a: CalendarCellEvent, b: CalendarCellEvent, locale: Locale = "ko"): number {
   const groupDiff = eventSortGroup(a) - eventSortGroup(b)
   if (groupDiff !== 0) return groupDiff
 
@@ -204,7 +216,7 @@ export function compareCalendarEvents(a: CalendarCellEvent, b: CalendarCellEvent
     return a.allDay ? -1 : 1
   }
 
-  const titleCmp = a.title.localeCompare(b.title, "ko")
+  const titleCmp = a.title.localeCompare(b.title, locale)
   if (titleCmp !== 0) return titleCmp
 
   return a.id.localeCompare(b.id)
@@ -218,6 +230,7 @@ export interface PlaceScheduleOptions {
   companyItems?: CompanyScheduleItem[]
   workItems?: WorkScheduleItem[]
   milestones?: MilestoneScheduleItem[]
+  locale?: Locale
 }
 
 /**
@@ -238,6 +251,8 @@ export function placeScheduleOnCalendar(
   for (const cell of cells) {
     cellByDate.set(cell.date, cell)
   }
+  const locale: Locale = opts.locale ?? "ko"
+  const dict = getDict(locale)
   const gridFirstDate = cells[0].date
   const gridLastDate = cells[cells.length - 1].date
 
@@ -274,8 +289,8 @@ export function placeScheduleOnCalendar(
         endDate: ms.dueDate!,
         spanPosition: spanPos,
         allDay: true,
-        timeLabel: `기한 (${ms.completed}/${ms.total})`,
-        subtitle: ms.description || `완료 ${ms.completed}/${ms.total}`,
+        timeLabel: locale === "en" ? `Due (${ms.completed}/${ms.total})` : `기한 (${ms.completed}/${ms.total})`,
+        subtitle: ms.description || (locale === "en" ? `Done ${ms.completed}/${ms.total}` : `완료 ${ms.completed}/${ms.total}`),
         overdue: ms.overdue,
         completed: ms.total > 0 && ms.completed >= ms.total,
         milestoneItem: ms,
@@ -297,7 +312,7 @@ export function placeScheduleOnCalendar(
         endDate,
         spanPosition: spanPos,
         allDay: p.allDay,
-        timeLabel: formatPersonalTimeLabel(p, spanPos),
+        timeLabel: formatPersonalTimeLabel(p, spanPos, locale),
         subtitle: p.memo || "",
         overdue: false,
         completed: false,
@@ -326,9 +341,9 @@ export function placeScheduleOnCalendar(
         endDate: spanEnd,
         spanPosition: spanPos,
         allDay,
-        timeLabel: formatCompanyTimeLabel(c, spanPos),
+        timeLabel: formatCompanyTimeLabel(c, spanPos, locale),
         subtitle: [
-          c.kind === "regular" ? "정기 반복" : "회사 일정",
+          c.kind === "regular" ? dict["sched.regular"] : dict["sched.company"],
           c.roleLabel || c.role,
           c.state || c.status,
         ]
@@ -371,12 +386,12 @@ export function placeScheduleOnCalendar(
         allDay: true,
         timeLabel:
           w.dueDate && cellDate === w.dueDate
-            ? "마감"
+            ? dict["sched.deadline"]
             : spanPos === "start"
-              ? "시작"
+              ? dict["sched.spanStart"]
               : spanPos === "end"
-                ? "종료"
-                : "진행",
+                ? dict["sched.spanEnd"]
+                : dict["sched.spanMiddle"],
         subtitle: [w.issue || w.id, w.milestoneName, w.parentGroupName].filter(Boolean).join(" · "),
         overdue: w.overdue,
         completed: w.completed,
@@ -386,7 +401,7 @@ export function placeScheduleOnCalendar(
   }
 
   for (const cell of cells) {
-    cell.events.sort(compareCalendarEvents)
+    cell.events.sort((a, b) => compareCalendarEvents(a, b, locale))
   }
 
   return cells

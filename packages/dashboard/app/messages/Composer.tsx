@@ -8,12 +8,13 @@ import {
   checkAttachment,
   composerKeyAction,
   formatBytes,
+  getMessengerStrings,
   mentionCandidates,
   mentionQueryAt,
-  MSG,
   type Attachment,
   type Message,
 } from "./messenger"
+import { getActiveLocale } from "../i18n/provider.tsx"
 
 export interface ComposerProps {
   placeholder: string
@@ -43,6 +44,8 @@ export function createComposerDraft(initialText = ""): ComposerDraft {
 }
 
 export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload, initialText = "", testId = "composer", draftControl }: ComposerProps) {
+  const locale = getActiveLocale()
+  const S = getMessengerStrings(locale)
   const [localDraft, setLocalDraft] = useState(() => createComposerDraft(initialText))
   const { text, textRevision, caret, files, error, sending, uploading, pick, mentionClosed } = draftControl?.draft ?? localDraft
   const setDraft = draftControl?.update ?? setLocalDraft
@@ -82,7 +85,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
       await onSend(body, submittedIds)
       setDraft((p) => ({ ...p, text: p.textRevision === textRevision ? "" : p.text, caret: p.textRevision === textRevision ? 0 : p.caret, files: p.files.filter((f) => !submittedIds.includes(f.id)) }))
     } catch {
-      setError(MSG.sendFailed)
+      setError(S.sendFailed)
     } finally {
       setSending(false)
     }
@@ -118,7 +121,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
     setUploading((n) => n + 1)
     try {
       for (const f of Array.from(list)) {
-        const bad = checkAttachment(f.name, f.size)
+        const bad = checkAttachment(f.name, f.size, locale)
         if (bad) {
           setError(bad)
           continue
@@ -127,7 +130,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
           const a = await onUpload(f)
           setFiles((prev) => [...prev, a])
         } catch {
-          setError(MSG.sendFailed)
+          setError(S.sendFailed)
         }
       }
     } finally {
@@ -141,9 +144,9 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
       {replyTo && (
         <div data-testid="composer-reply" className="mb-1.5 flex items-center gap-2 text-xs text-neutral-400">
           <span className="truncate">
-            {MSG.replyingTo}: <span className="text-neutral-200">{messageAuthorLabel(replyTo)}</span> · {replyTo.body.split("\n")[0].slice(0, 60)}
+            {S.replyingTo}: <span className="text-neutral-200">{messageAuthorLabel(replyTo)}</span> · {replyTo.body.split("\n")[0].slice(0, 60)}
           </span>
-          <button type="button" onClick={onCancelReply} aria-label={MSG.cancel} className="p-0.5 rounded text-neutral-500 hover:text-white">
+          <button type="button" onClick={onCancelReply} aria-label={S.cancel} className="p-0.5 rounded text-neutral-500 hover:text-white">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -154,7 +157,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
             <span key={f.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-neutral-800 bg-neutral-900 text-xs text-neutral-300">
               <Paperclip className="w-3 h-3" />
               {f.name} <span className="text-neutral-500">{formatBytes(f.size)}</span>
-              <button type="button" aria-label={`${f.name} 빼기`} onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))} className="text-neutral-500 hover:text-white">
+              <button type="button" aria-label={`${f.name} ${S.removeFile}`} onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))} className="text-neutral-500 hover:text-white">
                 <X className="w-3 h-3" />
               </button>
             </span>
@@ -188,8 +191,8 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
             <button
               type="button"
               data-testid="composer-attach"
-              aria-label={MSG.attach}
-              title={MSG.attach}
+              aria-label={S.attach}
+              title={S.attach}
               onClick={() => fileRef.current?.click()}
               className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800"
             >
@@ -201,7 +204,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
         <textarea
           ref={areaRef}
           data-testid="composer-input"
-          aria-label="글 쓰기"
+          aria-label={S.writePost}
           rows={1}
           value={text}
           placeholder={placeholder}
@@ -218,7 +221,7 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
         <button
           type="button"
           data-testid="composer-send"
-          aria-label={MSG.send}
+          aria-label={S.send}
           disabled={sending || uploading > 0 || (!text.trim() && files.length === 0)}
           onClick={() => void send()}
           className="p-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:bg-neutral-800 transition-colors"
@@ -226,8 +229,8 @@ export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload
           <SendHorizontal className="w-4 h-4" />
         </button>
       </div>
-      <div className="mt-1 hidden sm:block text-[11px] text-neutral-500">{MSG.keyHint}</div>
-      {uploading > 0 && <div role="status" className="mt-1 text-xs text-neutral-400">첨부 올리는 중</div>}
+      <div className="mt-1 hidden sm:block text-[11px] text-neutral-500">{S.keyHint}</div>
+      {uploading > 0 && <div role="status" className="mt-1 text-xs text-neutral-400">{S.uploading}</div>}
       {error && (
         <div role="status" className="mt-1 text-xs text-red-400">
           {error}

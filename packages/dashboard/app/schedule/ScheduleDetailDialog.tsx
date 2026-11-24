@@ -3,17 +3,21 @@
 import React, { useEffect, useRef } from "react"
 import {
   buildCompanyDocLink,
-  LAYER_LABELS,
+  layerLabels,
   taskStatusBadge,
   type CalendarCellEvent,
   type CalendarDayCell,
   type ScheduleLayerKey,
-  type TaskStatusBadge,
 } from "./schedule-calendar"
+import { formatMessage, tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
+import type { Locale } from "../i18n/types.ts"
 
-function taskStatusBadgeClass(badge: TaskStatusBadge): string {
-  if (badge === "완료") return "bg-emerald-900/80 text-emerald-200"
-  if (badge === "진행") return "bg-sky-900/80 text-sky-200"
+function taskStatusBadgeClass(badge: string, locale: Locale = "ko"): string {
+  const done = locale === "en" ? "Done" : "완료"
+  const progress = locale === "en" ? "In progress" : "진행"
+  if (badge === done) return "bg-emerald-900/80 text-emerald-200"
+  if (badge === progress) return "bg-sky-900/80 text-sky-200"
   return "bg-neutral-800 text-neutral-300"
 }
 
@@ -28,19 +32,20 @@ export interface ScheduleDayListDialogProps {
   onSelectEvent: (ev: CalendarCellEvent) => void
 }
 
-function formatEventPeriodLabel(ev: CalendarCellEvent): string {
+function formatEventPeriodLabel(ev: CalendarCellEvent, locale: Locale = "ko"): string {
+  const t = tFor(locale)
   if (ev.layer === "work" && ev.workItem) {
     const start = ev.workItem.startDate ?? ev.startDate
     const end = ev.workItem.endDate ?? ev.endDate
     if (ev.workItem.openEnded) {
-      return `${start} ~ 진행 중(오늘까지)`
+      return `${start} ~${t("sched.ongoingToday")}`
     }
     return start === end ? start : `${start} ~ ${end}`
   }
   if (ev.layer === "personal" && ev.personalItem) {
     const p = ev.personalItem
     const range = p.start === p.end ? p.start : `${p.start} ~ ${p.end}`
-    return `${range} (${p.allDay ? "종일" : "시각 지정"})`
+    return `${range} (${p.allDay ? t("sched.allDay") : t("sched.timed")})`
   }
   if (ev.layer === "company" && ev.companyItem) {
     const c = ev.companyItem
@@ -50,22 +55,24 @@ function formatEventPeriodLabel(ev: CalendarCellEvent): string {
       if (c.times && c.times.length > 1) return `${c.startDate} (${c.times.join(", ")})`
       if (c.startTime && c.endTime && c.startTime !== c.endTime) return `${c.startDate} ${c.startTime}~${c.endTime}`
       if (c.startTime) return `${c.startDate} ${c.startTime}`
-      return `${c.startDate} (종일)`
+      return `${c.startDate} (${t("sched.allDay")})`
     }
     return `${c.startDate}${startTime} ~ ${c.endDate}${endTime}`
   }
   return ev.startDate === ev.endDate ? ev.startDate : `${ev.startDate} ~ ${ev.endDate}`
 }
 
-function formatMilestoneDaysLabel(daysRemaining: number | null, overdue: boolean): string {
+function formatMilestoneDaysLabel(daysRemaining: number | null, overdue: boolean, locale: Locale = "ko"): string {
+  const t = tFor(locale)
   if (daysRemaining === null || !Number.isFinite(daysRemaining)) {
-    return "기한 미정"
+    return t("sched.dueUnset")
   }
   if (daysRemaining < 0) {
-    return `D+${Math.abs(daysRemaining)} (${Math.abs(daysRemaining)}일 경과)`
+    const n = Math.abs(daysRemaining)
+    return formatMessage(t("sched.ddayPast"), { n })
   }
   if (daysRemaining === 0) {
-    return overdue ? "D-Day (기한 경과)" : "D-Day (오늘 마감)"
+    return overdue ? t("sched.ddayOver") : t("sched.ddayToday")
   }
   return `D-${daysRemaining}`
 }
@@ -81,6 +88,9 @@ function formatMilestoneDaysLabel(daysRemaining: number | null, overdue: boolean
  */
 export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const locale = getActiveLocale()
+  const t = tFor(locale)
+  const names = layerLabels(locale)
 
   useEffect(() => {
     if (!event) return
@@ -109,14 +119,14 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
   const isLedgerDue = w?.dueSource === "ledger.due"
   const kindLabel = w
     ? isLedgerDue
-      ? "업무 장부"
+      ? t("sched.layerLedger")
       : w.kind === "work_document"
-        ? "작업 문서"
-        : "큐 항목"
+        ? t("sched.layerWorkDoc")
+        : t("sched.layerQueue")
     : c
       ? c.kind === "regular"
-        ? "정기 반복"
-        : "회사 일정"
+        ? t("sched.regular")
+        : t("sched.company")
       : null
 
   return (
@@ -138,7 +148,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-200 font-semibold">
-                {LAYER_LABELS[event.layer]}
+                {names[event.layer]}
               </span>
               {kindLabel && (
                 <span
@@ -153,12 +163,12 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                   data-testid="schedule-detail-overdue-badge"
                   className="px-2 py-0.5 rounded bg-rose-950/90 border border-rose-500/80 text-rose-200 font-semibold"
                 >
-                  마감 지남 · 경고
+                  {t("sched.overdueBadgeLong")}
                 </span>
               )}
               {event.completed && (
                 <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/70 text-emerald-200 font-medium">
-                  완료
+                  {t("sched.completedBadge")}
                 </span>
               )}
             </div>
@@ -177,7 +187,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
             onClick={onClose}
             className="px-2.5 py-1 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 hover:text-white shrink-0"
           >
-            닫기
+            {t("common.close")}
           </button>
         </div>
 
@@ -188,55 +198,55 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
             <>
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
                 <div>
-                  <dt className="text-[11px] text-neutral-400">기간 (시작 ~ 끝)</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.periodLabel")}</dt>
                   <dd data-testid="schedule-detail-period" className="font-medium text-neutral-100 mt-0.5 break-words">
-                    {formatEventPeriodLabel(event)}
+                    {formatEventPeriodLabel(event, locale)}
                   </dd>
                 </div>
 
                 <div>
-                  <dt className="text-[11px] text-neutral-400">마감일</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.dueLabel")}</dt>
                   <dd
                     data-testid="schedule-detail-due"
                     className={`font-medium mt-0.5 ${
                       w?.overdue ? "text-rose-300 font-semibold" : "text-neutral-100"
                     }`}
                   >
-                    {w?.dueDate ? `${w.dueDate}${w.overdue ? " (마감 경과 경고)" : ""}` : "없음"}
+                    {w?.dueDate ? `${w.dueDate}${w.overdue ? t("sched.overdueWarn") : ""}` : t("sched.noneValue")}
                   </dd>
                 </div>
 
                 <div>
-                  <dt className="text-[11px] text-neutral-400">담당</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.assigneeLabel")}</dt>
                   <dd data-testid="schedule-detail-assignee" className="font-medium text-neutral-100 mt-0.5 break-words">
-                    {w?.assignee || "미지정"}
+                    {w?.assignee || t("sched.unspecified")}
                   </dd>
                 </div>
 
                 <div>
-                  <dt className="text-[11px] text-neutral-400">진행 상태</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.statusLabel")}</dt>
                   <dd data-testid="schedule-detail-status" className="font-medium text-neutral-100 mt-0.5 break-words">
                     {w?.status || "-"}
-                    {w?.completed ? " (완료)" : w?.cancelled ? " (취소)" : ""}
+                    {w?.completed ? t("sched.doneSuffix") : w?.cancelled ? t("sched.cancelledSuffix") : ""}
                   </dd>
                 </div>
 
                 <div>
-                  <dt className="text-[11px] text-neutral-400">이슈</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.issueLabel")}</dt>
                   <dd data-testid="schedule-detail-issue" className="font-medium text-neutral-100 mt-0.5 break-words">
                     {w?.issue || "-"}
                   </dd>
                 </div>
 
                 <div>
-                  <dt className="text-[11px] text-neutral-400">마일스톤</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.milestoneLabel")}</dt>
                   <dd data-testid="schedule-detail-milestone" className="font-medium text-neutral-100 mt-0.5 break-words">
                     {w?.milestoneName || "-"}
                   </dd>
                 </div>
 
                 <div className="sm:col-span-2">
-                  <dt className="text-[11px] text-neutral-400">상위 그룹</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.parentGroupLabel")}</dt>
                   <dd data-testid="schedule-detail-parent-group" className="font-medium text-neutral-100 mt-0.5 break-words">
                     {w?.parentGroupName || "-"}
                   </dd>
@@ -247,7 +257,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
               {w?.docLink && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-800/70 bg-sky-950/30 p-3">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11px] text-neutral-400">작업 문서 주소</div>
+                    <div className="text-[11px] text-neutral-400">{t("sched.workDocAddress")}</div>
                     <code className="text-xs text-sky-200 break-all">{w.docLink}</code>
                   </div>
                   <a
@@ -257,7 +267,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                     data-testid="schedule-detail-doc-link"
                     className="px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition-colors"
                   >
-                    문서 열기
+                    {t("sched.openDoc")}
                   </a>
                 </div>
               )}
@@ -267,7 +277,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h3 data-testid="schedule-detail-task-summary" className="text-xs font-bold text-sky-300">
-                      세부 작업 {taskTotal}개 중 {taskDone}개 완료
+                      {formatMessage(t("sched.taskTotal"), { total: taskTotal, done: taskDone })}
                     </h3>
                     <span className="text-[11px] tabular-nums text-neutral-400">
                       {taskDone}/{taskTotal}
@@ -275,21 +285,21 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                   </div>
 
                   {tasks.length === 0 ? (
-                    <p className="text-xs text-neutral-500">등록된 세부 작업이 없습니다.</p>
+                    <p className="text-xs text-neutral-500">{t("sched.noTasks")}</p>
                   ) : (
                     <ul
                       data-testid="schedule-detail-task-list"
                       className="space-y-1.5 max-h-64 overflow-y-auto pr-1"
                     >
-                      {tasks.map((t, idx) => {
-                        const badge: TaskStatusBadge = t.done ? "완료" : taskStatusBadge(t.status)
+                      {tasks.map((task, idx) => {
+                        const badge: string = task.done ? t("sched.taskBadgeDone") : String(taskStatusBadge(task.status, locale))
                         return (
                           <li
-                            key={`${t.number}-${idx}`}
-                            data-testid={`schedule-detail-task-${t.number}`}
-                            data-done={t.done ? "1" : "0"}
+                            key={`${task.number}-${idx}`}
+                            data-testid={`schedule-detail-task-${task.number}`}
+                            data-done={task.done ? "1" : "0"}
                             className={`p-2.5 rounded-lg border text-xs space-y-1 ${
-                              t.done
+                              task.done
                                 ? "border-emerald-800/60 bg-emerald-950/20 text-neutral-200"
                                 : "border-neutral-800 bg-neutral-950/80 text-neutral-100"
                             }`}
@@ -297,21 +307,21 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1 font-medium break-words">
                                 <span
-                                  data-testid={`schedule-detail-task-badge-${t.number}`}
+                                  data-testid={`schedule-detail-task-badge-${task.number}`}
                                   data-badge={badge}
-                                  className={`inline-block mr-1.5 px-1.5 py-0.2 rounded text-[10px] font-semibold ${taskStatusBadgeClass(badge)}`}
+                                  className={`inline-block mr-1.5 px-1.5 py-0.2 rounded text-[10px] font-semibold ${taskStatusBadgeClass(badge, locale)}`}
                                 >
-                                  {badge === "완료" ? "✓ 완료" : badge}
+                                  {task.done ? t("sched.doneCheck") : badge}
                                 </span>
-                                <span className="text-neutral-400 mr-1">#{t.number}</span>
-                                <span>{t.task}</span>
+                                <span className="text-neutral-400 mr-1">#{task.number}</span>
+                                <span>{task.task}</span>
                               </div>
-                              {t.assignee && (
-                                <span className="text-[11px] text-neutral-400 shrink-0">담당: {t.assignee}</span>
+                              {task.assignee && (
+                                <span className="text-[11px] text-neutral-400 shrink-0">{t("sched.assigneeLabel")}: {task.assignee}</span>
                               )}
                             </div>
-                            {t.status && (
-                              <div className="text-[11px] text-neutral-400 break-words">상태: {t.status}</div>
+                            {task.status && (
+                              <div className="text-[11px] text-neutral-400 break-words">{t("sched.statusLabel")}: {task.status}</div>
                             )}
                           </li>
                         )
@@ -326,19 +336,19 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                 <div className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
                   {w?.kind === "queue" && (
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-neutral-400">시도 횟수</span>
+                      <span className="text-[11px] text-neutral-400">{t("sched.attempts")}</span>
                       <span data-testid="schedule-detail-attempt-count" className="font-semibold text-neutral-200">
-                        {w.attemptCount ?? 0}회
+                        {formatMessage(t("sched.timesCount"), { count: w.attemptCount ?? 0 })}
                       </span>
                     </div>
                   )}
                   <div>
-                    <div className="text-[11px] text-neutral-400 mb-1">설명</div>
+                    <div className="text-[11px] text-neutral-400 mb-1">{t("sched.descLabel")}</div>
                     <p
                       data-testid="schedule-detail-description"
                       className="text-xs text-neutral-200 whitespace-pre-wrap break-words leading-relaxed"
                     >
-                      {w?.description || "설명이 없습니다."}
+                      {w?.description || t("sched.noDesc")}
                     </p>
                   </div>
                 </div>
@@ -350,32 +360,32 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
           {event.layer === "milestone" && (
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
               <div>
-                <dt className="text-[11px] text-neutral-400">기한</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.dueLabel")}</dt>
                 <dd data-testid="schedule-detail-milestone-due" className="font-medium text-neutral-100 mt-0.5">
-                  {ms?.dueDate || event.startDate || "기한 없음"}
+                  {ms?.dueDate || event.startDate || t("sched.noDue")}
                 </dd>
               </div>
               <div>
-                <dt className="text-[11px] text-neutral-400">남은 날 (D-n)</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.remainingDays")}</dt>
                 <dd
                   data-testid="schedule-detail-milestone-dday"
                   className={`font-semibold mt-0.5 ${
                     ms?.overdue ? "text-rose-300" : "text-amber-300"
                   }`}
                 >
-                  {formatMilestoneDaysLabel(ms?.daysRemaining ?? null, Boolean(ms?.overdue))}
+                  {formatMilestoneDaysLabel(ms?.daysRemaining ?? null, Boolean(ms?.overdue), locale)}
                 </dd>
               </div>
               <div className="sm:col-span-2">
-                <dt className="text-[11px] text-neutral-400">묶인 작업 진행</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.boundProgress")}</dt>
                 <dd data-testid="schedule-detail-milestone-progress" className="font-medium text-neutral-100 mt-0.5">
-                  완료 {ms?.completed ?? 0} / 전체 {ms?.total ?? 0} ({ms?.completed ?? 0}/{ms?.total ?? 0})
+                  {formatMessage(t("sched.progressDone"), { done: ms?.completed ?? 0, total: ms?.total ?? 0 })}
                 </dd>
               </div>
               <div className="sm:col-span-2">
-                <dt className="text-[11px] text-neutral-400">설명</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.descLabel")}</dt>
                 <dd data-testid="schedule-detail-milestone-desc" className="text-neutral-200 mt-0.5 break-words">
-                  {ms?.description || "설명이 없습니다."}
+                  {ms?.description || t("sched.noDesc")}
                 </dd>
               </div>
             </dl>
@@ -385,18 +395,18 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
           {event.layer === "personal" && (
             <dl className="space-y-3 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
               <div>
-                <dt className="text-[11px] text-neutral-400">기간 · 시각</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.periodTimeLabel")}</dt>
                 <dd data-testid="schedule-detail-personal-period" className="font-medium text-neutral-100 mt-0.5 break-words">
-                  {formatEventPeriodLabel(event)}
+                  {formatEventPeriodLabel(event, locale)}
                 </dd>
               </div>
               <div>
-                <dt className="text-[11px] text-neutral-400">메모</dt>
+                <dt className="text-[11px] text-neutral-400">{t("sched.memoLabel")}</dt>
                 <dd
                   data-testid="schedule-detail-personal-memo"
                   className="text-neutral-200 mt-0.5 whitespace-pre-wrap break-words"
                 >
-                  {p?.memo || event.subtitle || "메모가 없습니다."}
+                  {p?.memo || event.subtitle || t("sched.noMemo")}
                 </dd>
               </div>
             </dl>
@@ -407,26 +417,26 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
             <>
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
                 <div>
-                  <dt className="text-[11px] text-neutral-400">기간 · 시각</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.periodTimeLabel")}</dt>
                   <dd data-testid="schedule-detail-company-period" className="font-medium text-neutral-100 mt-0.5 break-words">
-                    {formatEventPeriodLabel(event)}
+                    {formatEventPeriodLabel(event, locale)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-[11px] text-neutral-400">담당</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.assigneeLabel")}</dt>
                   <dd data-testid="schedule-detail-company-role" className="font-medium text-neutral-100 mt-0.5 break-words">
-                    {c?.roleLabel || c?.role || "미지정"}
+                    {c?.roleLabel || c?.role || t("sched.unspecified")}
                   </dd>
                 </div>
                 <div className={c?.repeatSummary ? "" : "sm:col-span-2"}>
-                  <dt className="text-[11px] text-neutral-400">상태</dt>
+                  <dt className="text-[11px] text-neutral-400">{t("sched.statusLabel")}</dt>
                   <dd data-testid="schedule-detail-company-status" className="font-medium text-neutral-100 mt-0.5 break-words">
                     {c?.state || c?.status || "-"}
                   </dd>
                 </div>
                 {c?.repeatSummary && (
                   <div>
-                    <dt className="text-[11px] text-neutral-400">반복 주기</dt>
+                    <dt className="text-[11px] text-neutral-400">{t("sched.repeatCycle")}</dt>
                     <dd data-testid="schedule-detail-company-repeat" className="font-medium text-neutral-100 mt-0.5 break-words">
                       {c.repeatSummary}
                     </dd>
@@ -437,7 +447,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
               {companyDocLink && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-800/70 bg-violet-950/30 p-3">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11px] text-neutral-400">원본 문서 경로</div>
+                    <div className="text-[11px] text-neutral-400">{t("sched.sourceDocPath")}</div>
                     <code className="text-xs text-violet-200 break-all">{c?.sourceDocPath}</code>
                   </div>
                   <a
@@ -447,7 +457,7 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                     data-testid="schedule-detail-company-doc-link"
                     className="px-3 py-1.5 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shrink-0 transition-colors"
                   >
-                    원본 문서 보기
+                    {t("sched.viewSourceDoc")}
                   </a>
                 </div>
               )}
@@ -465,6 +475,9 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
  */
 export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: ScheduleDayListDialogProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const locale = getActiveLocale()
+  const t = tFor(locale)
+  const names = layerLabels(locale)
 
   useEffect(() => {
     if (!cell) return
@@ -486,7 +499,7 @@ export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: Schedule
   )
     .map((layer) => ({
       layer,
-      label: LAYER_LABELS[layer],
+      label: names[layer],
       items: cell.events.filter((ev) => ev.layer === layer),
     }))
     .filter((g) => g.items.length > 0)
@@ -507,7 +520,7 @@ export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: Schedule
       >
         <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-neutral-800 bg-neutral-900/95 px-4 py-3">
           <h2 id="schedule-day-list-title" className="text-sm sm:text-base font-bold text-white">
-            {cell.date} 일정 ({cell.events.length}건)
+            {cell.date} {t("nav.schedule")} ({formatMessage(t("work.count"), { count: cell.events.length })})
           </h2>
           <button
             ref={closeBtnRef}
@@ -516,26 +529,26 @@ export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: Schedule
             onClick={onClose}
             className="px-2.5 py-1 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 hover:text-white"
           >
-            닫기
+            {t("common.close")}
           </button>
         </div>
 
         <div className="p-4 space-y-4 text-xs">
           {groups.length === 0 ? (
-            <p className="text-neutral-400">이 날짜에 표시할 일정이 없습니다.</p>
+            <p className="text-neutral-400">{t("sched.noDayEvents")}</p>
           ) : (
             groups.map((group) => (
               <div key={group.layer} className="space-y-1.5">
                 <h3 className="text-xs font-bold text-neutral-300">
-                  {group.label} ({group.items.length}건)
+                  {group.label} ({formatMessage(t("work.count"), { count: group.items.length })})
                 </h3>
                 <ul className="space-y-1.5">
                   {group.items.map((ev) => {
                     const taskBadge =
                       ev.layer === "work" && ev.workItem && (ev.workItem.taskTotal ?? 0) > 0
-                        ? `세부 작업 ${ev.workItem.taskDone ?? 0}/${ev.workItem.taskTotal}`
+                        ? formatMessage(t("sched.taskCompact"), { done: ev.workItem.taskDone ?? 0, total: ev.workItem.taskTotal })
                         : ev.layer === "milestone" && ev.milestoneItem && ev.milestoneItem.total > 0
-                          ? `완료 ${ev.milestoneItem.completed}/${ev.milestoneItem.total}`
+                          ? formatMessage(t("sched.doneCompact"), { done: ev.milestoneItem.completed, total: ev.milestoneItem.total })
                           : null
                     return (
                       <li key={ev.key}>
@@ -554,8 +567,8 @@ export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: Schedule
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-400">
-                            <span>기간: {formatEventPeriodLabel(ev)}</span>
-                            {ev.overdue && <span className="text-rose-400 font-semibold">마감 지남</span>}
+                            <span>{t("sched.periodShort")}: {formatEventPeriodLabel(ev, locale)}</span>
+                            {ev.overdue && <span className="text-rose-400 font-semibold">{t("work.overdueBadge")}</span>}
                           </div>
                         </button>
                       </li>

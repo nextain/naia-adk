@@ -7,6 +7,8 @@
 
 import React, { useState } from "react"
 import { Link2 } from "lucide-react"
+import { tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
 
 export function shortPathFallback(source: string, docPath: string): string {
   return `/d/${[source, ...docPath.split("/")].map(encodeURIComponent).join("/")}`
@@ -65,6 +67,7 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 export function ShortLinkButton({ source, path: docPath }: { source: string; path: string }) {
+  const t = tFor(getActiveLocale())
   const [status, setStatus] = useState<"idle" | "copied" | "manual">("idle")
   const [url, setUrl] = useState("")
 
@@ -85,19 +88,19 @@ export function ShortLinkButton({ source, path: docPath }: { source: string; pat
       <button
         type="button"
         onClick={onClick}
-        title="짧은 주소 복사"
-        aria-label="짧은 주소 복사"
+        title={t("docs.shortLinkCopy")}
+        aria-label={t("docs.shortLinkCopy")}
         data-testid="short-link-button"
         className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-neutral-800 text-xs text-neutral-400 hover:text-neutral-200 transition-colors shrink-0"
       >
         <Link2 className="w-4 h-4" />
-        <span>{status === "copied" ? "복사됨" : "짧은 주소"}</span>
+        <span>{status === "copied" ? t("docs.copied") : t("docs.shortLink")}</span>
       </button>
       {status === "manual" && (
         <input
           readOnly
           value={url}
-          aria-label="짧은 주소"
+          aria-label={t("docs.shortLink")}
           onFocus={(e) => e.currentTarget.select()}
           className="w-44 px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-700 text-xs text-neutral-200"
         />

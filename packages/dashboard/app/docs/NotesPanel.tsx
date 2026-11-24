@@ -4,15 +4,17 @@ import React, { useEffect, useState } from "react"
 import Link from "next/link"
 import { MessageSquare, CheckCircle, RotateCcw, X } from "lucide-react"
 import {
+  docsMessage,
   getFileName,
   getOpenNotesBannerText,
   mapNotesError,
-  MSG_FORBIDDEN,
-  MSG_QUOTE_WHOLE_DOC,
   sortNotes,
   type DocNoteItem,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
+import { formatMessage, getDict, tFor } from "../i18n/index.ts"
+import { getActiveLocale } from "../i18n/provider.tsx"
+import type { Locale } from "../i18n/types.ts"
 
 // ── API 함수들 ──────────────────────────────────────────────────────────────
 export async function createNote(params: {
@@ -21,8 +23,10 @@ export async function createNote(params: {
   quote: string | null
   body: string
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<{ ok: boolean; status: number; note?: DocNoteItem; error?: string }> {
   const fetcher = params.fetchFn ?? fetch
+  const locale = params.locale ?? "ko"
   try {
     const res = await fetcher("/api/portal/notes", {
       method: "POST",
@@ -38,9 +42,9 @@ export async function createNote(params: {
     if (res.ok) {
       return { ok: true, status: res.status, note: json.note }
     }
-    return { ok: false, status: res.status, error: mapNotesError(res.status, json) }
+    return { ok: false, status: res.status, error: mapNotesError(res.status, json, locale) }
   } catch {
-    return { ok: false, status: 0, error: "메모를 저장하지 못했습니다." }
+    return { ok: false, status: 0, error: getDict(locale)["docs.notesSaveFailed"] }
   }
 }
 
@@ -49,8 +53,10 @@ export async function updateNote(params: {
   body?: string
   status?: "open" | "resolved"
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<{ ok: boolean; status: number; note?: DocNoteItem; error?: string }> {
   const fetcher = params.fetchFn ?? fetch
+  const locale = params.locale ?? "ko"
   try {
     const res = await fetcher(`/api/portal/notes/${encodeURIComponent(params.id)}`, {
       method: "PATCH",
@@ -64,17 +70,19 @@ export async function updateNote(params: {
     if (res.ok) {
       return { ok: true, status: res.status, note: json.note }
     }
-    return { ok: false, status: res.status, error: mapNotesError(res.status, json) }
+    return { ok: false, status: res.status, error: mapNotesError(res.status, json, locale) }
   } catch {
-    return { ok: false, status: 0, error: "메모를 변경하지 못했습니다." }
+    return { ok: false, status: 0, error: getDict(locale)["docs.notesUpdateFailed"] }
   }
 }
 
 export async function deleteNote(params: {
   id: string
   fetchFn?: typeof fetch
+  locale?: Locale
 }): Promise<{ ok: boolean; status: number; error?: string }> {
   const fetcher = params.fetchFn ?? fetch
+  const locale = params.locale ?? "ko"
   try {
     const res = await fetcher(`/api/portal/notes/${encodeURIComponent(params.id)}`, {
       method: "DELETE",
@@ -83,9 +91,9 @@ export async function deleteNote(params: {
       return { ok: true, status: res.status }
     }
     const json = await res.json().catch(() => ({}))
-    return { ok: false, status: res.status, error: mapNotesError(res.status, json) }
+    return { ok: false, status: res.status, error: mapNotesError(res.status, json, locale) }
   } catch {
-    return { ok: false, status: 0, error: "메모를 삭제하지 못했습니다." }
+    return { ok: false, status: 0, error: getDict(locale)["docs.notesDeleteFailed"] }
   }
 }
 
@@ -97,6 +105,8 @@ export interface NotesBannerProps {
 }
 
 export function NotesBanner({ openNotes, tab, onNavigate }: NotesBannerProps) {
+  const locale = getActiveLocale()
+  const t = tFor(locale)
   const [modalOpen, setModalOpen] = useState(false)
   const openCount = openNotes.length
 
@@ -110,8 +120,8 @@ export function NotesBanner({ openNotes, tab, onNavigate }: NotesBannerProps) {
           onClick={() => setModalOpen(true)}
           className="w-full text-left px-4 py-2.5 rounded-lg bg-blue-950/40 border border-blue-900/60 text-blue-300 text-xs font-medium flex items-center justify-between hover:bg-blue-900/40 transition-colors"
         >
-          <span>{getOpenNotesBannerText(openCount)}</span>
-          <span className="text-[11px] text-blue-400 font-normal">목록 보기 →</span>
+          <span>{getOpenNotesBannerText(openCount, locale)}</span>
+          <span className="text-[11px] text-blue-400 font-normal">{t("docs.notesListView")}</span>
         </button>
       </div>
 
@@ -119,7 +129,7 @@ export function NotesBanner({ openNotes, tab, onNavigate }: NotesBannerProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-xl max-h-[80vh] flex flex-col rounded-xl bg-neutral-950 border border-neutral-800 p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
-              <h2 className="text-base font-semibold text-white">전체 열린 메모 ({openCount}건)</h2>
+              <h2 className="text-base font-semibold text-white">{formatMessage(t("docs.allOpenNotes"), { count: openCount })}</h2>
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
@@ -150,7 +160,7 @@ export function NotesBanner({ openNotes, tab, onNavigate }: NotesBannerProps) {
                       {getFileName(note.path)}
                     </span>
                     <span className="text-[10px] text-neutral-500">
-                      {new Date(note.createdAt).toLocaleDateString("ko-KR")}
+                      {new Date(note.createdAt).toLocaleDateString(locale === "en" ? "en-US" : "ko-KR")}
                     </span>
                   </div>
                   {note.quote && (
@@ -191,6 +201,8 @@ export function NotesPanel({
   forbidden = false,
   onNavigate,
 }: NotesPanelProps) {
+  const locale = getActiveLocale()
+  const t = tFor(locale)
   const [isWriting, setIsWriting] = useState(Boolean(selectedQuote))
   const [quote, setQuote] = useState(selectedQuote || "")
   const [body, setBody] = useState("")
@@ -234,6 +246,7 @@ export function NotesPanel({
       path,
       quote: quote.trim() ? quote.trim() : null,
       body: body.trim(),
+      locale,
     })
 
     setSubmitting(false)
@@ -242,40 +255,40 @@ export function NotesPanel({
       handleCancelWrite()
       onNotesChange?.()
     } else {
-      setErrorMessage(res.error || "메모를 저장하지 못했습니다.")
+      setErrorMessage(res.error || t("docs.notesSaveFailed"))
     }
   }
 
   const handleUpdate = async (id: string) => {
     if (!editBody.trim()) return
-    const res = await updateNote({ id, body: editBody.trim() })
+    const res = await updateNote({ id, body: editBody.trim(), locale })
     if (res.ok) {
       setEditingId(null)
       setErrorMessage(null)
       onNotesChange?.()
     } else {
-      setErrorMessage(res.error || "메모를 수정하지 못했습니다.")
+      setErrorMessage(res.error || t("docs.notesUpdateFailed"))
     }
   }
 
   const handleDelete = async (id: string) => {
-    if (typeof window !== "undefined" && !window.confirm("메모를 삭제할까요?")) return
-    const res = await deleteNote({ id })
+    if (typeof window !== "undefined" && !window.confirm(t("docs.notesDeleteConfirm"))) return
+    const res = await deleteNote({ id, locale })
     if (res.ok) {
       setErrorMessage(null)
       onNotesChange?.()
     } else {
-      setErrorMessage(res.error || "메모를 삭제하지 못했습니다.")
+      setErrorMessage(res.error || t("docs.notesDeleteFailed"))
     }
   }
 
   const handleReopen = async (id: string) => {
-    const res = await updateNote({ id, status: "open" })
+    const res = await updateNote({ id, status: "open", locale })
     if (res.ok) {
       setErrorMessage(null)
       onNotesChange?.()
     } else {
-      setErrorMessage(res.error || "메모를 다시 열지 못했습니다.")
+      setErrorMessage(res.error || t("docs.notesReopenFailed"))
     }
   }
 
@@ -289,8 +302,8 @@ export function NotesPanel({
       <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-neutral-400" />
-          <h3 className="text-sm font-semibold text-white">메모</h3>
-          <span className="text-xs text-neutral-400">{notes.length}건</span>
+          <h3 className="text-sm font-semibold text-white">{t("docs.memo")}</h3>
+          <span className="text-xs text-neutral-400">{formatMessage(t("work.count"), { count: notes.length })}</span>
         </div>
         {!isWriting && (
           <button
@@ -299,14 +312,14 @@ export function NotesPanel({
             disabled={forbidden}
             className="px-2.5 py-1 rounded bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 text-xs font-medium text-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            메모 추가
+            {t("docs.memoAdd")}
           </button>
         )}
       </div>
 
       {forbidden && (
         <div className="p-3 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-400 text-center">
-          {MSG_FORBIDDEN}
+          {t("docs.forbidden")}
         </div>
       )}
 
@@ -314,15 +327,15 @@ export function NotesPanel({
       {isWriting && !forbidden && (
         <div className="p-3 rounded-lg border border-neutral-800 bg-neutral-900/60 space-y-3">
           <div className="text-xs text-neutral-400">
-            <span className="font-semibold text-neutral-300">인용: </span>
-            <span className="italic">{quote.trim() ? quote.trim() : MSG_QUOTE_WHOLE_DOC}</span>
+            <span className="font-semibold text-neutral-300">{t("docs.noteQuote")}</span>
+            <span className="italic">{quote.trim() ? quote.trim() : t("docs.wholeDoc")}</span>
           </div>
 
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
             disabled={submitting}
-            placeholder="수정 방향이나 의견을 적어 주세요..."
+            placeholder={t("docs.notePlaceholder")}
             className="w-full h-24 p-2.5 rounded bg-neutral-950 border border-neutral-800 text-xs text-neutral-200 focus:outline-none focus:border-neutral-600 resize-none"
           />
 
@@ -337,7 +350,7 @@ export function NotesPanel({
               disabled={submitting}
               className="px-3 py-1 rounded bg-neutral-900 text-xs text-neutral-400 hover:text-white"
             >
-              취소
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -345,7 +358,7 @@ export function NotesPanel({
               disabled={submitting || !body.trim()}
               className="px-3 py-1 rounded bg-blue-600 text-xs text-white hover:bg-blue-500 disabled:opacity-50"
             >
-              {submitting ? "저장 중..." : "저장"}
+              {submitting ? t("common.saving") : t("common.save")}
             </button>
           </div>
         </div>
@@ -376,13 +389,13 @@ export function NotesPanel({
                         : "bg-neutral-800 text-neutral-400"
                     }`}
                   >
-                    {isOpen ? "열림" : "처리됨"}
+                    {isOpen ? t("docs.noteOpen") : t("docs.noteResolved")}
                   </span>
                   <span className="truncate text-neutral-400">
-                    {note.quote ? `"${note.quote}"` : MSG_QUOTE_WHOLE_DOC}
+                    {note.quote ? `"${note.quote}"` : t("docs.wholeDoc")}
                   </span>
                 </div>
-                <span className="shrink-0 whitespace-nowrap">{new Date(note.createdAt).toLocaleDateString("ko-KR")}</span>
+                <span className="shrink-0 whitespace-nowrap">{new Date(note.createdAt).toLocaleDateString(locale === "en" ? "en-US" : "ko-KR")}</span>
               </div>
 
               {/* 본문 또는 수정창 */}
@@ -399,14 +412,14 @@ export function NotesPanel({
                       onClick={() => setEditingId(null)}
                       className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300"
                     >
-                      취소
+                      {t("common.cancel")}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleUpdate(note.id)}
                       className="px-2 py-0.5 rounded bg-blue-600 text-[11px] text-white"
                     >
-                      저장
+                      {t("common.save")}
                     </button>
                   </div>
                 </div>
@@ -419,7 +432,7 @@ export function NotesPanel({
                 <div className="p-2.5 rounded bg-neutral-950 border border-neutral-800 text-neutral-300 space-y-1">
                   <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
                     <CheckCircle className="w-3 h-3" />
-                    <span>AI 답변</span>
+                    <span>{t("docs.aiAnswer")}</span>
                   </div>
                   <p className="text-xs leading-relaxed">{note.reply}</p>
                 </div>
@@ -438,14 +451,14 @@ export function NotesPanel({
                         }}
                         className="hover:text-white"
                       >
-                        고치기
+                        {t("sched.editShort")}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDelete(note.id)}
                         className="hover:text-rose-400"
                       >
-                        지우기
+                        {t("sched.deleteBtn")}
                       </button>
                     </>
                   ) : (
@@ -455,7 +468,7 @@ export function NotesPanel({
                       className="hover:text-blue-400 flex items-center gap-1"
                     >
                       <RotateCcw className="w-3 h-3" />
-                      다시 열기
+                      {t("docs.noteReopen")}
                     </button>
                   )}
                 </div>
@@ -465,7 +478,7 @@ export function NotesPanel({
         })}
 
         {notes.length === 0 && !isWriting && (
-          <p className="text-xs text-neutral-500 text-center py-4">등록된 메모가 없습니다.</p>
+          <p className="text-xs text-neutral-500 text-center py-4">{t("docs.noNotes")}</p>
         )}
       </div>
     </div>

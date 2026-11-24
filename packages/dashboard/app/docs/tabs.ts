@@ -6,6 +6,8 @@
 // 규칙에 걸리지 않는 문서는 숨기지 않고 개발자 탭 끝의 [분류 안 됨]에 보인다.
 
 import type { DocTreeNode } from "./markdown.ts"
+import type { Locale } from "../i18n/types.ts"
+import { formatMessage, getDict } from "../i18n/index.ts"
 
 export type DocTab = "common" | "brand" | "developer"
 export type DocTabRule = DocTab
@@ -17,6 +19,20 @@ export const DOC_TABS: Array<{ id: DocTab; label: string }> = [
   { id: "brand", label: "브랜드·마케팅" },
   { id: "developer", label: "개발자" },
 ]
+
+export function docTabs(locale: Locale = "ko"): Array<{ id: DocTab; label: string }> {
+  const dict = getDict(locale)
+  return [
+    { id: "common", label: dict["docs.tabCommon"] },
+    { id: "brand", label: dict["docs.tabBrand"] },
+    { id: "developer", label: dict["docs.tabDeveloper"] },
+  ]
+}
+
+/** "[분류 안 됨] " (ko) / "[Unclassified] " (en) prefix for unclassified sources. */
+export function unclassifiedPrefix(locale: Locale = "ko"): string {
+  return getDict(locale)["docs.tabUnclassifiedPrefix"]
+}
 
 // source id → (경로 앞부분 → 탭)
 export const DOC_TAB_RULES: Record<string, Record<string, DocTabRule>> = {
@@ -96,6 +112,7 @@ export function sectionsForTab(
   sources: TabSourceItem[],
   tab: DocTab,
   rules: Record<string, Record<string, DocTabRule>> = DOC_TAB_RULES,
+  locale: Locale = "ko",
 ): TabSection[] {
   const sections: TabSection[] = []
   for (const source of sources) {
@@ -123,7 +140,7 @@ export function sectionsForTab(
       if (tree.length > 0) {
         sections.push({
           sourceId: source.id,
-          title: `[분류 안 됨] ${source.title}`,
+          title: `${unclassifiedPrefix(locale)}${source.title}`,
           tree,
           unclassified: true,
           ...(source.readOnly ? { readOnly: true } : {}),
@@ -180,7 +197,11 @@ export function computeActiveTab(
 }
 
 // 탭 이름(검색 결과에 붙인다).
-export function tabLabel(tab: DocTab): string {
+export function tabLabel(tab: DocTab, locale: Locale = "ko"): string {
+  const dict = getDict(locale)
+  if (tab === "common") return dict["docs.tabCommon"]
+  if (tab === "brand") return dict["docs.tabBrand"]
+  if (tab === "developer") return dict["docs.tabDeveloper"]
   return DOC_TABS.find((t) => t.id === tab)?.label ?? tab
 }
 
@@ -219,9 +240,15 @@ export function searchResultTabLabel(
   docPath: string,
   rules: Record<string, Record<string, DocTabRule>> = DOC_TAB_RULES,
   sourceTab?: DocTab,
+  locale: Locale = "ko",
 ): string {
   const { tab, unclassified } = tabOfDoc(sourceId, docPath, rules, sourceTab)
-  return unclassified ? `${tabLabel(tab)}(분류 안 됨)` : tabLabel(tab)
+  return unclassified ? `${tabLabel(tab, locale)}${unclassifiedSuffix(locale)}` : tabLabel(tab, locale)
+}
+
+/** "(분류 안 됨)" (ko) / "(unclassified)" (en) suffix for search result labels. */
+export function unclassifiedSuffix(locale: Locale = "ko"): string {
+  return locale === "en" ? "(unclassified)" : "(분류 안 됨)"
 }
 
 // 주소에 문서가 없을 때 그 탭의 첫 문서를 자동으로 열지. 검색어가 있으면 결과를 지우지 않도록 열지 않는다.
@@ -269,8 +296,13 @@ export interface SearchArchiveInfo {
 }
 
 // 검색 결과에 붙일 보관 표시. 현행 문서면 null.
-export function archiveBadgeLabel(archive: SearchArchiveInfo | null | undefined): string | null {
+export function archiveBadgeLabel(archive: SearchArchiveInfo | null | undefined, locale: Locale = "ko"): string | null {
   if (!archive) return null
+  if (locale === "en") {
+    const kind = archive.kind === "대체됨" ? "superseded" : "archived"
+    if (archive.date) return `archived · ${kind} ${archive.date}`
+    return "archived"
+  }
   if (archive.kind === "대체됨" && archive.date) return `보관 · 대체됨 ${archive.date}`
   if (archive.date) return `보관 ${archive.date}`
   return "보관"

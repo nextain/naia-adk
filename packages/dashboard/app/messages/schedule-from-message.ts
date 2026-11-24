@@ -3,6 +3,8 @@
 // 머리글)으로만 파일을 고르므로, 이 모듈은 사용자 이름을 보내지 않는다. 남의 일정에 쓸 길이 없다.
 import { scheduleDetailHref } from "@naia-adk/core/src/schedule-link"
 import { messagesHref, type Message } from "./messenger"
+import type { Locale } from "../i18n/types.ts"
+import { getDict } from "../i18n/index.ts"
 
 export const PERSONAL_SCHEDULE_PATH = "/schedule-personal"
 // core personal-schedule 의 MAX_TITLE_LENGTH·MAX_MEMO_LENGTH 와 같다. 그 모듈은 node:fs 를 써서 브라우저 묶음에 넣지 못한다.
@@ -56,10 +58,15 @@ export function truncateUtf16(value: string, maxLength: number): string {
 }
 
 /** 글 본문에서 날짜(YYYY-MM-DD, M월 D일)와 시각(HH:mm, 오전/오후 N시 M분, N시)을 찾는다. 없으면 오늘 종일. */
-export function draftScheduleFromMessage(message: Pick<Message, "id" | "channel_id" | "body">, today: string): ScheduleDraft {
+export function draftScheduleFromMessage(
+  message: Pick<Message, "id" | "channel_id" | "body">,
+  today: string,
+  locale: Locale = "ko",
+): ScheduleDraft {
+  const dict = getDict(locale)
   const body = message.body ?? ""
   const outsideCode = body.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]*`/g, " ")
-  const firstLine = outsideCode.split(/\r?\n/).map(plainLine).find(Boolean) ?? "메신저 글"
+  const firstLine = outsideCode.split(/\r?\n/).map(plainLine).find(Boolean) ?? dict["msg.defaultTitle"]
   const title = truncateUtf16(firstLine, MAX_TITLE_LENGTH)
 
   const year = Number(today.slice(0, 4))
@@ -86,19 +93,20 @@ export function draftScheduleFromMessage(message: Pick<Message, "id" | "channel_
   }
 
   const link = messagesHref(message.channel_id, message.id)
-  const memo = truncateUtf16(`메신저 글: ${link}\n\n${body}`, MAX_MEMO_LENGTH)
+  const memo = truncateUtf16(locale === "en" ? `Messenger post: ${link}\n\n${body}` : `메신저 글: ${link}\n\n${body}`, MAX_MEMO_LENGTH)
   return { title, date: date ?? today, time, memo }
 }
 
 /** 초안을 개인 일정 API 몸통으로. 시각 일정은 한 시간짜리(같은 날 23:59 를 넘지 않음). */
-export function scheduleWriteBody(draft: ScheduleDraft): ScheduleWriteBody {
+export function scheduleWriteBody(draft: ScheduleDraft, locale: Locale = "ko"): ScheduleWriteBody {
+  const dict = getDict(locale)
   const title = draft.title.trim()
-  if (!title) throw new Error("제목을 적어 주세요.")
+  if (!title) throw new Error(dict["msg.schedTitleRequired"])
   if (!validDate(+draft.date.slice(0, 4), +draft.date.slice(5, 7), +draft.date.slice(8, 10)) || !/^\d{4}-\d{2}-\d{2}$/.test(draft.date)) {
-    throw new Error("날짜는 YYYY-MM-DD 입니다.")
+    throw new Error(dict["msg.schedDateFmt"])
   }
   if (draft.time === null) return { title, start: draft.date, end: draft.date, allDay: true, memo: draft.memo }
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) throw new Error("시각은 HH:mm 입니다.")
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) throw new Error(dict["msg.schedTimeFmt"])
   const [h, m] = draft.time.split(":").map(Number)
   const endMinutes = Math.min(h * 60 + m + 60, 23 * 60 + 59)
   return {
@@ -124,12 +132,25 @@ const ERROR_TEXT: Record<string, string> = {
   "personal-schedule-conflict": "일정이 그사이 바뀌었습니다. 다시 하세요.",
 }
 
-async function errorOf(res: Response): Promise<ScheduleAddError> {
+const ERROR_KEY_BY_CODE: Record<string, "msg.schedIdentity" | "msg.schedOrigin" | "msg.schedWarnings" | "msg.schedBusy" | "msg.schedConflict"> = {
+  "personal-schedule-identity-required": "msg.schedIdentity",
+  "origin-not-allowed": "msg.schedOrigin",
+  "personal-schedule-has-warnings": "msg.schedWarnings",
+  "personal-schedule-busy": "msg.schedBusy",
+  "personal-schedule-conflict": "msg.schedConflict",
+}
+
+async function errorOf(res: Response, locale: Locale = "ko"): Promise<ScheduleAddError> {
   let code = `http-${res.status}`
   try {
     const data = (await res.json()) as { error?: unknown }
     if (typeof data.error === "string") code = data.error
   } catch {}
+  const key = ERROR_KEY_BY_CODE[code]
+  if (key) return new ScheduleAddError(code, getDict(locale)[key])
+  if (locale === "en") {
+    return new ScheduleAddError(code, code.startsWith("http-") ? `Personal schedule API error (${res.status})` : code)
+  }
   return new ScheduleAddError(code, ERROR_TEXT[code] ?? (code.startsWith("http-") ? `개인 일정 API 오류 (${res.status})` : code))
 }
 
@@ -145,12 +166,13 @@ interface PersonalDoc {
 export async function addToPersonalSchedule(
   body: ScheduleWriteBody,
   fetchFn: typeof fetch = fetch,
+  locale: Locale = "ko",
 ): Promise<{ id: string | null; href: string }> {
   for (let attempt = 0; ; attempt++) {
     const current = await fetchFn(PERSONAL_SCHEDULE_PATH, { cache: "no-store", headers: { accept: "application/json" } })
-    if (!current.ok) throw await errorOf(current)
+    if (!current.ok) throw await errorOf(current, locale)
     const doc = (await current.json()) as PersonalDoc
-    if (typeof doc.revision !== "string") throw new ScheduleAddError("no-revision", "개인 일정 개정 값을 받지 못했습니다.")
+    if (typeof doc.revision !== "string") throw new ScheduleAddError("no-revision", getDict(locale)["msg.schedNoRevision"])
     const before = new Set((doc.items ?? []).map((i) => i.id))
     const res = await fetchFn(PERSONAL_SCHEDULE_PATH, {
       method: "POST",
@@ -159,11 +181,11 @@ export async function addToPersonalSchedule(
       body: JSON.stringify(body),
     })
     if (res.status === 409 && attempt === 0) {
-      const error = await errorOf(res)
+      const error = await errorOf(res, locale)
       if (error.code === "personal-schedule-conflict") continue
       throw error
     }
-    if (!res.ok) throw await errorOf(res)
+    if (!res.ok) throw await errorOf(res, locale)
     const after = (await res.json()) as PersonalDoc
     const added = (after.items ?? []).find((i) => !before.has(i.id) && i.title === body.title && i.start === body.start)
     const id = added?.id ?? null
