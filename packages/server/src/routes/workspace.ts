@@ -6,6 +6,7 @@ import {
   classifySubmodules,
   buildFileTree,
   resolveIndexPresence,
+  inspectWorkspaceSettings,
 } from "@naia-adk/core"
 
 export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
@@ -15,6 +16,10 @@ export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
     const meta = getWorkspaceMeta(root)
     const rules = loadAgentsRules(root)
     return { meta, rules: rules ? Object.keys(rules as Record<string, unknown>) : [] }
+  })
+
+  app.get("/settings", async () => {
+    return inspectWorkspaceSettings(root)
   })
 
   app.get("/index", async () => {
