@@ -7,6 +7,7 @@ import {
   detailStatusFilters,
   filterLedgerCards,
   formatDueLabel,
+  isProcessingWorkerItem,
   isSafeHttpUrl,
   ledgerStatusLabel,
   splitSummaryColumns,
@@ -128,6 +129,15 @@ function LedgerCard({ item, nowMs, locale }: { item: LedgerCardItem; nowMs?: num
           >
             {ledgerStatusLabel(item.status, locale)}
           </span>
+          {item.workerName && (
+            <span
+              data-testid={`ledger-worker-${item.id}`}
+              title={item.workerName}
+              className="inline-flex items-center rounded-full border border-violet-700/80 bg-violet-950/60 px-2 py-0.5 text-[11px] font-semibold text-violet-200"
+            >
+              {item.workerName}
+            </span>
+          )}
           {item.overdue && (
             <span
               data-testid={`ledger-overdue-${item.id}`}
@@ -249,6 +259,8 @@ export function WorkBoard({
   }
 
   const summary = ledger.summary
+  const maxSubagents = ledger.maxSubagents ?? null
+  const processingCount = summary.processing ?? items.filter((item) => isProcessingWorkerItem(item)).length
 
   return (
     <div data-testid="work-ledger-board" className="space-y-5">
@@ -295,7 +307,13 @@ export function WorkBoard({
       )}
 
       {/* 핵심 지표 카드 */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="rounded-lg border border-violet-800/60 bg-violet-950/20 p-3">
+          <div className="text-xs text-violet-200">{t("work.processing")}</div>
+          <div data-testid="work-kpi-processing" className="text-2xl font-bold text-violet-200 mt-1">
+            {maxSubagents !== null ? `${processingCount} / ${maxSubagents}` : `${processingCount}`}
+          </div>
+        </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
           <div className="text-xs text-neutral-400">{t("work.todo")}</div>
           <div data-testid="summary-todo-count" className="text-2xl font-bold text-white mt-1">
@@ -413,7 +431,26 @@ export function WorkBoard({
 
       {/* 1. 요약 탭 */}
       {activeTab === "summary" && (
-        <div data-testid="work-summary-view" className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <div data-testid="work-summary-view" className="space-y-4">
+          <section data-testid="work-processing-section" className="rounded-lg border border-violet-800/60 bg-violet-950/10 p-3 space-y-3">
+            <div className="flex items-center justify-between border-b border-violet-800/40 pb-2">
+              <div>
+                <h2 className="text-sm font-semibold text-white">{t("work.processing")}</h2>
+                <p className="text-[11px] text-neutral-400">{t("work.processingDesc")}</p>
+              </div>
+              <span className="rounded-full bg-violet-950 px-2 py-0.5 text-xs text-violet-200">
+                {summaryColumns.processingItems.length}
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              {summaryColumns.processingItems.length === 0 ? (
+                <p className="py-4 text-center text-xs text-neutral-500">{t("work.emptyProcessing")}</p>
+              ) : (
+                summaryColumns.processingItems.map((item) => <LedgerCard key={`${item.role}:${item.id}`} item={item} nowMs={nowMs} locale={locale} />)
+              )}
+            </div>
+          </section>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
           <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 space-y-3">
             <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
               <div>
@@ -470,6 +507,7 @@ export function WorkBoard({
               )}
             </div>
           </section>
+          </div>
         </div>
       )}
 

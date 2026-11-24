@@ -117,6 +117,7 @@ describe("work-ledger core loader", () => {
       done: 1,
       dropped: 0,
       overdue: 2,
+      processing: 0,
     })
 
     // Overdue active items sorted by earliest due first
