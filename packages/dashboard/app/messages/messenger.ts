@@ -1,5 +1,7 @@
 // 나이아 메신저 화면의 모양·규칙(화면 없이 시험하는 부분).
 // 서버 약속: packages/server/src/routes/portal-messenger.ts 의 REST·SSE 모양만 믿는다.
+import type { Locale } from "../i18n/types.ts"
+import { formatMessage, getDict } from "../i18n/index.ts"
 
 export const MESSENGER_API = "/api/portal/messenger"
 
@@ -137,6 +139,111 @@ export const MSG = {
   scheduleAdded: "개인 일정에 넣었습니다.",
   scheduleOpen: "일정에서 보기",
 } as const
+
+export type MessengerStrings = typeof MSG
+
+export interface MessengerStringsExtra {
+  dismissAlert: string
+  channelList: string
+  threadReplyPlaceholder: string
+  loadMore: string
+  rightPaneWidth: string
+  writePost: string
+  removeFile: string
+  fieldTitle: string
+  fieldDate: string
+  fieldTime: string
+  moreAlerts: (n: number) => string
+  uploading: string
+  removeReaction: string
+  addReaction: string
+  pickReaction: string
+  approvalRequest: string
+  noTitle: string
+  copyOk: string
+}
+
+export type LocalizedMessengerStrings = MessengerStrings & MessengerStringsExtra
+
+/** Localized messenger UI strings (defaults to Korean so existing callers stay compatible). */
+export function getMessengerStrings(locale: Locale = "ko"): LocalizedMessengerStrings {
+  const dict = getDict(locale)
+  return {
+    title: dict["msg.title"],
+    channels: dict["msg.channels"],
+    dms: dict["msg.dms"],
+    empty: dict["msg.empty"],
+    loading: dict["msg.loading"],
+    loadFailed: dict["msg.loadFailed"],
+    channelsFailed: dict["msg.channelsFailed"],
+    placeholder: (name: string) => `${name}${locale === "en" ? " — write here" : "에 글 쓰기"}`,
+    keyHint: dict["msg.sendHint"],
+    send: dict["msg.send"],
+    sendFailed: dict["msg.sendFailed"],
+    attach: dict["msg.attach"],
+    attachTooBig: dict["msg.attachTooBig"],
+    attachBadType: dict["msg.attachBadType"],
+    reply: dict["msg.reply"],
+    replies: (n: number) => formatMessage(dict["msg.replies"], { count: n }),
+    replyingTo: dict["msg.replying"],
+    cancel: dict["msg.cancel"],
+    thread: dict["msg.thread"],
+    closePanel: dict["msg.closePanel"],
+    docPreview: dict["msg.docPreview"],
+    docLoading: dict["msg.docLoading"],
+    docFailed: dict["msg.docFailed"],
+    openDoc: dict["msg.openDoc"],
+    foldShow: (n: number) => formatMessage(dict["msg.foldShow"], { count: n }),
+    foldHide: dict["msg.foldHide"],
+    copyTable: dict["msg.copyTable"],
+    copied: dict["msg.copied"],
+    copyFailed: dict["msg.copyFailed"],
+    approve: dict["msg.approve"],
+    reject: dict["msg.reject"],
+    copyCode: dict["msg.copyCode"],
+    approvalPending: dict["msg.approvalPending"],
+    approvalApproved: dict["msg.approvalApproved"],
+    approvalRejected: dict["msg.approvalRejected"],
+    approvalFailed: dict["msg.approvalFailed"],
+    live: dict["msg.live"],
+    reconnecting: dict["msg.reconnecting"],
+    alertTitle: dict["msg.alertTitle"],
+    alertOpen: dict["msg.alertOpen"],
+    agent: dict["msg.agent"],
+    backToList: dict["msg.backToList"],
+    addToSchedule: dict["msg.addToSchedule"],
+    scheduleOwnOnly: dict["msg.scheduleOwnOnly"],
+    scheduleSaving: dict["msg.scheduleSaving"],
+    scheduleAdded: dict["msg.scheduleAdded"],
+    scheduleOpen: dict["msg.scheduleOpen"],
+    dismissAlert: dict["msg.dismissAlert"],
+    channelList: dict["msg.channelList"],
+    threadReplyPlaceholder: dict["msg.threadReplyPlaceholder"],
+    loadMore: dict["msg.loadMore"],
+    rightPaneWidth: dict["msg.rightPaneWidth"],
+    writePost: dict["msg.writePost"],
+    removeFile: dict["msg.removeFile"],
+    fieldTitle: dict["msg.fieldTitle"],
+    fieldDate: dict["msg.fieldDate"],
+    fieldTime: dict["msg.fieldTime"],
+    moreAlerts: (n: number) => formatMessage(dict["msg.moreAlerts"], { count: n }),
+    uploading: dict["msg.uploading"],
+    removeReaction: dict["msg.removeReaction"],
+    addReaction: dict["msg.addReaction"],
+    pickReaction: dict["msg.pickReaction"],
+    approvalRequest: dict["msg.approvalRequest"],
+    noTitle: dict["msg.noTitle"],
+    copyOk: dict["msg.copyOk"],
+  } as unknown as LocalizedMessengerStrings
+}
+
+export function alertTextFor(a: MessengerAlert, channels: Channel[], locale: Locale = "ko"): string {
+  const dict = getDict(locale)
+  const who = a.target_id ? authorLabel(a.target_id) : dict["msg.agent"]
+  const ch = channels.find((c) => c.id === a.channel_id)
+  const where = ch ? channelLabel(ch) : dict["msg.title"]
+  return locale === "en" ? `${where} · ${who} has not replied for 30 min` : `${where} · ${who} 답이 30분째 없습니다`
+}
 
 export function messengerUrl(path: string): string {
   return `${MESSENGER_API}${path}`
@@ -284,14 +391,15 @@ export function attachmentHref(a: Attachment): string {
 }
 
 // 올리기 전 화면에서 거르는 것(서버가 다시 거른다).
-export function checkAttachment(name: string, size: number): string | null {
-  if (size > ATTACHMENT_MAX_BYTES) return MSG.attachTooBig
+export function checkAttachment(name: string, size: number, locale: Locale = "ko"): string | null {
+  const dict = getDict(locale)
+  if (size > ATTACHMENT_MAX_BYTES) return dict["msg.attachTooBig"]
   const parts = name.toLowerCase().split(".")
-  if (parts.length < 2) return MSG.attachBadType
+  if (parts.length < 2) return dict["msg.attachBadType"]
   const ext = parts[parts.length - 1]
-  if (!ATTACHMENT_EXTS.includes(ext)) return MSG.attachBadType
+  if (!ATTACHMENT_EXTS.includes(ext)) return dict["msg.attachBadType"]
   // 이중 확장자(보고서.pdf.exe 같은 것) 앞 조각이 실행형이면 거절
-  if (parts.slice(1, -1).some((p) => /^(exe|bat|cmd|com|sh|ps1|js|msi|scr|vbs|jar|docm|xlsm|pptm)$/.test(p))) return MSG.attachBadType
+  if (parts.slice(1, -1).some((p) => /^(exe|bat|cmd|com|sh|ps1|js|msi|scr|vbs|jar|docm|xlsm|pptm)$/.test(p))) return dict["msg.attachBadType"]
   return null
 }
 
@@ -606,13 +714,15 @@ export function messageAuthorLabel(m: Pick<Message, "author_id" | "author_name">
   return m.author_name || authorLabel(m.author_id)
 }
 
-export function formatMessageTime(iso: string, now: Date = new Date()): string {
+export function formatMessageTime(iso: string, now: Date = new Date(), locale: Locale = "ko"): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ""
   const hh = String(d.getHours()).padStart(2, "0")
   const mm = String(d.getMinutes()).padStart(2, "0")
   const sameDay = d.toDateString() === now.toDateString()
-  return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}월 ${d.getDate()}일 ${hh}:${mm}`
+  if (sameDay) return `${hh}:${mm}`
+  if (locale === "en") return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 ${hh}:${mm}`
 }
 
 export function channelLabel(c: Pick<Channel, "name" | "kind">): string {

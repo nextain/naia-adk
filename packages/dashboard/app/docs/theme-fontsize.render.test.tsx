@@ -6,7 +6,7 @@ import { describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 import vm from "node:vm"
 import React from "react"
-import { renderToStaticMarkup } from "react-dom/server"
+import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server"
 import { Nav } from "../components/Nav.tsx"
 
 const require = createRequire(import.meta.url)
@@ -277,12 +277,15 @@ describe("Nav 및 RootLayout 렌더·WCAG AA 대비 시험", () => {
     }
   })
 
-  it("RootLayout 렌더 시 <head> 안에 테마 초기화 스크립트가 포함된다", () => {
-    const html = renderToStaticMarkup(
+  it("RootLayout 렌더 시 <head> 안에 테마 초기화 스크립트가 포함된다", async () => {
+    // RootLayout은 요청 로케일을 읽는 비동기 서버 컴포넌트이므로 스트림 렌더로
+    // 기다린 뒤 같은 내용을 단언한다(어설션 변경 없음).
+    const stream = await renderToReadableStream(
       <RootLayout>
         <div>문서 본문</div>
       </RootLayout>,
     )
+    const html = await new Response(stream).text()
     assert.match(html, /<html[^>]*lang="ko"/)
     assert.match(html, /data-theme/)
     assert.match(html, /naia-adk-theme/)

@@ -1,6 +1,8 @@
 // 대시보드 화면 테마(라이트·다크·시스템)와 글자 크기(4단계) 설정 도우미.
 // 브라우저 localStorage 읽기·쓰기는 사생활 보호 모드나 저장 공간 제한에서도 안전하도록 모두 try/catch로 감싼다.
 
+import type { Locale } from "./i18n/types.ts"
+
 export type ThemePreference = "light" | "dark" | "system"
 export type ResolvedTheme = "light" | "dark"
 export type FontSizeStep = "sm" | "md" | "lg" | "xl"
@@ -135,9 +137,45 @@ export function fontSizePx(step: FontSizeStep): number {
   return found ? found.px : 16
 }
 
-export function fontSizeLabel(step: FontSizeStep): string {
+export function fontSizeLabel(step: FontSizeStep, locale: Locale = "ko"): string {
+  if (locale === "en") {
+    const found = EN_FONT_SIZE_LABELS[step]
+    return found ?? "Medium"
+  }
   const found = FONT_SIZE_STEPS.find((item) => item.value === step)
   return found ? found.label : "보통"
+}
+
+export const EN_FONT_SIZE_LABELS: Record<FontSizeStep, string> = {
+  sm: "Small",
+  md: "Medium",
+  lg: "Large",
+  xl: "Extra large",
+}
+
+export const EN_THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string; ariaLabel: string }> = [
+  { value: "light", label: "Light", ariaLabel: "Light theme" },
+  { value: "dark", label: "Dark", ariaLabel: "Dark theme" },
+  { value: "system", label: "System", ariaLabel: "System theme" },
+]
+
+export function themeOptions(locale: Locale = "ko"): ReadonlyArray<{
+  value: ThemePreference
+  label: string
+  ariaLabel: string
+}> {
+  return locale === "en" ? EN_THEME_OPTIONS : THEME_OPTIONS
+}
+
+export function fontSizeSteps(locale: Locale = "ko"): ReadonlyArray<{
+  value: FontSizeStep
+  label: string
+  px: number
+}> {
+  if (locale === "en") {
+    return FONT_SIZE_STEPS.map((step) => ({ ...step, label: EN_FONT_SIZE_LABELS[step.value] }))
+  }
+  return FONT_SIZE_STEPS
 }
 
 export interface DocumentRootLike {

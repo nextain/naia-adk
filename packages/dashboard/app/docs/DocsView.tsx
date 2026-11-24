@@ -21,9 +21,6 @@ import {
   canEditDoc,
   createBreadcrumbs,
   getFileName,
-  MSG_FORBIDDEN,
-  MSG_NOT_FOUND,
-  MSG_READ_ONLY,
   truncateQuote,
   type DocNoteItem,
   type FavoriteItem,
@@ -39,10 +36,13 @@ import {
   isArchivedDocPath,
   searchResultHref,
   searchResultTabLabel,
+  tabLabel,
   type DocTab,
   type SearchArchiveInfo,
   type TabSection,
 } from "./tabs"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import {
   convertWikiLinks,
   findWikiTarget,
@@ -122,6 +122,7 @@ function TreeItem({
   noteCounts?: Record<string, number>
   onNavigate?: (targetHref: string) => boolean
 }) {
+  const archivedBadge = useT()("docs.archivedBadge")
   const isArchive = node.type === "directory" && isArchiveDirName(node.name)
   const containsCurrent = currentSource === sourceId && Boolean(currentPath?.startsWith(`${node.path}/`))
   const isSelected = currentSource === sourceId && currentPath === node.path
@@ -162,7 +163,7 @@ function TreeItem({
               {node.name}
               {isArchive && (
                 <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] bg-neutral-800 text-neutral-400 border border-neutral-700">
-                  보관 · 옛 판
+                  {archivedBadge}
                 </span>
               )}
             </span>
@@ -238,6 +239,7 @@ function TreeItem({
 
 // ── 코드 블록 ───────────────────────────────────────────────────────────────
 function CodeBlock({ children }: { children: React.ReactNode }) {
+  const ct = useT()
   const [copied, setCopied] = useState(false)
   const copy = (e: React.MouseEvent<HTMLButtonElement>) => {
     const text = e.currentTarget.parentElement?.querySelector("pre")?.innerText ?? ""
@@ -259,7 +261,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
         onClick={copy}
         className="absolute top-2 right-2 px-2 py-1 rounded text-xs bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
       >
-        {copied ? "복사됨" : "복사"}
+        {copied ? ct("docs.copied") : ct("docs.copy")}
       </button>
     </div>
   )
@@ -416,8 +418,10 @@ export function DocsView({
   groupFavoriteError = null,
   linkedCards = [],
 }: DocsViewProps) {
+  const locale = useLocale()
+  const t = useT()
   const currentSourceObj = sources.find((s) => s.id === currentSource)
-  const sourceTitle = currentSourceObj?.title || currentSource || "문서"
+  const sourceTitle = currentSourceObj?.title || currentSource || t("docs.sourceFallback")
   const isReadOnly = Boolean(currentSourceObj?.readOnly || currentSource?.startsWith("data:"))
   const canEdit = canEditDoc(currentSource, isReadOnly, currentSourceObj?.missing)
   const isArchived = currentPath ? isArchivedDocPath(currentPath) : false
@@ -467,9 +471,9 @@ export function DocsView({
       const found = currentSource ? findWikiTarget(tree, target) : null
       if (!found) {
         return (
-          <span className="text-neutral-400" title="이 문서는 문서 화면에 보이는 폴더에 없습니다">
+          <span className="text-neutral-400" title={t("docs.notInFolder")}>
             {children}
-            <span className="ml-1 text-xs text-neutral-600">(문서 화면에 없음)</span>
+            <span className="ml-1 text-xs text-neutral-600">{t("docs.notInDocs")}</span>
           </span>
         )
       }
@@ -568,9 +572,9 @@ export function DocsView({
       {portalStatus !== "loading" && !hasCompanySource && (
         <div className="p-4 rounded-lg bg-neutral-900 border border-neutral-800 text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
-            <span className="font-semibold text-neutral-200">회사 설정이 아직 없습니다:</span>
+            <span className="font-semibold text-neutral-200">{t("docs.noCompanyConfig")}</span>
             <code className="ml-2 px-2 py-1 rounded bg-neutral-950 border border-neutral-800 text-neutral-300 font-mono text-xs">
-              pnpm adk:setup -- --company &lt;회사 문서 저장소 주소&gt;
+              {t("docs.companySetupCmd")}
             </code>
           </div>
         </div>
@@ -591,8 +595,8 @@ export function DocsView({
           type="search"
           value={queryInput}
           onChange={(e) => onQueryChange?.(e.target.value)}
-          placeholder="문서 검색 (공통·브랜드·마케팅·개발자 전체, 제목과 본문)"
-          aria-label="문서 검색"
+          placeholder={t("docs.searchPlaceholder")}
+          aria-label={t("docs.searchLabel")}
           className="w-full px-4 py-2 rounded-lg border border-neutral-800 bg-neutral-950 text-sm text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-600"
         />
         <label className="mt-2 inline-flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
@@ -602,7 +606,7 @@ export function DocsView({
             onChange={(e) => onToggleArchived?.(e.target.checked)}
             className="accent-neutral-500"
           />
-          보관 문서 포함 (옛 판은 현행 문서 아래에 보입니다)
+          {t("docs.archivedNote")}
         </label>
       </form>
 
@@ -614,9 +618,9 @@ export function DocsView({
           className="w-full py-2 px-4 rounded border border-neutral-800 bg-neutral-900 text-sm font-medium flex items-center justify-between gap-3"
         >
           <span className="min-w-0 truncate text-left">
-            문서 목록{currentPath ? ` · ${getFileName(currentPath).replace(/\.md$/i, "")}` : ""}
+            {t("docs.docList")}{currentPath ? ` · ${getFileName(currentPath).replace(/\.md$/i, "")}` : ""}
           </span>
-          <span className="shrink-0 whitespace-nowrap text-neutral-400">{mobileTreeOpen ? "▲ 접기" : "▼ 펼치기"}</span>
+          <span className="shrink-0 whitespace-nowrap text-neutral-400">{mobileTreeOpen ? t("docs.collapse") : t("docs.expand")}</span>
         </button>
       </div>
 
@@ -628,18 +632,18 @@ export function DocsView({
           }`}
         >
           {/* 탭 버튼 */}
-          <div role="tablist" aria-label="문서 구분" className="grid grid-cols-3 gap-1 p-1 rounded-md bg-neutral-900 border border-neutral-800">
-            {(["common", "brand", "developer"] as DocTab[]).map((t) => {
-              const label = t === "common" ? "공통" : t === "brand" ? "브랜드·마케팅" : "개발자"
-              const selected = t === activeTab
+          <div role="tablist" aria-label={t("docs.tabsLabel")} className="grid grid-cols-3 gap-1 p-1 rounded-md bg-neutral-900 border border-neutral-800">
+            {(["common", "brand", "developer"] as DocTab[]).map((tab) => {
+              const label = tabLabel(tab, locale)
+              const selected = tab === activeTab
               const canRetain =
                 currentSource &&
                 currentPath &&
-                docVisibleInTab(currentSource, currentPath, t, undefined, sourceTab)
-              const tabHref = canRetain ? docHref(t, currentSource, currentPath) : docHref(t)
+                docVisibleInTab(currentSource, currentPath, tab, undefined, sourceTab)
+              const tabHref = canRetain ? docHref(tab, currentSource, currentPath) : docHref(tab)
               return (
                 <Link
-                  key={t}
+                  key={tab}
                   role="tab"
                   aria-selected={selected}
                   href={tabHref}
@@ -681,12 +685,12 @@ export function DocsView({
                   <div className="flex items-center gap-1">
                     {isSectionReadOnly && (
                       <span className="text-[10px] font-normal px-1.5 py-0.2 rounded bg-neutral-900 text-neutral-400 border border-neutral-800">
-                        {MSG_READ_ONLY}
+                        {t("docs.readOnly")}
                       </span>
                     )}
                     {isMissing && (
                       <span className="text-[10px] font-normal px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-900/60">
-                        {MSG_NOT_FOUND}
+                        {t("docs.notFound")}
                       </span>
                     )}
                   </div>
@@ -714,9 +718,9 @@ export function DocsView({
             )
           })}
           {portalStatus === "error" ? (
-            <div className="text-xs text-neutral-400 px-2 py-1">문서 목록을 불러오지 못했습니다</div>
+            <div className="text-xs text-neutral-400 px-2 py-1">{t("docs.portalLoading")}</div>
           ) : portalStatus === "loading" ? null : (
-            tabSections.length === 0 && <div className="text-xs text-neutral-600 px-2 py-1">문서 없음</div>
+            tabSections.length === 0 && <div className="text-xs text-neutral-600 px-2 py-1">{t("docs.noDocs")}</div>
           )}
         </aside>
 
@@ -727,12 +731,12 @@ export function DocsView({
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <h1 className="text-lg font-semibold text-white">
-                  {`"${queryInput}" 검색 결과`}
-                  {hits && <span className="ml-2 text-sm font-normal text-neutral-400">{`${hits.length}건`}</span>}
+                  {`"${queryInput}" ${t("docs.searchResults")}`}
+                  {hits && <span className="ml-2 text-sm font-normal text-neutral-400">{formatMessage(t("work.count"), { count: hits.length })}</span>}
                 </h1>
                 {onCloseSearch && (
                   <button type="button" onClick={onCloseSearch} className="text-xs text-neutral-400 hover:text-white">
-                    검색 닫기
+                    {t("docs.closeSearch")}
                   </button>
                 )}
               </div>
@@ -741,18 +745,18 @@ export function DocsView({
                 <div className="p-4 rounded bg-red-950/40 border border-red-900/60 text-red-300 text-sm">{searchError}</div>
               )}
 
-              {!hits && !searchError && <div className="text-neutral-500 text-sm">찾는 중입니다...</div>}
+              {!hits && !searchError && <div className="text-neutral-500 text-sm">{t("docs.searching")}</div>}
               {hits && hits.length === 0 && (
                 <div className="text-neutral-500 text-sm">
-                  {includeArchived ? "찾은 문서가 없습니다." : "찾은 현행 문서가 없습니다."}
+                  {includeArchived ? t("docs.noResultsAll") : t("docs.noResultsCurrent")}
                 </div>
               )}
 
               {hits && !includeArchived && archivedHidden > 0 && (
                 <div className="text-xs text-neutral-500">
-                  {`보관 문서 ${archivedHidden}건은 숨겼습니다. `}
+                  {formatMessage(t("docs.archivedHidden"), { count: archivedHidden })}
                   <button type="button" onClick={() => onToggleArchived?.(true)} className="underline hover:text-neutral-300">
-                    보관 문서 포함
+                    {t("docs.includeArchived")}
                   </button>
                 </div>
               )}
@@ -760,7 +764,7 @@ export function DocsView({
               {/* 검색 결과 목록: 보이는 글에는 파일 이름과 출처만 두고 전체 경로(hit.path)는 보이지 않는다 (검수 8번 및 2회차) */}
               <ul className="space-y-2">
                 {(hits ?? []).map((hit) => {
-                  const badge = archiveBadgeLabel(hit.archive)
+                  const badge = archiveBadgeLabel(hit.archive, locale)
                   const hitSourceTab = sources.find((s) => s.id === hit.source)?.tab
                   const fileNameOnly = getFileName(hit.path)
 
@@ -780,7 +784,7 @@ export function DocsView({
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="shrink-0 px-2 py-0.5 rounded text-xs bg-neutral-800 text-neutral-300">
-                            {searchResultTabLabel(hit.source, hit.path, undefined, hitSourceTab)}
+                            {searchResultTabLabel(hit.source, hit.path, undefined, hitSourceTab, locale)}
                           </span>
                           {badge && (
                             <span className="shrink-0 px-2 py-0.5 rounded text-xs bg-amber-950/60 text-amber-300 border border-amber-900/60">
@@ -803,7 +807,7 @@ export function DocsView({
           {!searching && (
             <>
               {portalStatus === "loading" ? (
-                <div className="text-neutral-500 py-12 text-center text-sm">불러오는 중...</div>
+                <div className="text-neutral-500 py-12 text-center text-sm">{t("docs.loading")}</div>
               ) : (
                 <>
                   {/* (1) 폴더 격자 (viewMode === "grid") */}
@@ -847,7 +851,7 @@ export function DocsView({
               {viewMode === "doc" && (
                 <div className="space-y-6">
                   {docLoading && (
-                    <div className="text-neutral-500 py-12 text-center text-sm">문서를 불러오는 중입니다...</div>
+                    <div className="text-neutral-500 py-12 text-center text-sm">{t("docs.docLoading")}</div>
                   )}
 
                   {docError && (
@@ -887,14 +891,14 @@ export function DocsView({
                           {/* SP-06 접근 제한 안내 문구 (결함 8) */}
                           {(forbidden || forbiddenNotice) && (
                             <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800 text-xs text-neutral-400 text-center">
-                              {MSG_FORBIDDEN}
+                              {t("docs.forbidden")}
                             </div>
                           )}
 
                           {/* 문서 상단 헤더: breadcrumbs, 제목, 별, [편집] */}
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
                             <div className="space-y-1 min-w-0">
-                              <nav aria-label="문서 경로" className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
+                              <nav aria-label={t("docs.docPath")} className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
                                 {createBreadcrumbs(sourceTitle, currentPath || "").map((crumb, idx, arr) => {
                                   const isLast = idx === arr.length - 1
                                   if (isLast) {
@@ -938,8 +942,8 @@ export function DocsView({
                                       }
                                       onToggleFavorite()
                                     }}
-                                    title={isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"}
-                                    aria-label={isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                                    title={isFavorite ? t("docs.removeFavorite") : t("docs.addFavorite")}
+                                    aria-label={isFavorite ? t("docs.removeFavorite") : t("docs.addFavorite")}
                                     className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-amber-400 transition-colors"
                                   >
                                     <Star className={`w-5 h-5 ${isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
@@ -967,7 +971,7 @@ export function DocsView({
                                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 text-xs font-medium text-neutral-200 hover:text-white transition-colors"
                                 >
                                   <Edit3 className="w-3.5 h-3.5" />
-                                  편집
+                                  {t("docs.edit")}
                                 </button>
                               </div>
                             )}
@@ -977,7 +981,7 @@ export function DocsView({
                           {activeSelection && (
                             <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-blue-950/40 border border-blue-900/60 my-2">
                               <div className="text-xs text-blue-300 truncate min-w-0">
-                                <span className="font-semibold text-blue-200 mr-1.5">선택한 글:</span>
+                                <span className="font-semibold text-blue-200 mr-1.5">{t("docs.selectedText")}</span>
                                 &quot;{truncateQuote(activeSelection, 100)}&quot;
                               </div>
                               <button
@@ -993,7 +997,7 @@ export function DocsView({
                                 }}
                                 className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white transition-colors shrink-0"
                               >
-                                메모
+                                {t("docs.memo")}
                               </button>
                             </div>
                           )}

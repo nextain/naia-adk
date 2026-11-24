@@ -1,4 +1,6 @@
 import { apiBase } from "../api-base"
+import { getDict } from "../i18n"
+import { getRequestLocale } from "../i18n/server"
 
 type IndexEntry = {
   path?: string;
@@ -31,13 +33,14 @@ async function getIndex() {
 }
 
 export default async function WorkspacePage() {
-  const [tree, index] = await Promise.all([getTree(), getIndex()])
+  const [tree, index, locale] = await Promise.all([getTree(), getIndex(), getRequestLocale()])
+  const t = getDict(locale)
 
   const categories: Record<string, { label: string; items: Item[] }> = {
-    project: { label: "Projects", items: [] },
-    docs: { label: "Data", items: [] },
-    lib: { label: "Libraries", items: [] },
-    reference: { label: "References", items: [] },
+    project: { label: t["ws.projects"], items: [] },
+    docs: { label: t["ws.data"], items: [] },
+    lib: { label: t["ws.libraries"], items: [] },
+    reference: { label: t["ws.references"], items: [] },
   }
 
   if (index?.submodules) {
@@ -71,7 +74,7 @@ export default async function WorkspacePage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Workspace</h1>
+      <h1 className="text-2xl font-bold">{t["ws.title"]}</h1>
 
       {Object.entries(categories).map(([key, section]) => (
         section.items.length > 0 && (
@@ -87,7 +90,7 @@ export default async function WorkspacePage() {
                       <span className="font-medium">{item.name}</span>
                       <div className="flex gap-2">
                         {missing && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400">missing</span>
+                          <span className="text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400">{t["home.missing"]}</span>
                         )}
                         <span className={`text-xs px-2 py-0.5 rounded ${
                           item.visibility === "public" ? "bg-green-900/30 text-green-400" : "bg-neutral-800 text-neutral-400"
@@ -109,7 +112,7 @@ export default async function WorkspacePage() {
 
       {tree?.tree && (
         <div>
-          <h2 className="text-lg font-semibold mb-3 text-neutral-300">File Tree</h2>
+          <h2 className="text-lg font-semibold mb-3 text-neutral-300">{t["ws.fileTree"]}</h2>
           <pre className="text-sm font-mono text-neutral-400 bg-neutral-900 p-4 rounded-lg overflow-auto max-h-96">
             {JSON.stringify(tree.tree, null, 2)}
           </pre>

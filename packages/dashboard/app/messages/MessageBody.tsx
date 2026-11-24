@@ -7,7 +7,8 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { CodeBlock, isUnsafeMarkdownHref } from "./MessageMarkdown"
 import { copyTextToClipboard } from "../docs/clipboard"
-import { codeLineCount, docLinkKey, MSG, shouldFoldCode, tableElementRows, tableToTsv } from "./messenger"
+import { codeLineCount, docLinkKey, getMessengerStrings, shouldFoldCode, tableElementRows, tableToTsv } from "./messenger"
+import { useLocale } from "../i18n/provider.tsx"
 
 function textOf(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node)
@@ -18,6 +19,7 @@ function textOf(node: React.ReactNode): string {
 
 // 30줄 넘는 코드는 접어 두고 [모두 보기]로 편다.
 export function FoldableCode({ children, initialOpen = false }: { children: React.ReactNode; initialOpen?: boolean }) {
+  const S = getMessengerStrings(useLocale())
   const code = textOf(children)
   const fold = shouldFoldCode(code)
   const [open, setOpen] = useState(initialOpen)
@@ -34,13 +36,14 @@ export function FoldableCode({ children, initialOpen = false }: { children: Reac
         onClick={() => setOpen((v) => !v)}
         className="-mt-2 mb-2 px-2.5 py-1 rounded-md border border-neutral-800 bg-neutral-900 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
       >
-        {open ? MSG.foldHide : MSG.foldShow(codeLineCount(code))}
+        {open ? S.foldHide : S.foldShow(codeLineCount(code))}
       </button>
     </div>
   )
 }
 
 export function CopyableTable({ children }: { children: React.ReactNode }) {
+  const S = getMessengerStrings(useLocale())
   const ref = useRef<HTMLTableElement>(null)
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle")
   const copy = async () => {
@@ -65,7 +68,7 @@ export function CopyableTable({ children }: { children: React.ReactNode }) {
           status === "failed" ? "text-red-400" : "text-neutral-400 hover:text-neutral-200"
         }`}
       >
-        {status === "copied" ? MSG.copied : status === "failed" ? MSG.copyFailed : MSG.copyTable}
+        {status === "copied" ? S.copied : status === "failed" ? S.copyFailed : S.copyTable}
       </button>
     </div>
   )

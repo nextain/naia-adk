@@ -1,4 +1,5 @@
 import { extractLedgerDueSchedule, type BoardScheduleProjection } from "./schedule-calendar"
+import type { Locale } from "../i18n/types.ts"
 
 export type BoardScheduleStatus = "loading" | "ready" | "not-configured" | "unavailable"
 export type BoardScheduleResult =
@@ -24,7 +25,10 @@ async function requestLegacyBoardSchedule(fetcher: typeof fetch): Promise<BoardS
   return { status: "ready", data }
 }
 
-export async function requestBoardSchedule(fetcher: typeof fetch): Promise<BoardScheduleResult> {
+export async function requestBoardSchedule(
+  fetcher: typeof fetch,
+  locale: Locale = "ko",
+): Promise<BoardScheduleResult> {
   try {
     const ledgerResponse = await fetcher("/api/portal/ledger?view=due", { cache: "no-store" })
     if (ledgerResponse.ok) {
@@ -34,7 +38,7 @@ export async function requestBoardSchedule(fetcher: typeof fetch): Promise<Board
       }
       if (payload.configured === true) {
         if (payload.available === true && Array.isArray(payload.items)) {
-          return { status: "ready", data: extractLedgerDueSchedule(payload) }
+          return { status: "ready", data: extractLedgerDueSchedule(payload, undefined, locale) }
         }
         // 장부가 설정되어 있는데 읽기·권한 오류가 난 경우 옛 /board-schedule 로 폴백하지 않고 닫는다.
         return { status: "unavailable" }
