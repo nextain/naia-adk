@@ -249,7 +249,7 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
             <span className="font-mono text-neutral-300">
               {reviewModels.deployConfigExists
                 ? `present (${reviewModels.overrideCount} override${reviewModels.overrideCount === 1 ? "" : "s"})`
-                : "not present (using defaults)"}
+                : "not present (using policy defaults)"}
             </span>
           </div>
           {reviewModels.overrides.length > 0 && (

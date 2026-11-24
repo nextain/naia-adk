@@ -81,7 +81,7 @@ export function ScheduleControls({ view }: { view: View }) {
         {/* 보기 방식 전환 (달력 / 목록) */}
         <div
           role="group"
-          aria-label={t("sched.calendarUnit")}
+          aria-label={t("sched.viewMode")}
           className="inline-flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5"
         >
           <button

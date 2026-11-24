@@ -23,7 +23,7 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
-import { tFor } from "../i18n/index.ts"
+import { formatMessage, tFor } from "../i18n/index.ts"
 import { getActiveLocale } from "../i18n/provider.tsx"
 import type { LedgerCardItem } from "../work/work-ledger-view"
 
@@ -343,7 +343,7 @@ function DocsViewer() {
     setSearchError(null)
     fetch(searchApiUrl(queryParam, includeArchived), { signal: controller.signal })
       .then((res) => {
-        if (!res.ok) throw new Error(`검색하지 못했습니다 (${res.status})`)
+        if (!res.ok) throw new Error(formatMessage(t("docs.searchFailed"), { status: res.status }))
         return res.json()
       })
       .then((data: { results: SearchHit[]; archivedHidden?: number }) => {

@@ -132,7 +132,8 @@ export function LLMSettingsView({ snapshot, locale: localeProp }: LLMSettingsVie
           <p>
             {t("llm.apiKeysDesc")}{" "}
             <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">data-private/.env</code>{" "}
-            (gitignored) + process env <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">apiKeyEnv</code>
+            (gitignored) or process environment variables referenced by{" "}
+            <code className="bg-neutral-800 px-1.5 py-0.5 rounded text-xs">apiKeyEnv</code>.
           </p>
           <p className="mt-1 text-neutral-500">
             {t("llm.apiKeysSecret")}
