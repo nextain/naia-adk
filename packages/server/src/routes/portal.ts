@@ -1323,16 +1323,23 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     if (!isValidScheduleItemId(id)) {
       return reply.code(400).send({ error: "Invalid schedule id" })
     }
-    const check = validateScheduleOverridePatch(req.body)
+    const current = readCompanySchedules({ adkRoot: root })
+    const existing = current.items.find((item) => item.id === id)
+    if (!existing) {
+      return reply.code(404).send({ error: "Schedule not found" })
+    }
+    const check = validateScheduleOverridePatch(req.body, existing)
     if (!check.valid) {
       return reply.code(400).send({ error: check.error })
     }
     const now = new Date().toISOString()
     const filePath = getScheduleOverridesFilePath(root, process.env)
+    let previousOverride: ReturnType<typeof readScheduleOverrides>["overrides"][string] | undefined
     try {
       const override = await withFileLock(filePath, () => {
         const data = readScheduleOverrides(root, process.env)
-        const prev = data.overrides[id] ?? {
+        previousOverride = data.overrides[id]
+        const prev = previousOverride ?? {
           updatedAt: now,
           updatedBy: "portal",
         }
@@ -1358,9 +1365,19 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         sourceDocPath: feedbackBody?.sourceDocPath,
       })
       const feedbackPath = getScheduleCommentFilePath(root, feedback.id, process.env)
-      await withFileLock(feedbackPath, () => {
-        saveScheduleComment(root, feedback, process.env)
-      })
+      try {
+        await withFileLock(feedbackPath, () => {
+          saveScheduleComment(root, feedback, process.env)
+        })
+      } catch (err) {
+        await withFileLock(filePath, () => {
+          const data = readScheduleOverrides(root, process.env)
+          if (previousOverride) data.overrides[id] = previousOverride
+          else delete data.overrides[id]
+          saveScheduleOverrides(root, data, process.env)
+        })
+        throw err
+      }
 
       return reply.send({ ok: true, id, override })
     } catch (err) {
@@ -1380,11 +1397,17 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     if (!isValidScheduleItemId(id)) {
       return reply.code(400).send({ error: "Invalid schedule id" })
     }
+    const current = readCompanySchedules({ adkRoot: root })
+    if (!current.items.some((item) => item.id === id)) {
+      return reply.code(404).send({ error: "Schedule not found" })
+    }
     const now = new Date().toISOString()
     const filePath = getScheduleOverridesFilePath(root, process.env)
+    let previousOverride: ReturnType<typeof readScheduleOverrides>["overrides"][string] | undefined
     try {
       await withFileLock(filePath, () => {
         const data = readScheduleOverrides(root, process.env)
+        previousOverride = data.overrides[id]
         data.overrides[id] = {
           deleted: true,
           updatedAt: now,
@@ -1403,9 +1426,19 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         sourceDocPath: feedbackBody?.sourceDocPath,
       })
       const feedbackPath = getScheduleCommentFilePath(root, feedback.id, process.env)
-      await withFileLock(feedbackPath, () => {
-        saveScheduleComment(root, feedback, process.env)
-      })
+      try {
+        await withFileLock(feedbackPath, () => {
+          saveScheduleComment(root, feedback, process.env)
+        })
+      } catch (err) {
+        await withFileLock(filePath, () => {
+          const data = readScheduleOverrides(root, process.env)
+          if (previousOverride) data.overrides[id] = previousOverride
+          else delete data.overrides[id]
+          saveScheduleOverrides(root, data, process.env)
+        })
+        throw err
+      }
 
       return reply.send({ ok: true, id })
     } catch (err) {

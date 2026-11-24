@@ -61,6 +61,23 @@ function resolveStatePath(adkRoot: string, raw: string): string {
   return path.resolve(adkRoot, raw)
 }
 
+function rejectSymlinkedParents(targetPath: string): void {
+  const absolute = path.resolve(targetPath)
+  const parts = absolute.split(path.sep).filter(Boolean)
+  let current = path.isAbsolute(absolute) ? path.parse(absolute).root : ""
+  for (const part of parts) {
+    current = path.join(current, part)
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        throw new Error("Refusing symlinked state path")
+      }
+    } catch (err: any) {
+      if (err?.code === "ENOENT") break
+      throw err
+    }
+  }
+}
+
 export function getScheduleCommentsDir(adkRoot: string, env?: ScheduleEnv): string {
   const override = envValue(env ?? process.env, "NAIA_SCHEDULE_COMMENTS_DIR")
   if (override && !override.includes("\0")) return resolveStatePath(adkRoot, override)
@@ -250,7 +267,9 @@ export function saveScheduleComment(
     throw new Error("Invalid schedule comment")
   }
   const dir = getScheduleCommentsDir(adkRoot, env)
+  rejectSymlinkedParents(dir)
   fs.mkdirSync(dir, { recursive: true })
+  rejectSymlinkedParents(dir)
   const filePath = path.join(dir, `${comment.id}.json`)
   const tempPath = path.join(
     dir,
@@ -315,7 +334,9 @@ export function saveScheduleOverrides(
   }
   const filePath = getScheduleOverridesFilePath(adkRoot, env)
   const dir = path.dirname(filePath)
+  rejectSymlinkedParents(dir)
   fs.mkdirSync(dir, { recursive: true })
+  rejectSymlinkedParents(dir)
   const tempPath = path.join(
     dir,
     `.tmp-schedule-overrides-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
@@ -347,6 +368,7 @@ export interface ValidatedScheduleOverridePatch {
 
 export function validateScheduleOverridePatch(
   body: unknown,
+  existingDates?: { startDate: string; endDate: string },
 ): { valid: true; patch: ValidatedScheduleOverridePatch } | { valid: false; error: string } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { valid: false, error: "Invalid request body" }
@@ -397,11 +419,9 @@ export function validateScheduleOverridePatch(
   if (!touched) {
     return { valid: false, error: "No editable field provided" }
   }
-  if (
-    patch.startDate !== undefined &&
-    patch.endDate !== undefined &&
-    patch.startDate > patch.endDate
-  ) {
+  const finalStart = patch.startDate ?? existingDates?.startDate
+  const finalEnd = patch.endDate ?? existingDates?.endDate
+  if (finalStart !== undefined && finalEnd !== undefined && finalStart > finalEnd) {
     return { valid: false, error: "startDate must not be after endDate" }
   }
   return { valid: true, patch }
