@@ -1,3 +1,5 @@
+[English](development-method.en.md) | [한국어](development-method.md)
+
 이 문서가 답하는 질문: Naia ADK에서 서비스·기능을 어떤 순서로 개발하고, 문서화·시험·회귀 검증을 어떻게 묶어 유지하는가?
 상태: 현행 기준
 기준판: 공개 저장소 `ed104d328ff7870908d326df840e4b98a1718a03`

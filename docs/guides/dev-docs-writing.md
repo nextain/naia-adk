@@ -1,3 +1,5 @@
+[English](dev-docs-writing.en.md) | [한국어](dev-docs-writing.md)
+
 이 문서가 답하는 질문: 공개 Naia ADK의 개발 문서에 구조·계약·구현 근거를 어떻게 정확히 기록하는가?
 상태: 현행 기준
 기준판: 공개 저장소 `4d9d09cbb311de811f0c4eaeed6bc5fab426cc89`
