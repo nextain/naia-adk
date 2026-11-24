@@ -117,6 +117,25 @@ describe("tier-profile-show focused visibility", () => {
     }
   })
 
+  it("treats a regular marker file as active for all roles", () => {
+    const root = makeRoot()
+    try {
+      writeDoc(root)
+      fs.mkdirSync(path.join(root, ".agents", "state"), { recursive: true })
+      fs.writeFileSync(path.join(root, ".agents", "state", "tier3-fallback"), "active")
+      const res = run(["--root", root, "--json"])
+      assert.equal(res.status, 0, `CLI failed: ${res.stderr}`)
+      const out = JSON.parse(res.stdout)
+      assert.ok(out.roleBindings.length > 0)
+      for (const b of out.roleBindings) {
+        assert.equal(b.fallbackActive, true)
+        assert.equal(b.source, "fallback")
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("omits out-of-range quota policy values", () => {
     const root = makeRoot()
     try {
