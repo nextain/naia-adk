@@ -1,21 +1,23 @@
 "use client"
 
-import { useEffect, useState, type FormEvent } from "react"
+import React, { useEffect, useState, type FormEvent } from "react"
 import { DecisionList } from "./DecisionList"
 import { parseDecisionSection, type DecisionConfig } from "./decisions"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
+import type { TranslationKey } from "../i18n/types.ts"
 
 const KEY = "naia.decision-document.v1"
 const EMPTY: DecisionConfig = { source: "", path: "", pendingHeading: "", doneHeading: "" }
 
+type DecisionError = { key: TranslationKey } | { text: string } | null
+
 export default function DecisionsPage() {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const [form, setForm] = useState<DecisionConfig>(EMPTY)
   const [config, setConfig] = useState<DecisionConfig | null>(null)
   const [content, setContent] = useState<string | null>(null)
-  const [error, setError] = useState("")
+  const [error, setError] = useState<DecisionError>(null)
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -26,14 +28,15 @@ export default function DecisionsPage() {
       if (value && Object.keys(EMPTY).every((key) => typeof value[key] === "string" && value[key].trim())) {
         setForm(value); setConfig(value); setEditing(false)
       }
-    } catch { setError(t("dec.errStored")) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    } catch {
+      setError({ key: "dec.errStored" })
+    }
   }, [])
 
   useEffect(() => {
     if (!config) return
     const controller = new AbortController()
-    setLoading(true); setError(""); setContent(null)
+    setLoading(true); setError(null); setContent(null)
     const params = new URLSearchParams({ source: config.source, path: config.path })
     fetch(`/api/portal/text?${params}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
@@ -44,20 +47,25 @@ export default function DecisionsPage() {
         parseDecisionSection(data.content, config.doneHeading)
         setContent(data.content)
       })
-      .catch((err) => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : t("dec.errLoadGeneric")) })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setError(err instanceof Error ? { text: err.message } : { key: "dec.errLoadGeneric" })
+        }
+      })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, reload])
+  }, [config, reload, t])
 
   function save(event: FormEvent) {
     event.preventDefault()
     const next = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, value.trim()])) as unknown as DecisionConfig
-    if (Object.values(next).some((value) => !value)) { setError(t("dec.errIncomplete")); return }
-    if (next.pendingHeading === next.doneHeading) { setError(t("dec.errSameHeading")); return }
-    try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { setError(t("dec.errStore")); return }
-    setError(""); setConfig(next); setEditing(false)
+    if (Object.values(next).some((value) => !value)) { setError({ key: "dec.errIncomplete" }); return }
+    if (next.pendingHeading === next.doneHeading) { setError({ key: "dec.errSameHeading" }); return }
+    try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { setError({ key: "dec.errStore" }); return }
+    setError(null); setConfig(next); setEditing(false)
   }
+
+  const errorText = error ? ("key" in error ? t(error.key) : error.text) : ""
 
   return <main className="mx-auto max-w-3xl px-4 py-8 text-neutral-100">
     <h1 className="mb-4 text-2xl font-bold">{t("dec.title")}</h1>
@@ -68,7 +76,7 @@ export default function DecisionsPage() {
       <button className="rounded bg-blue-700 px-4 py-2" type="submit">{t("dec.save")}</button>
     </form>}
     {loading && <p>{t("dec.loading")}</p>}
-    {error && <div role="alert" className="mb-4 text-red-300">{error} {config && <button className="underline" onClick={() => setReload((n) => n + 1)}>{t("dec.retry")}</button>}</div>}
+    {errorText && <div role="alert" className="mb-4 text-red-300">{errorText} {config && <button className="underline" onClick={() => setReload((n) => n + 1)}>{t("dec.retry")}</button>}</div>}
     {!config && !editing && <p>{t("dec.noConfig")}</p>}
     {content !== null && config && <DecisionList markdown={content} config={config} locale={locale} />}
   </main>

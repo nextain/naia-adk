@@ -5,7 +5,7 @@ import Link from "next/link"
 import { searchResultHref } from "../docs/tabs.ts"
 import { parseDecisionSection, plainDecisionText, type DecisionConfig, type DecisionRow } from "./decisions.ts"
 import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useOptionalLocale } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 function Rows({ rows, href, emptyLabel }: { rows: DecisionRow[]; href: string; emptyLabel: string }) {
@@ -18,7 +18,8 @@ function Rows({ rows, href, emptyLabel }: { rows: DecisionRow[]; href: string; e
 }
 
 export function DecisionList({ markdown, config, locale: localeProp }: { markdown: string; config: DecisionConfig; locale?: Locale }) {
-  const locale = localeProp ?? getActiveLocale()
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const t = tFor(locale)
   const pending = parseDecisionSection(markdown, config.pendingHeading)
   const done = parseDecisionSection(markdown, config.doneHeading)

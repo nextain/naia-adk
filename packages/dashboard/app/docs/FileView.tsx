@@ -12,8 +12,7 @@ import {
   inferKindFromPath,
   type FileKind,
 } from "./kinds"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useT } from "../i18n/provider.tsx"
 import { docHref, type DocTab } from "./tabs"
 import { LinkedCardsPanel } from "./LinkedCardsPanel"
 import type { LedgerCardItem } from "../work/work-ledger-view"
@@ -49,8 +48,7 @@ export function FileView({
   onNavigate,
   linkedCards = [],
 }: FileViewProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const t = useT()
   const fileName = getFileName(path)
   const kind = propKind || inferKindFromPath(path)
   const breadcrumbs = createBreadcrumbs(sourceTitle, path)

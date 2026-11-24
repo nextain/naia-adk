@@ -5,8 +5,8 @@ import {
   docsMessage,
   mapDocSaveError,
 } from "./kinds"
-import { getDict, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { getDict } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 export interface SaveDocRequest {
@@ -118,8 +118,8 @@ export function DocEditor({
   onCancel,
   renderPreview,
 }: DocEditorProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const [localContent, setLocalContent] = useState(initialContent)
   const content = propContent !== undefined ? propContent : localContent
   const [currentBaseHash, setCurrentBaseHash] = useState(initialBaseHash)
@@ -146,7 +146,7 @@ export function DocEditor({
 
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => window.removeEventListener("beforeunload", handleBeforeUnload)
-  }, [isDirty])
+  }, [isDirty, t])
 
   // [취소] 클릭 시 변경 확인
   const handleCancelClick = () => {

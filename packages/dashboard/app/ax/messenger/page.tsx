@@ -3,8 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { loadSelectedMessages } from "./selection.mjs"
 import { axErrorMessage, MessengerRequestError } from "./ax-errors.ts"
-import { tFor } from "../../i18n/index.ts"
-import { getActiveLocale } from "../../i18n/provider.tsx"
+import { useT } from "../../i18n/provider.tsx"
 import type { TranslationKey } from "../../i18n/types.ts"
 
 type Room = { roomId: string; name: string }
@@ -21,8 +20,7 @@ async function request(path: string, fallback: string, body?: unknown) {
 }
 
 export default function AxMessengerPage() {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const t = useT()
   const [user, setUser] = useState("")
   const [password, setPassword] = useState("")
   const [connected, setConnected] = useState(false)

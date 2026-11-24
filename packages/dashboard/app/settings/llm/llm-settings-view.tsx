@@ -3,7 +3,7 @@
 import React from "react"
 import type { WorkspaceSettingsSnapshot } from "../settings-data.ts"
 import { tFor } from "../../i18n/index.ts"
-import { getActiveLocale } from "../../i18n/provider.tsx"
+import { useOptionalLocale } from "../../i18n/provider.tsx"
 import type { Locale } from "../../i18n/types.ts"
 
 export interface LLMSettingsViewProps {
@@ -12,7 +12,8 @@ export interface LLMSettingsViewProps {
 }
 
 export function LLMSettingsView({ snapshot, locale: localeProp }: LLMSettingsViewProps) {
-  const locale = localeProp ?? getActiveLocale()
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const { llm, tierProfile } = snapshot
   const t = tFor(locale)
 

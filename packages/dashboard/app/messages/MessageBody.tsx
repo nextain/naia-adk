@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm"
 import { CodeBlock, isUnsafeMarkdownHref } from "./MessageMarkdown"
 import { copyTextToClipboard } from "../docs/clipboard"
 import { codeLineCount, docLinkKey, getMessengerStrings, shouldFoldCode, tableElementRows, tableToTsv } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 
 function textOf(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node)
@@ -19,7 +19,7 @@ function textOf(node: React.ReactNode): string {
 
 // 30줄 넘는 코드는 접어 두고 [모두 보기]로 편다.
 export function FoldableCode({ children, initialOpen = false }: { children: React.ReactNode; initialOpen?: boolean }) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const code = textOf(children)
   const fold = shouldFoldCode(code)
   const [open, setOpen] = useState(initialOpen)
@@ -43,7 +43,7 @@ export function FoldableCode({ children, initialOpen = false }: { children: Reac
 }
 
 export function CopyableTable({ children }: { children: React.ReactNode }) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const ref = useRef<HTMLTableElement>(null)
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle")
   const copy = async () => {

@@ -12,8 +12,8 @@ import {
   type LedgerPayload,
 } from "../work/work-ledger-view"
 import { statusBadgeClass } from "../work/WorkBoard"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 export function HomeTodoSummary({
   initialLedger,
@@ -23,8 +23,8 @@ export function HomeTodoSummary({
   nowMs?: number
 }) {
   const [ledger, setLedger] = useState<LedgerPayload | null>(initialLedger ?? null)
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
 
   useEffect(() => {
     if (initialLedger !== undefined) return

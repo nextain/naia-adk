@@ -11,7 +11,7 @@ import {
   type CalendarWeekLayout,
 } from "./schedule-calendar"
 import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 export interface ScheduleCalendarGridProps {
@@ -98,8 +98,8 @@ export function ScheduleCalendarGrid({
   onSelectEvent,
   onOpenDayList,
 }: ScheduleCalendarGridProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const days = weekdayLabels(locale)
   return (
     <div

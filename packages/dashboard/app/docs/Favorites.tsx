@@ -10,8 +10,8 @@ import {
   type FavoriteItem,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
-import { getDict, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { getDict } from "../i18n/index.ts"
+import { useT } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 // ── 즐겨찾기 API 함수 ───────────────────────────────────────────────────────
@@ -89,8 +89,7 @@ export function FavoritesGroup({
   onRemoveFavorite,
   onNavigate,
 }: FavoritesGroupProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const t = useT()
   // 비어 있으면 묶음을 숨긴다 (SP-01)
   if (!favorites || favorites.length === 0) {
     return null

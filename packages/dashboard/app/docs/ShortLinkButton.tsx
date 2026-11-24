@@ -7,8 +7,7 @@
 
 import React, { useState } from "react"
 import { Link2 } from "lucide-react"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useT } from "../i18n/provider.tsx"
 
 export function shortPathFallback(source: string, docPath: string): string {
   return `/d/${[source, ...docPath.split("/")].map(encodeURIComponent).join("/")}`
@@ -67,7 +66,7 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 export function ShortLinkButton({ source, path: docPath }: { source: string; path: string }) {
-  const t = tFor(getActiveLocale())
+  const t = useT()
   const [status, setStatus] = useState<"idle" | "copied" | "manual">("idle")
   const [url, setUrl] = useState("")
 

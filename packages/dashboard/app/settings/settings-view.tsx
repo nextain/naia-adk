@@ -3,7 +3,7 @@
 import React from "react"
 import type { ServerHealthSnapshot, WorkspaceSettingsSnapshot } from "./settings-data.ts"
 import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useOptionalLocale } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 export interface SettingsViewProps {
@@ -13,7 +13,8 @@ export interface SettingsViewProps {
 }
 
 export function SettingsView({ snapshot, health = null, locale: localeProp }: SettingsViewProps) {
-  const locale = localeProp ?? getActiveLocale()
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const { runners, tierProfile, reviewModels, configFiles } = snapshot
   const t = tFor(locale)
 

@@ -1,9 +1,9 @@
 "use client"
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import type { Locale, TranslationKey } from "./types.ts"
-import { LOCALE_COOKIE, LOCALE_STORAGE_KEY, formatMessage, getDict, isLocale, parseLocale } from "./index.ts"
+import { LOCALE_COOKIE, LOCALE_STORAGE_KEY, formatMessage, getDict, isLocale, parseLocale, tFor } from "./index.ts"
 
 interface I18nContextValue {
   locale: Locale
@@ -12,6 +12,24 @@ interface I18nContextValue {
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null)
+const DEFAULT_T = tFor("ko")
+const DEFAULT_I18N: I18nContextValue = {
+  locale: "ko",
+  setLocale: () => {},
+  t: DEFAULT_T,
+}
+
+function readQueryLocale(): Locale | null {
+  try {
+    if (typeof window !== "undefined" && typeof window.location?.search === "string" && window.location.search) {
+      const parsed = parseLocale(new URLSearchParams(window.location.search).get("lang"))
+      if (parsed) return parsed
+    }
+  } catch {
+    // Query reads must never throw.
+  }
+  return null
+}
 
 function readStoredLocale(): Locale | null {
   try {
@@ -36,6 +54,16 @@ function readStoredLocale(): Locale | null {
   return null
 }
 
+function applyDocumentLang(locale: Locale): void {
+  try {
+    if (typeof document !== "undefined" && document.documentElement) {
+      document.documentElement.setAttribute("lang", locale)
+    }
+  } catch {
+    // DOM write must never throw.
+  }
+}
+
 function persistLocale(locale: Locale): void {
   try {
     if (typeof document !== "undefined") {
@@ -51,76 +79,41 @@ function persistLocale(locale: Locale): void {
   } catch {
     // localStorage write must never throw.
   }
-  try {
-    if (typeof document !== "undefined" && document.documentElement) {
-      document.documentElement.setAttribute("lang", locale)
-    }
-  } catch {
-    // DOM write must never throw.
-  }
-}
-
-let activeLocale: Locale = "ko"
-const localeListeners = new Set<(locale: Locale) => void>()
-
-function readActiveLocale(): Locale {
-  if (isLocale(activeLocale)) return activeLocale
-  return readStoredLocale() ?? "ko"
-}
-
-/** Current UI locale without React context (safe for mocked-hook unit tests). */
-export function getActiveLocale(): Locale {
-  return readActiveLocale()
-}
-
-function publishLocale(next: Locale): void {
-  activeLocale = next
-  persistLocale(next)
-  try {
-    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-      window.dispatchEvent(new Event("naia-adk-locale"))
-    }
-  } catch {
-    // Event dispatch must never throw.
-  }
-  for (const listener of [...localeListeners]) {
-    try {
-      listener(next)
-    } catch {
-      // Listener failures must never break the switch.
-    }
-  }
+  applyDocumentLang(locale)
 }
 
 /**
- * Reactive locale subscription using only `useState`/`useEffect`, so it also
- * works under the mocked-hook render harness used by `page.render.test.tsx`.
+ * Safe Context reader: works normally in React SSR and Browser DOM, and returns
+ * `null` when invoked outside React (bare component call in unit tests) or
+ * under a minimal mock dispatcher that omits `useContext`.
  */
+function readI18nContext(): I18nContextValue | null {
+  const internals = (
+    React as unknown as {
+      __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
+        H?: { useContext?: unknown } | null
+      }
+    }
+  ).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
+  if (internals && (!internals.H || typeof internals.H.useContext !== "function")) {
+    return null
+  }
+  try {
+    return useContext(I18nContext)
+  } catch {
+    return null
+  }
+}
+
+/** Legacy stateless reader (never reads or mutates shared SSR state). */
+export function getActiveLocale(): Locale {
+  if (typeof window === "undefined") return "ko"
+  return readQueryLocale() ?? readStoredLocale() ?? "ko"
+}
+
+/** Subscribes to the nearest `I18nProvider` Context (defaults to `"ko"` outside a provider). */
 export function useActiveLocale(): Locale {
-  const [locale, setLocaleState] = useState<Locale>(() => readActiveLocale())
-  useEffect(() => {
-    localeListeners.add(setLocaleState)
-    const hasWindow = typeof window !== "undefined" && typeof window.addEventListener === "function"
-    const onExternal = () => {
-      try {
-        setLocaleState(readActiveLocale())
-      } catch {
-        // Locale re-reads must never throw.
-      }
-    }
-    if (hasWindow) {
-      window.addEventListener("naia-adk-locale", onExternal)
-    }
-    return () => {
-      localeListeners.delete(setLocaleState)
-      try {
-        if (hasWindow) window.removeEventListener("naia-adk-locale", onExternal)
-      } catch {
-        // Cleanup must never throw.
-      }
-    }
-  }, [])
-  return locale
+  return useLocale()
 }
 
 export function I18nProvider({
@@ -130,11 +123,10 @@ export function I18nProvider({
   initialLocale?: Locale
   children: React.ReactNode
 }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    const normalized = isLocale(initialLocale) ? initialLocale : "ko"
-    activeLocale = normalized
-    return normalized
-  })
+  const normalizedInitial: Locale = isLocale(initialLocale) ? initialLocale : "ko"
+  const [locale, setLocaleState] = useState<Locale>(normalizedInitial)
+  const prevInitialRef = useRef<Locale>(normalizedInitial)
+
   let router: { refresh: () => void } | null = null
   try {
     // Safe when rendered outside the Next router (unit render tests).
@@ -142,34 +134,41 @@ export function I18nProvider({
   } catch {
     router = null
   }
+  const routerRef = useRef(router)
+  routerRef.current = router
 
   useEffect(() => {
-    // Re-sync from cookie/localStorage on mount (client-only correction).
-    // Publish so the module-global read by getActiveLocale() and the
-    // useActiveLocale subscribers follow the corrected locale too.
-    const stored = readStoredLocale()
-    if (stored && stored !== locale) {
-      publishLocale(stored)
-      setLocaleState(stored)
+    if (prevInitialRef.current !== normalizedInitial) {
+      prevInitialRef.current = normalizedInitial
+      setLocaleState(normalizedInitial)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedInitial])
+
+  useEffect(() => {
+    // Query override takes precedence over cookie/localStorage without clobbering stored cookie.
+    const fromQuery = readQueryLocale()
+    if (fromQuery) {
+      applyDocumentLang(fromQuery)
+      setLocaleState((prev) => (prev === fromQuery ? prev : fromQuery))
+      return
+    }
+    const stored = readStoredLocale()
+    if (stored) {
+      persistLocale(stored)
+      setLocaleState((prev) => (prev === stored ? prev : stored))
+    }
   }, [])
 
-  const setLocale = useCallback(
-    (next: Locale) => {
-      if (!isLocale(next)) return
-      setLocaleState(next)
-      publishLocale(next)
-      try {
-        router?.refresh()
-      } catch {
-        // Refresh outside the Next router must never throw.
-      }
-    },
-    // router identity is stable in practice; refresh on locale change only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  )
+  const setLocale = useCallback((next: Locale) => {
+    if (!isLocale(next)) return
+    setLocaleState(next)
+    persistLocale(next)
+    try {
+      routerRef.current?.refresh()
+    } catch {
+      // Refresh outside the Next router must never throw.
+    }
+  }, [])
 
   const value = useMemo<I18nContextValue>(() => {
     const dict = getDict(locale)
@@ -183,33 +182,24 @@ export function I18nProvider({
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 
-/** Active locale (`"ko"` when no provider is mounted, e.g. unit render tests). */
+/** Active Context locale (`null` when rendered outside an `I18nProvider`). */
+export function useOptionalLocale(): Locale | null {
+  return readI18nContext()?.locale ?? null
+}
+
+/** Active locale (`"ko"` when no provider is mounted, e.g. standalone unit render tests). */
 export function useLocale(): Locale {
-  return useContext(I18nContext)?.locale ?? "ko"
+  return readI18nContext()?.locale ?? "ko"
 }
 
 /** Translate function (`"ko"` dict when no provider is mounted). */
 export function useT(): (key: TranslationKey, vars?: Record<string, string | number>) => string {
-  const ctx = useContext(I18nContext)
-  return useMemo(() => {
-    if (ctx) return ctx.t
-    const dict = getDict("ko")
-    return (key: TranslationKey, vars?: Record<string, string | number>) => formatMessage(dict[key] ?? key, vars)
-  }, [ctx])
+  return readI18nContext()?.t ?? DEFAULT_T
 }
 
 /** Locale state + translator + setter (`"ko"` defaults without a provider). */
 export function useI18n(): I18nContextValue {
-  const ctx = useContext(I18nContext)
-  const t = useT()
-  return useMemo<I18nContextValue>(() => {
-    if (ctx) return ctx
-    return {
-      locale: "ko" as Locale,
-      setLocale: () => {},
-      t,
-    }
-  }, [ctx, t])
+  return readI18nContext() ?? DEFAULT_I18N
 }
 
 export function setStoredLocale(locale: Locale): void {

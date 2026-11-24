@@ -12,8 +12,8 @@ import {
   type DocNoteItem,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
-import { formatMessage, getDict, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage, getDict } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 // ── API 함수들 ──────────────────────────────────────────────────────────────
@@ -105,8 +105,8 @@ export interface NotesBannerProps {
 }
 
 export function NotesBanner({ openNotes, tab, onNavigate }: NotesBannerProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const [modalOpen, setModalOpen] = useState(false)
   const openCount = openNotes.length
 
@@ -201,8 +201,8 @@ export function NotesPanel({
   forbidden = false,
   onNavigate,
 }: NotesPanelProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const [isWriting, setIsWriting] = useState(Boolean(selectedQuote))
   const [quote, setQuote] = useState(selectedQuote || "")
   const [body, setBody] = useState("")

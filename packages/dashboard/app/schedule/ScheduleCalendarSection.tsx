@@ -6,14 +6,14 @@ import { personalIdentityRequiredNotice, personalLoadingNotice, personalWarnings
 import { shiftCalendarAnchor } from "./schedule-calendar"
 import { ScheduleCalendarGrid } from "./ScheduleCalendarGrid"
 import { ScheduleDayListDialog, ScheduleDetailDialog } from "./ScheduleDetailDialog"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 type View = ReturnType<typeof useScheduleView>
 
 export function ScheduleCalendarSection({ view }: { view: View }) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const {
     mode, unit, layers, workFilter,
     setAnchorDate, userLabel, personalIdentityRequired, personalWarningsLocked,

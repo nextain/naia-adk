@@ -10,8 +10,7 @@ import {
   type LedgerCardItem,
 } from "../work/work-ledger-view"
 import { statusBadgeClass } from "../work/WorkBoard"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 export function LinkedCardsPanel({
   cards,
@@ -20,8 +19,8 @@ export function LinkedCardsPanel({
   cards: LedgerCardItem[]
   nowMs?: number
 }) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   if (!cards || cards.length === 0) return null
 
   return (

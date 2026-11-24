@@ -41,8 +41,8 @@ import {
   type SearchArchiveInfo,
   type TabSection,
 } from "./tabs"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import {
   convertWikiLinks,
   findWikiTarget,
@@ -122,7 +122,7 @@ function TreeItem({
   noteCounts?: Record<string, number>
   onNavigate?: (targetHref: string) => boolean
 }) {
-  const archivedBadge = tFor(getActiveLocale())("docs.archivedBadge")
+  const archivedBadge = useT()("docs.archivedBadge")
   const isArchive = node.type === "directory" && isArchiveDirName(node.name)
   const containsCurrent = currentSource === sourceId && Boolean(currentPath?.startsWith(`${node.path}/`))
   const isSelected = currentSource === sourceId && currentPath === node.path
@@ -239,7 +239,7 @@ function TreeItem({
 
 // ── 코드 블록 ───────────────────────────────────────────────────────────────
 function CodeBlock({ children }: { children: React.ReactNode }) {
-  const ct = tFor(getActiveLocale())
+  const ct = useT()
   const [copied, setCopied] = useState(false)
   const copy = (e: React.MouseEvent<HTMLButtonElement>) => {
     const text = e.currentTarget.parentElement?.querySelector("pre")?.innerText ?? ""
@@ -418,8 +418,8 @@ export function DocsView({
   groupFavoriteError = null,
   linkedCards = [],
 }: DocsViewProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const currentSourceObj = sources.find((s) => s.id === currentSource)
   const sourceTitle = currentSourceObj?.title || currentSource || t("docs.sourceFallback")
   const isReadOnly = Boolean(currentSourceObj?.readOnly || currentSource?.startsWith("data:"))

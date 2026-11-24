@@ -37,7 +37,7 @@ import {
   type MessengerState,
   type StreamEventType,
 } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 
 const STREAM_EVENTS: StreamEventType[] = ["message", "attachment", "reaction", "read", "approval", "alert"]
 const PAGE_SIZE = 50
@@ -146,7 +146,7 @@ export function AlertBanner({
   onOpen: (a: MessengerAlert) => void
   onDismiss: (a: MessengerAlert) => void
 }) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
   if (alerts.length === 0) return null
   const shown = alerts.slice(0, 3)
@@ -186,7 +186,7 @@ export function ChannelList({
   activeId: string | null
   onSelect: (c: Channel) => void
 }) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const groups: Array<{ title: string; items: Channel[] }> = [
     { title: S.channels, items: channels.filter((c) => c.kind !== "dm") },
     { title: S.dms, items: channels.filter((c) => c.kind === "dm") },
@@ -271,7 +271,7 @@ export function ThreadPanel({
   onUpload,
   draftControl,
 }: ThreadPanelProps) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   return (
     <section data-testid="thread-panel" aria-label={S.thread} className="flex h-full min-h-0 flex-col bg-neutral-950">
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
@@ -314,7 +314,7 @@ export function MessengerView({
   disableStream = false,
   now,
 }: MessengerViewProps) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
   const f = fetchFn ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   const [state, setState] = useState<MessengerState>(initialState ?? { channels: [], messages: {}, alerts: [] })

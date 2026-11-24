@@ -23,8 +23,8 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import type { LedgerCardItem } from "../work/work-ledger-view"
 
 interface PortalResponse {
@@ -35,8 +35,8 @@ interface PortalResponse {
 function DocsViewer() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
 
   const sourceParam = searchParams.get("source")
   const pathParam = searchParams.get("path")
@@ -291,7 +291,7 @@ function DocsViewer() {
     return () => {
       canceled = true
     }
-  }, [sourceParam, pathParam, portal, activeTab, portalStatus])
+  }, [sourceParam, pathParam, portal, activeTab, portalStatus, locale, t])
 
   // 7. 검색 쿼리 적용 (주소 변경 시 이동 확인 함수 경유)
   const applyQuery = (value: string) => {
@@ -354,7 +354,7 @@ function DocsViewer() {
         if (err.name !== "AbortError") setSearchError(err.message)
       })
     return () => controller.abort()
-  }, [queryParam, searching, includeArchived])
+  }, [queryParam, searching, includeArchived, t])
 
   // 8. 첫 문서 자동 열기
   useEffect(() => {
@@ -480,7 +480,7 @@ function DocsViewer() {
 }
 
 export default function DocsPage() {
-  const t = tFor(getActiveLocale())
+  const t = useT()
   return (
     <Suspense fallback={<div className="text-neutral-500 py-12 text-center text-sm">{t("docs.portalLoadingLong")}</div>}>
       <DocsViewer />

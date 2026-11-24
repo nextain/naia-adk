@@ -19,7 +19,7 @@ import {
   type WorkBoardTab,
 } from "./work-ledger-view.ts"
 import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useOptionalLocale, useT } from "../i18n/provider.tsx"
 
 export interface WorkBoardProps {
   status: "loading" | "ready" | "error"
@@ -50,8 +50,8 @@ export function statusBadgeClass(status: LedgerStatus): string {
 }
 
 export function ResultLinksList({ item, locale: localeProp }: { item: LedgerCardItem; locale?: Parameters<typeof tFor>[0] }) {
-  const activeLocale = getActiveLocale()
-  const locale = localeProp ?? activeLocale
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const t = tFor(locale)
   if (!item.resultLinks || item.resultLinks.length === 0) return null
   return (
@@ -191,8 +191,8 @@ export function WorkBoard({
   const [detailStatus, setDetailStatus] = useState<DetailStatusFilter>(initialDetailStatus)
   const [overdueOnly, setOverdueOnly] = useState<boolean>(initialOverdueOnly)
   const [query, setQuery] = useState<string>(initialQuery)
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const tabs = workBoardTabs(locale)
   const statusFilters = detailStatusFilters(locale)
 

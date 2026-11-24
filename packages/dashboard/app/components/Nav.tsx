@@ -5,7 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
 import { observeAxMessengerStatus } from "./ax-messenger-status.mjs"
-import { getActiveLocale, useI18n } from "../i18n/provider.tsx"
+import { useI18n, useOptionalLocale } from "../i18n/provider.tsx"
 import { formatMessage, tFor } from "../i18n/index.ts"
 import type { Locale } from "../i18n/types.ts"
 import {
@@ -61,9 +61,9 @@ export function NavTabs({
   hasAxMessenger,
   locale: localeProp,
 }: NavTabsProps & { locale?: Locale }) {
-  const activeLocale = getActiveLocale()
-  const t = tFor(localeProp ?? activeLocale)
-  const locale = localeProp ?? activeLocale
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
+  const t = tFor(locale)
   const boardDisabledTitle = t("nav.boardDisabled")
   return (
     <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
@@ -99,8 +99,9 @@ export function NavTabs({
 }
 
 export function LocaleSwitcher({ locale: localeProp }: { locale?: Locale } = {}) {
+  const ctxLocale = useOptionalLocale()
   const ctx = useI18n()
-  const locale = localeProp ?? getActiveLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const t = tFor(locale)
   const switchLocale = (next: Locale) => {
     if (next === locale) return
@@ -150,8 +151,8 @@ export function Nav({
   locale: localeProp,
 }: NavProps & { locale?: Locale } = {}) {
   const pathname = usePathname() || "/"
-  const activeLocale = getActiveLocale()
-  const locale = localeProp ?? activeLocale
+  const ctxLocale = useOptionalLocale()
+  const locale = ctxLocale ?? localeProp ?? "ko"
   const t = tFor(locale)
   const [fetchedHasBoard, setFetchedHasBoard] = useState<boolean | null>(null)
   const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
@@ -270,7 +271,7 @@ export function Nav({
         Naia ADK
       </Link>
 
-      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={locale} />
+      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={localeProp} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
         {typeof todoCount === "number" && (
@@ -300,7 +301,7 @@ export function Nav({
           </Link>
         </div>
 
-        <LocaleSwitcher locale={locale} />
+        <LocaleSwitcher />
 
         {/* 화면 테마(라이트·다크·시스템)와 글자 크기(4단계)는 좁은 화면에서도 항상 보인다. */}
         <div

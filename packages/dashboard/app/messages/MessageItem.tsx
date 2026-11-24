@@ -16,7 +16,7 @@ import {
   REACTION_EMOJIS,
   type Message,
 } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 
 export interface MessageActions {
   onReact?: (m: Message, emoji: string) => void
@@ -52,7 +52,7 @@ function Avatar({ id, kind }: { id: string; kind: "human" | "agent" }) {
 }
 
 export function ReactionBar({ message, onReact }: { message: Message; onReact?: (m: Message, emoji: string) => void }) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const [picker, setPicker] = useState(false)
   const shown = message.reactions.filter((r) => r.count > 0)
   return (
@@ -120,7 +120,7 @@ export function ApprovalCard({
   onDecide?: MessageActions["onDecide"]
   onOpenDoc?: (key: string) => void
 }) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
   const approval = message.approval!
   const form = parseApprovalForm(message.body, approval)
@@ -258,7 +258,7 @@ export function MessageItem({
   onDecide,
   onAddToSchedule,
 }: MessageItemProps) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
   const addToSchedule = viewerKind === "human" ? onAddToSchedule : undefined
   return (

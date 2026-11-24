@@ -14,7 +14,7 @@ import {
   type Attachment,
   type Message,
 } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 
 export interface ComposerProps {
   placeholder: string
@@ -44,7 +44,7 @@ export function createComposerDraft(initialText = ""): ComposerDraft {
 }
 
 export function Composer({ placeholder, replyTo, onCancelReply, onSend, onUpload, initialText = "", testId = "composer", draftControl }: ComposerProps) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
   const [localDraft, setLocalDraft] = useState(() => createComposerDraft(initialText))
   const { text, textRevision, caret, files, error, sending, uploading, pick, mentionClosed } = draftControl?.draft ?? localDraft

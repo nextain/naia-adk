@@ -10,7 +10,7 @@ import {
   type ScheduleLayerKey,
 } from "./schedule-calendar"
 import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
 import type { Locale } from "../i18n/types.ts"
 
 function taskStatusBadgeClass(badge: string, locale: Locale = "ko"): string {
@@ -88,8 +88,8 @@ function formatMilestoneDaysLabel(daysRemaining: number | null, overdue: boolean
  */
 export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const names = layerLabels(locale)
 
   useEffect(() => {
@@ -475,8 +475,8 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
  */
 export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: ScheduleDayListDialogProps) {
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const names = layerLabels(locale)
 
   useEffect(() => {

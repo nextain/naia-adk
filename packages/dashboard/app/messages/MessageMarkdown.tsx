@@ -9,7 +9,7 @@ import remarkGfm from "remark-gfm"
 import { convertWikiLinks, resolveRelativePath, splitFrontmatter, WIKI_HREF_PREFIX } from "../docs/markdown"
 import { copyTextToClipboard, extractPreText } from "../docs/clipboard"
 import { getMessengerStrings } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 import type { DocTab } from "../docs/tabs"
 
 type CopyStatus = "idle" | "copied" | "failed"
@@ -22,7 +22,7 @@ export function CodeBlock({
   copyFn?: (text: string) => Promise<boolean>
 }) {
   const [status, setStatus] = useState<CopyStatus>("idle")
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const preRef = useRef<HTMLPreElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 

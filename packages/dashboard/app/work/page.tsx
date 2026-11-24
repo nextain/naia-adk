@@ -4,8 +4,7 @@ import React, { Suspense, useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { WorkBoard } from "./WorkBoard"
 import { normalizeWorkTab, type LedgerPayload } from "./work-ledger-view"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useT } from "../i18n/provider.tsx"
 
 function WorkPageContent() {
   const searchParams = useSearchParams()
@@ -58,8 +57,7 @@ function WorkPageContent() {
 }
 
 export default function WorkPage() {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const t = useT()
   return (
     <Suspense fallback={<div className="py-12 text-center text-sm text-neutral-400">{t("work.loading")}</div>}>
       <WorkPageContent />

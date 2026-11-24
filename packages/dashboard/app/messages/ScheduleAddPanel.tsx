@@ -6,8 +6,7 @@ import { CalendarPlus, X } from "lucide-react"
 import { localDateOnly } from "../schedule/schedule-calendar"
 import { getMessengerStrings, type Message } from "./messenger"
 import { addToPersonalSchedule, draftScheduleFromMessage, scheduleWriteBody, type ScheduleDraft } from "./schedule-from-message"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 export interface ScheduleAddPanelProps {
   message: Message
@@ -21,9 +20,9 @@ type Status = { kind: "idle" } | { kind: "saving" } | { kind: "done"; href: stri
 
 // 오른쪽 나뉜 창: 글에서 뽑은 초안을 고쳐서 보는 사람 본인의 개인 일정에 넣는다.
 export function ScheduleAddPanel({ message, onClose, fetchFn, today }: ScheduleAddPanelProps) {
-  const locale = getActiveLocale()
+  const locale = useLocale()
   const S = getMessengerStrings(locale)
-  const t = tFor(locale)
+  const t = useT()
   const [draft, setDraft] = useState<ScheduleDraft>(() =>
     draftScheduleFromMessage(message, today ?? localDateOnly(new Date()) ?? "2000-01-01", locale),
   )

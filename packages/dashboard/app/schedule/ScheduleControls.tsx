@@ -3,8 +3,7 @@ import React from "react"
 import type { useScheduleView } from "./useScheduleView"
 import { personalLoadingNotice } from "./schedule-view-model"
 import { layerLabels, type ScheduleLayerKey } from "./schedule-calendar-base"
-import { tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 type View = ReturnType<typeof useScheduleView>
 const LAYER_DOT_CLASS: Record<ScheduleLayerKey, string> = {
@@ -27,8 +26,8 @@ const SCHEDULE_LAYER_KEYS: ScheduleLayerKey[] = ["personal", "company", "work", 
 
 
 export function ScheduleControls({ view }: { view: View }) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const layerNames = layerLabels(locale)
   const {
     mode, layers, userLabel, personalIdentityRequired,

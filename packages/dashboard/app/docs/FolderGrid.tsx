@@ -21,8 +21,8 @@ import {
   type FolderGridEntry,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 export interface FolderGridProps {
   sourceId: string
@@ -70,8 +70,8 @@ export function FolderGrid({
   forbidden = false,
   onNavigate,
 }: FolderGridProps) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const breadcrumbs = createBreadcrumbs(sourceTitle, path)
   const currentTitle = path ? getFileName(path) : sourceTitle
   const sortedEntries = sortGridEntries(entries, locale)

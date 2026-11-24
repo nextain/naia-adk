@@ -517,9 +517,12 @@ describe("fx2 finding H1/H2/S1: Context isolation and reactive subscriptions", (
         assert.equal(textOf(findElement(tree, (el) => (el.props as Record<string, unknown>)["data-testid"] === "probe-docs")), "Docs")
         assert.ok(textOf(tree).includes("Work board"))
 
-        // 2) Update initialLocale prop back to "ko" -> provider syncs prop changes.
+        // 2) Update initialLocale prop "en" -> "ko" -> provider syncs prop changes.
+        currentInitial = "en"
+        app.render()
+        app.render()
         currentInitial = "ko"
-        tree = app.render()
+        app.render()
         tree = app.render()
         assert.equal(textOf(findElement(tree, (el) => (el.props as Record<string, unknown>)["data-testid"] === "probe-locale")), "ko")
         assert.ok(textOf(tree).includes("작업 보드"))
@@ -570,8 +573,6 @@ describe("fx2 finding H1/H2/S1: Context isolation and reactive subscriptions", (
 describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer search error", () => {
   it("DocsViewer search failure uses docs.searchFailed and updates when locale changes", async () => {
     await withFakeBrowserEnv(async () => {
-      const suspenseEl = DocsPage() as React.ReactElement<{ children: React.ReactElement }>
-      const DocsViewerComp = suspenseEl.props.children.type as React.ComponentType
       const prevFetch = globalThis.fetch
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input)
@@ -586,25 +587,24 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
         <AppRouterContext.Provider value={{ push: () => {}, replace: () => {}, refresh: () => {} }}>
           <SearchParamsContext.Provider value={new URLSearchParams("q=hello")}>
             <I18nProvider initialLocale={locale}>
-              <DocsViewerComp />
+              <DocsPage />
             </I18nProvider>
           </SearchParamsContext.Provider>
         </AppRouterContext.Provider>
       ))
       try {
         app.render()
+        app.render()
         await flush()
         let tree = app.render()
-        let viewEl = findElement(tree, (el) => el.type === DocsView)!
-        assert.equal((viewEl.props as { searchError?: string }).searchError, "검색하지 못했습니다 (500)")
+        assert.ok(textOf(tree).includes("검색하지 못했습니다 (500)"), `expected ko searchError, got: ${textOf(tree).slice(0, 300)}`)
 
         locale = "en"
         app.render()
         app.render()
         await flush()
         tree = app.render()
-        viewEl = findElement(tree, (el) => el.type === DocsView)!
-        assert.equal((viewEl.props as { searchError?: string }).searchError, "Search failed (500)")
+        assert.ok(textOf(tree).includes("Search failed (500)"), `expected en searchError, got: ${textOf(tree).slice(0, 300)}`)
       } finally {
         globalThis.fetch = prevFetch
         app.unmount()
@@ -654,6 +654,7 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
         </I18nProvider>
       ))
       try {
+        app.render()
         app.render()
         await flush()
         let tree = app.render()

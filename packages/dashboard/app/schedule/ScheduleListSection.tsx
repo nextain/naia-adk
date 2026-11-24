@@ -4,16 +4,16 @@ import type { useScheduleView } from "./useScheduleView"
 import { companyItemToCalendarEvent } from "./useScheduleView"
 import { ScheduleDetailDialog } from "./ScheduleDetailDialog"
 import { personalIdentityRequiredNotice, personalLoadingNotice, personalWarningsLockedNotice, MAX_VISIBLE_PERSONAL_WARNINGS } from "./schedule-view-model"
-import { formatMessage, tFor } from "../i18n/index.ts"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { formatMessage } from "../i18n/index.ts"
+import { useLocale, useT } from "../i18n/provider.tsx"
 
 type View = ReturnType<typeof useScheduleView>
 
 const workBoardIframeSrc = (_view?: string) => "/board/index.html?view=schedule"
 
 export function ScheduleListSection({ view }: { view: View }) {
-  const locale = getActiveLocale()
-  const t = tFor(locale)
+  const locale = useLocale()
+  const t = useT()
   const {
     hasBoard, mode, layers, userLabel,
     personalIdentityRequired, personalWarningsLocked, personalLoading, personalUnavailable,

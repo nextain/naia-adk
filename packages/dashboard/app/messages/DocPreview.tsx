@@ -5,7 +5,7 @@ import { ExternalLink, X } from "lucide-react"
 import { DocMarkdown } from "./MessageMarkdown"
 import { docHref, inferTab } from "../docs/tabs"
 import { getMessengerStrings, resolveDocLink } from "./messenger"
-import { getActiveLocale } from "../i18n/provider.tsx"
+import { useLocale } from "../i18n/provider.tsx"
 
 type DocState =
   | { kind: "loading" }
@@ -24,7 +24,7 @@ export function DocPreview({
   fetchFn?: typeof fetch
   initial?: DocState
 }) {
-  const S = getMessengerStrings(getActiveLocale())
+  const S = getMessengerStrings(useLocale())
   const [state, setState] = useState<DocState>(initial ?? { kind: "loading" })
   useEffect(() => {
     if (initial) return
