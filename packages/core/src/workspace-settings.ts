@@ -526,7 +526,10 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
               return role ? [role] : []
             }))
           } else activeRoles = undefined
-        } catch { activeRoles = new Set() }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+          activeRoles = new Set()
+        }
         const active = activeRoles === undefined ? fs.existsSync(markerPath) : activeRoles.size > 0
         if (active) for (const binding of roleBindings) {
           if (activeRoles && !activeRoles.has(binding.role)) continue
@@ -544,10 +547,12 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
         ]
         const accounts = [...new Set(accountValues.filter(isSafeNonSecretIdentifier))]
         const quota = f.quota_policy && typeof f.quota_policy === "object" && !Array.isArray(f.quota_policy) ? f.quota_policy as Record<string, unknown> : undefined
-        const quotaPolicy = quota && (typeof quota.min_remaining_pct === "number" || typeof quota.switch_threshold_pct === "number" || typeof quota.recovery_check_interval_sec === "number") ? {
-          ...(typeof quota.min_remaining_pct === "number" ? { minRemainingPct: quota.min_remaining_pct } : {}),
-          ...(typeof quota.switch_threshold_pct === "number" ? { switchThresholdPct: quota.switch_threshold_pct } : {}),
-          ...(typeof quota.recovery_check_interval_sec === "number" ? { recoveryCheckIntervalSec: quota.recovery_check_interval_sec } : {}),
+        const validPct = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
+        const validInterval = (value: unknown): value is number => Number.isSafeInteger(value) && value >= 60
+        const quotaPolicy = quota && (validPct(quota.min_remaining_pct) || validPct(quota.switch_threshold_pct) || validInterval(quota.recovery_check_interval_sec)) ? {
+          ...(validPct(quota.min_remaining_pct) ? { minRemainingPct: quota.min_remaining_pct } : {}),
+          ...(validPct(quota.switch_threshold_pct) ? { switchThresholdPct: quota.switch_threshold_pct } : {}),
+          ...(validInterval(quota.recovery_check_interval_sec) ? { recoveryCheckIntervalSec: quota.recovery_check_interval_sec } : {}),
         } : undefined
         const recovery = f.recovery && typeof f.recovery === "object" && !Array.isArray(f.recovery) ? f.recovery as Record<string, unknown> : undefined
         const recoverySignals = recovery && Array.isArray(recovery.accept_any_of) ? recovery.accept_any_of.filter(isSafeNonSecretIdentifier) : undefined

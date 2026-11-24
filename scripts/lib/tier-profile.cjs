@@ -25,11 +25,10 @@ function parseTier3Fallback(fallback) {
 		for (const account of fallback.accounts) {
 			if (typeof account === "string") addName(account);
 			else if (account && typeof account === "object" && !Array.isArray(account)) addName(account.name);
-			else if (account !== undefined) return { error: "tiers.3.fallback.accounts 식별자 형식 오류" };
 		}
 	}
 	if (fallback.accountNames !== undefined) {
-		if (!Array.isArray(fallback.accountNames) || !fallback.accountNames.every((name) => safeProfileId(name))) return { error: "tiers.3.fallback.accountNames 형식 오류" };
+		if (!Array.isArray(fallback.accountNames)) return { error: "tiers.3.fallback.accountNames 형식 오류" };
 		fallback.accountNames.forEach(addName);
 	}
 	const result = { accountNames: names };

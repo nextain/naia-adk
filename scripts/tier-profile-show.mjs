@@ -68,12 +68,27 @@ try {
     const rawTier = document.tiers["3"]
     const fallback = rawTier && typeof rawTier === "object" && rawTier.fallback && typeof rawTier.fallback === "object" && !Array.isArray(rawTier.fallback) ? rawTier.fallback : undefined
     if (fallback) {
-      const fallbackTo = safeId(fallback.to) ? tier3.candidates.find((c) => c.id === fallback.to) : undefined
+      const fallbackTo = safeId(fallback.to) ? tier3.candidates.find((c) => c.id === fallback.to) ?? (fallback.to === "default" ? defaults : undefined) : undefined
       const marker = typeof process.env.NAIA_ADK_FALLBACK_STATE_DIR === "string" && process.env.NAIA_ADK_FALLBACK_STATE_DIR
         ? process.env.NAIA_ADK_FALLBACK_STATE_DIR
         : ".agents/state/tier3-fallback"
-      if (fs.existsSync(path.resolve(root, marker))) {
+      const markerPath = path.resolve(root, marker)
+      let activeRoles
+      try {
+        if (fs.statSync(markerPath).isDirectory()) {
+          activeRoles = new Set(fs.readdirSync(markerPath).filter((name) => !name.startsWith(".")).flatMap((name) => {
+            const role = name.split(".")[0]
+            return role ? [role] : []
+          }))
+        }
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error
+        activeRoles = new Set()
+      }
+      const active = activeRoles === undefined ? fs.existsSync(markerPath) : activeRoles.size > 0
+      if (active) {
         for (const binding of roleBindings) {
+          if (activeRoles && !activeRoles.has(binding.role)) continue
           binding.fallbackActive = true
           binding.source = "fallback"
           if (fallbackTo) {
@@ -91,7 +106,9 @@ try {
       ]
       const accountNames = [...new Set(accountValues.filter((a) => safeId(a)))]
       const q = fallback.quota_policy && typeof fallback.quota_policy === "object" ? fallback.quota_policy : undefined
-      const quotaPolicy = q ? { ...(typeof q.min_remaining_pct === "number" ? { minRemainingPct: q.min_remaining_pct } : {}), ...(typeof q.switch_threshold_pct === "number" ? { switchThresholdPct: q.switch_threshold_pct } : {}), ...(typeof q.recovery_check_interval_sec === "number" ? { recoveryCheckIntervalSec: q.recovery_check_interval_sec } : {}) } : undefined
+      const pct = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
+      const interval = (value) => Number.isSafeInteger(value) && value >= 60
+      const quotaPolicy = q ? { ...(pct(q.min_remaining_pct) ? { minRemainingPct: q.min_remaining_pct } : {}), ...(pct(q.switch_threshold_pct) ? { switchThresholdPct: q.switch_threshold_pct } : {}), ...(interval(q.recovery_check_interval_sec) ? { recoveryCheckIntervalSec: q.recovery_check_interval_sec } : {}) } : undefined
       const recoverySignals = fallback.recovery && typeof fallback.recovery === "object" && Array.isArray(fallback.recovery.accept_any_of) ? fallback.recovery.accept_any_of.filter((s) => safeId(s)) : undefined
       fallbackSummary = {
         ...(typeof fallback.when === "string" && safe(fallback.when) ? { when: fallback.when } : {}),
