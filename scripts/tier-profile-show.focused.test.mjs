@@ -29,9 +29,13 @@ function writeDoc(root) {
           max_parallel: 3,
           candidates: [
             { id: "primary", cli: "runner-a", model: "model-primary", effort: "high", weight: 2, roles: ["implementation"] },
-            { id: "default", cli: "runner-b", model: "model-default", default: true },
+            { id: "configured-default", cli: "runner-b", model: "model-default", default: true },
           ],
-          fallback: { when: "unavailable", to: "default", accountNames: ["backup-account"] },
+          fallback: {
+            when: "unavailable", to: "default", accounts: [{ name: "backup-account", home: "/private/home" }],
+            quota_policy: { min_remaining_pct: 20, switch_threshold_pct: 10, recovery_check_interval_sec: 60 },
+            recovery: { accept_any_of: ["quota-restored"] },
+          },
         },
       },
     }),
@@ -69,13 +73,15 @@ describe("tier-profile-show focused visibility", () => {
         when: "unavailable",
         to: "default",
         accountNames: ["backup-account"],
+        quotaPolicy: { minRemainingPct: 20, switchThresholdPct: 10, recoveryCheckIntervalSec: 60 },
+        recoverySignals: ["quota-restored"],
       })
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it("marks fallback active when the fallback marker exists", () => {
+  it("does not activate fallback for an empty marker directory", () => {
     const root = makeRoot()
     try {
       writeDoc(root)
@@ -84,11 +90,64 @@ describe("tier-profile-show focused visibility", () => {
       assert.equal(res.status, 0, `CLI failed: ${res.stderr}`)
       const out = JSON.parse(res.stdout)
       assert.ok(out.roleBindings.length > 0)
+      for (const b of out.roleBindings) assert.equal(b.fallbackActive, false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("activates only roles named by fallback marker files and maps default target", () => {
+    const root = makeRoot()
+    try {
+      writeDoc(root)
+      const marker = path.join(root, ".agents", "state", "tier3-fallback")
+      fs.mkdirSync(marker, { recursive: true })
+      fs.writeFileSync(path.join(marker, "implementation.muse"), "active")
+      const res = run(["--root", root, "--json"])
+      assert.equal(res.status, 0, `CLI failed: ${res.stderr}`)
+      const out = JSON.parse(res.stdout)
+      const impl = out.roleBindings.find((b) => b.role === "implementation")
+      const review = out.roleBindings.find((b) => b.role === "review")
+      assert.equal(impl?.fallbackActive, true)
+      assert.equal(impl?.effectiveCli, "runner-b")
+      assert.equal(review?.fallbackActive, false)
+      assert.equal(review?.source, "default")
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("treats a regular marker file as active for all roles", () => {
+    const root = makeRoot()
+    try {
+      writeDoc(root)
+      fs.mkdirSync(path.join(root, ".agents", "state"), { recursive: true })
+      fs.writeFileSync(path.join(root, ".agents", "state", "tier3-fallback"), "active")
+      const res = run(["--root", root, "--json"])
+      assert.equal(res.status, 0, `CLI failed: ${res.stderr}`)
+      const out = JSON.parse(res.stdout)
+      assert.ok(out.roleBindings.length > 0)
       for (const b of out.roleBindings) {
         assert.equal(b.fallbackActive, true)
         assert.equal(b.source, "fallback")
-        assert.equal(b.effectiveCli, "runner-b")
       }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("omits out-of-range quota policy values", () => {
+    const root = makeRoot()
+    try {
+      writeDoc(root)
+      const profile = path.join(root, "config", "tier-profile.json")
+      const document = JSON.parse(fs.readFileSync(profile, "utf8"))
+      document.tiers[3].fallback.quota_policy = { min_remaining_pct: 101, switch_threshold_pct: -1, recovery_check_interval_sec: 30 }
+      fs.writeFileSync(profile, JSON.stringify(document))
+      const res = run(["--root", root, "--json"])
+      assert.equal(res.status, 0, `CLI failed: ${res.stderr}`)
+      const out = JSON.parse(res.stdout)
+      assert.equal("quotaPolicy" in out.tierProfile.fallbackSummary, false)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

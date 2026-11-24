@@ -38,7 +38,16 @@
       "purpose": "역할 세션",
       "candidates": [
         { "cli": "<CLI_1>", "model": "<TIER3_MODEL_1>" }
-      ]
+      ],
+      "fallback": {
+        "accounts": ["<ACCOUNT_1>", "<ACCOUNT_2>"],
+        "quota_policy": {
+          "min_remaining_pct": 20,
+          "switch_threshold_pct": 10,
+          "recovery_check_interval_sec": 60
+        },
+        "recovery": { "accept_any_of": ["<RECOVERY_SIGNAL>"] }
+      }
     },
     "4": {
       "purpose": "독립 검수",
