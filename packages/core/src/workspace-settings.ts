@@ -135,6 +135,7 @@ export interface InspectWorkspaceSettingsOptions {
   pathEnv?: string
   homeDir?: string
   env?: Record<string, string | undefined>
+  fallbackMarkersDir?: string
 }
 
 const PLACEHOLDER_RE = /<[A-Z0-9_][^>]*>|\{\{[^}]*\}\}|^(?:MODEL_ID|CLI_ID)$/i
@@ -315,11 +316,12 @@ function safeDisplayName(root: string, opts?: InspectWorkspaceSettingsOptions): 
 
 function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions): WorkspaceTierProfileStatus & { roleBindings: TierRoleBindingItem[] } {
   const env = opts?.env ?? process.env
-  const requestedPath = typeof env.NAIA_ADK_TIER_PROFILE === "string" && env.NAIA_ADK_TIER_PROFILE.trim()
-    ? env.NAIA_ADK_TIER_PROFILE.trim()
+  const envOverride = typeof env.NAIA_ADK_TIER_PROFILE === "string" && env.NAIA_ADK_TIER_PROFILE.trim() !== ""
+  const requestedPath = envOverride
+    ? (env.NAIA_ADK_TIER_PROFILE as string).trim()
     : "config/tier-profile.json"
   const sourcePath = safeDisplayPath(root, requestedPath)
-  const sourceKind = requestedPath === "config/tier-profile.json" ? "workspace-default" as const : "env-override" as const
+  const sourceKind = envOverride ? "env-override" as const : "workspace-default" as const
   const exampleRelPath = "config/tier-profile.example.json" as const
   const targetPath = path.resolve(root, requestedPath)
   const exampleExists = fs.existsSync(path.join(root, exampleRelPath))
@@ -508,9 +510,11 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
       if (fallback && typeof fallback === "object" && !Array.isArray(fallback)) {
         const f = fallback as Record<string, unknown>
         const fallbackTo = isSafeNonSecretIdentifier(f.to) ? summaryCandidates.find((candidate) => candidate.id === f.to) : undefined
-        const marker = typeof (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR === "string"
-          ? (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR!
-          : ".agents/state/tier3-fallback"
+        const marker = typeof opts?.fallbackMarkersDir === "string" && opts.fallbackMarkersDir
+          ? opts.fallbackMarkersDir
+          : typeof (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR === "string" && (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR
+            ? (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR!
+            : ".agents/state/tier3-fallback"
         const active = fs.existsSync(path.resolve(root, marker))
         if (active) for (const binding of roleBindings) {
           binding.fallbackActive = true

@@ -131,7 +131,7 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
         </h2>
           <div className="p-4 rounded-lg border border-neutral-800 space-y-3">
           <div className="text-xs text-neutral-400">
-            Source: <code className="font-mono text-neutral-200">{tierProfile.sourcePath}</code> ({tierProfile.sourceKind})
+            Source: <code className="font-mono text-neutral-200">{tierProfile.sourcePath ?? tierProfile.path}</code> ({tierProfile.sourceKind ?? "workspace-default"})
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-neutral-400">{t("settings.tierStatus")}</span>
