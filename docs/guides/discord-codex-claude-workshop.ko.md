@@ -21,7 +21,7 @@
 - Discord 봇 토큰과 봇 사용자 ID
 - 봇을 초대한 시험용 서버·채널 또는 시험용 DM
 
-실제 수업에서는 개인 서버와 시험용 저장소를 사용합니다. 운영 채널과 운영 자격 증명은 사용하지 않습니다. macOS, Windows, systemd가 없는 Linux의 자동 시작 설치는 현재 지원하지 않습니다.
+실제 수업에서는 개인 서버와 시험용 저장소를 사용합니다. 운영 채널과 운영 자격 증명은 사용하지 않습니다. macOS와 systemd가 없는 Linux의 자동 시작 설치는 현재 지원하지 않습니다. Windows는 제한된 ONLOGON 작업 스케줄러(Task Scheduler) 작업으로 자동 시작을 지원하며, 작업 생성이 정책상 막힌 경우 소유자 전용 hidden 시작(Startup) 런처로 대체합니다.
 
 Discord Developer Portal의 봇 설정에서 **Message Content Intent**를 켭니다. 시험 채널에는 View Channel과 Send Messages 권한을 주고, 스레드 실습에는 스레드 보기·보내기 권한도 부여합니다.
 

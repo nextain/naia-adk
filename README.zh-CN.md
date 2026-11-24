@@ -44,7 +44,7 @@ pnpm dev        # 同时启动 API 服务器(:3141) 和仪表盘(:3142)
 包含一个用于直观管理工作区的 Next.js 仪表盘，以及在背后支撑它的 Fastify API 服务器。通过顶部导航中的
 **文档**(`/docs`)和 **工作** 标签页，可以在一个地方查看公司共享文档和协作看板；用
 `pnpm adk:setup -- --company <仓库地址>` 命令可以一次性设置好公司文档和项目仓库。详细的设置与用法请参阅
-[入门指南(韩文)](docs/guides/onboarding.ko.md)。
+[入门指南](docs/guides/onboarding.en.md)([韩文](docs/guides/onboarding.ko.md))。
 API 提供工作区元数据(`/api/workspace`)、技能目录(`/api/skills`)、公司文档门户(`/api/portal`)，以及实时
 通知文件变更的 WebSocket(`/api/ws`)。有了这个 API，不只是仪表盘，其他程序也能访问工作区。
 
@@ -83,7 +83,7 @@ PDF 与电子签名)、`copyright-reg`(著作权登记材料)、`patent-draft` �
 `upstream-pr-review`(提交到开源项目之前的检查)、`payroll`、
 `finetune-persona`(角色 LoRA 训练)。
 
-新建技能时从 `SKILL_TEMPLATE.md` 开始，建好之后也要在索引里留一行。索引与实际不一致时，下一个会话就会
+新建技能时从 `.agents/skills/SKILL_TEMPLATE.md` 开始，建好之后也要在索引里留一行。索引与实际不一致时，下一个会话就会
 重新创建一个它根本不知道已经存在的技能。
 
 ### 规则集与最小治理
@@ -154,7 +154,7 @@ bash .agents/skills/secret-vault/scripts/vault.sh sync     # 只提交 key.age �
 
 Naia ADK 的核心不是某个特定工具，而是**格式**。目录布局(`.agents/`、`.users/`、`skills/`、`data-*/`)和
 文件模式(`agents-rules.json`、`SKILL.md`)是既定的约定，任何能读懂这套约定的工具都可以使用同一个工作区。
-Claude Code、opencode、Codex、naia-agent 无需内嵌彼此的代码，就能各自读取同一个工作区。所以无论更换工具
+Claude Code、Codex、opencode、naia-agent、agy、muse 无需内嵌彼此的代码，就能各自读取同一个工作区。所以无论更换工具
 还是混用多个工具，工作区都照常运作。
 
 规则的强制执行(enforcement)本身也不绑定于工具。与宿主无关的核心(`.agents/hooks/core/`)和策略
@@ -206,8 +206,9 @@ PJ 是处理多项目上下文漂移、调用成本和 Discord 运营边界的�
 | `templates/` | 文档模板 |
 | `docs/` | 架构文档、设计规格 |
 | `packages/` | 运行时包(pnpm 工作区) |
+| `config/` | 工作者层级画像与部署示例配置 |
 
-### 运行时包(packages/，共 10 个)
+### 运行时包(packages/，共 12 个)
 
 其中三个是真正运行的程序，其余是定义格式与规格的轻量包。
 
@@ -222,6 +223,16 @@ PJ 是处理多项目上下文漂移、调用成本和 Discord 运营边界的�
 - `naia-anyllm` — any-llm 网关 / 直连提供商的 LLM 适配器。
 - `artifacts-spec` — 权限(RBAC)与开发生命周期(SDLC)产出物的标准模式。用 JSON Schema 定义 15 种产出物，
   并规定每种产出物是由 git 跟踪还是仅限于会话。
+- `ax-messenger` — Matrix 信使中继/管理包(AI 中继、台账、提供商，基于 `matrix-js-sdk`)。
+- `benchmark-contract` — `naia-adk` 与 `naia-agent` 共享的持久基准与治理证据契约。
+
+### 工作者层级与评审者覆盖
+
+角色与模型分开配置。架构中不固定任何特定模型版本。
+
+- `config/tier-profile.example.json`(`tier-profile/v1`)是与模型无关的 4 层工作者画像。层级定义*角色*(轻量确认、设计与实现、角色会话、独立评审)；每层的候选项分别绑定 CLI 与模型，因此更换模型不会改变角色结构。
+- 审批门评审者覆盖写在实例的 `.claude/deploy/config.json` 中，作为 `review_models`(评审者 ID → 精确模型、最低 effort、执行器)。仅在获得 `CFG-` 批准后生效，否则使用代码默认值。执行器包括 `agy`、`muse`、`codex` 和 `claude`。详见[审批计划门指南](docs/guides/approval-plan-gate.en.md)。
+- `naia-settings/review.json` 保存 `review-pass` 技能与 `naia-agent` 使用的跨仓库评审面板和模型层级策略。
 
 ### 数据目录(gitignore，每个 fork 自行填充)
 

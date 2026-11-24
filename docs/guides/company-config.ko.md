@@ -1,3 +1,5 @@
+[English](company-config.en.md) | [한국어](company-config.ko.md)
+
 # 회사 설정 파일 안내
 
 회사 관리자가 보는 문서입니다. 구성원이 `pnpm adk:setup -- --company <주소>`로 회사 문서를 연결하면, ADK는 회사 문서 저장소 맨 위의 `adk-company.json`을 읽습니다. 이 파일로 두 가지를 정합니다. 대시보드 문서 탭에 보여 줄 폴더, 그리고 구성원이 함께 받을 공동 프로젝트입니다.

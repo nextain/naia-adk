@@ -59,8 +59,9 @@ server. The **Docs** (`/docs`) and **Work** tabs in the top navigation show shar
 company documents and the collaboration board in one place, and
 `pnpm adk:setup -- --company <repo-url>` sets up company docs and project
 repositories in one step. For setup and usage details, see the
-[Onboarding Guide (Korean)](docs/guides/onboarding.ko.md).
-See the [development documentation writing guide](docs/guides/dev-docs-writing.md)
+[Onboarding Guide](docs/guides/onboarding.en.md)
+([한국어](docs/guides/onboarding.ko.md)).
+See the [development documentation writing guide](docs/guides/dev-docs-writing.en.md)
 for documenting architecture, contracts, and implementation evidence.
 The API exposes workspace metadata (`/api/workspace`), the skill catalog
 (`/api/skills`), the company docs portal (`/api/portal`), and a WebSocket that
@@ -110,7 +111,7 @@ and `review-pass` for adversarial review.
 `upstream-pr-review` (a floor before anything goes to an OSS maintainer),
 `payroll`, and `finetune-persona` for character LoRA training.
 
-Start a new skill from `SKILL_TEMPLATE.md`, and add its line to the index once
+Start a new skill from `.agents/skills/SKILL_TEMPLATE.md`, and add its line to the index once
 it exists. When the index drifts from the tree, the next session rebuilds a
 skill it already had.
 
@@ -208,8 +209,9 @@ translation shows the estimated cost first and can resume from where it stopped.
 The heart of Naia ADK is not a particular tool but a **format**. The directory
 layout (`.agents/`, `.users/`, `skills/`, `data-*/`) and the file schemas
 (`agents-rules.json`, `SKILL.md`) are a fixed agreement, and any tool that can
-read that agreement can consume the same workspace. Claude Code, opencode, Codex,
-and naia-agent each read the same workspace without embedding one another's code.
+read that agreement can consume the same workspace. Claude Code, Codex, opencode,
+naia-agent, agy, and muse each read the same workspace without embedding one
+another's code.
 So you can swap tools or mix several, and the workspace keeps working.
 
 The rule enforcement itself is tool-agnostic too. A host-neutral core
@@ -273,8 +275,9 @@ directories each fork fills in.
 | `templates/` | Document templates |
 | `docs/` | Architecture docs, design specs |
 | `packages/` | Runtime packages (pnpm workspace) |
+| `config/` | Example worker-tier profiles and deploy config |
 
-### Runtime packages (packages/, 10 of them)
+### Runtime packages (packages/, 12 of them)
 
 Three are actual running programs; the rest are thin packages that define formats
 and specs.
@@ -293,6 +296,29 @@ and specs.
 - `artifacts-spec` — the standard schema for permission (RBAC) and development
   lifecycle (SDLC) artifacts. It defines 15 artifact types as JSON Schema and
   specifies, for each, whether the instance is git-tracked or session-scoped.
+- `ax-messenger` — the Matrix messenger relay/admin package (AI relay, ledger,
+  and providers over `matrix-js-sdk`).
+- `benchmark-contract` — permanent benchmark and governance evidence contracts
+  shared by `naia-adk` and `naia-agent`.
+
+### Worker tiers and reviewer overrides
+
+Roles and models are configured separately — no model version is baked into the
+architecture.
+
+- `config/tier-profile.example.json` (`tier-profile/v1`) is a model-agnostic
+  4-tier worker profile. Tiers describe *roles* (light checks, design and
+  implementation, role sessions, independent review); each tier's candidates
+  bind a CLI and model separately, so swapping a model never changes the role
+  structure.
+- Approval-gate reviewer overrides live in the instance's
+  `.claude/deploy/config.json` as `review_models` (reviewer id → exact model,
+  minimum effort, runner). They apply only after `CFG-` approval; without an
+  approved config the code defaults apply. Runners include `agy`, `muse`,
+  `codex`, and `claude`. See the
+  [approval plan gate guide](docs/guides/approval-plan-gate.en.md).
+- `naia-settings/review.json` holds the cross-repo review panel and model tier
+  policy consumed by the `review-pass` skill and `naia-agent`.
 
 ### Data directories (gitignored, filled per fork)
 
