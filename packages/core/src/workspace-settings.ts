@@ -51,6 +51,8 @@ export interface TierFallbackSummary {
   when?: string
   to?: string
   accountNames: string[]
+  quotaPolicy?: { minRemainingPct?: number; switchThresholdPct?: number; recoveryCheckIntervalSec?: number }
+  recoverySignals?: string[]
 }
 
 export interface WorkspaceTierProfileStatus {
@@ -509,14 +511,25 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
       const fallback = tierRecord.fallback
       if (fallback && typeof fallback === "object" && !Array.isArray(fallback)) {
         const f = fallback as Record<string, unknown>
-        const fallbackTo = isSafeNonSecretIdentifier(f.to) ? summaryCandidates.find((candidate) => candidate.id === f.to) : undefined
+        const fallbackTo = isSafeNonSecretIdentifier(f.to) ? summaryCandidates.find((candidate) => candidate.id === f.to) ?? (f.to === "default" ? defaultCandidate : undefined) : undefined
         const marker = typeof opts?.fallbackMarkersDir === "string" && opts.fallbackMarkersDir
           ? opts.fallbackMarkersDir
           : typeof (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR === "string" && (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR
             ? (opts?.env ?? process.env).NAIA_ADK_FALLBACK_STATE_DIR!
             : ".agents/state/tier3-fallback"
-        const active = fs.existsSync(path.resolve(root, marker))
+        const markerPath = path.resolve(root, marker)
+        let activeRoles: Set<string> | undefined
+        try {
+          if (fs.statSync(markerPath).isDirectory()) {
+            activeRoles = new Set(fs.readdirSync(markerPath).filter((name) => !name.startsWith(".")).flatMap((name) => {
+              const role = name.split(".")[0]
+              return role ? [role] : []
+            }))
+          } else activeRoles = undefined
+        } catch { activeRoles = new Set() }
+        const active = activeRoles === undefined ? fs.existsSync(markerPath) : activeRoles.size > 0
         if (active) for (const binding of roleBindings) {
+          if (activeRoles && !activeRoles.has(binding.role)) continue
           binding.fallbackActive = true
           binding.source = "fallback"
           if (fallbackTo) {
@@ -525,9 +538,22 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
             binding.effectiveEffort = fallbackTo.effort
           }
         }
-        const accounts = Array.isArray(f.accountNames) ? f.accountNames.filter(isSafeNonSecretIdentifier) : []
+        const accountValues = [
+          ...(Array.isArray(f.accountNames) ? f.accountNames : []),
+          ...(Array.isArray(f.accounts) ? f.accounts.map((account) => typeof account === "string" ? account : account && typeof account === "object" && !Array.isArray(account) ? (account as Record<string, unknown>).name : undefined) : []),
+        ]
+        const accounts = [...new Set(accountValues.filter(isSafeNonSecretIdentifier))]
+        const quota = f.quota_policy && typeof f.quota_policy === "object" && !Array.isArray(f.quota_policy) ? f.quota_policy as Record<string, unknown> : undefined
+        const quotaPolicy = quota && (typeof quota.min_remaining_pct === "number" || typeof quota.switch_threshold_pct === "number" || typeof quota.recovery_check_interval_sec === "number") ? {
+          ...(typeof quota.min_remaining_pct === "number" ? { minRemainingPct: quota.min_remaining_pct } : {}),
+          ...(typeof quota.switch_threshold_pct === "number" ? { switchThresholdPct: quota.switch_threshold_pct } : {}),
+          ...(typeof quota.recovery_check_interval_sec === "number" ? { recoveryCheckIntervalSec: quota.recovery_check_interval_sec } : {}),
+        } : undefined
+        const recovery = f.recovery && typeof f.recovery === "object" && !Array.isArray(f.recovery) ? f.recovery as Record<string, unknown> : undefined
+        const recoverySignals = recovery && Array.isArray(recovery.accept_any_of) ? recovery.accept_any_of.filter(isSafeNonSecretIdentifier) : undefined
         fallbackSummary = {
           ...(isValidTierToken(f.when) ? { when: f.when } : {}), ...(isSafeNonSecretIdentifier(f.to) ? { to: f.to } : {}), accountNames: accounts,
+          ...(quotaPolicy ? { quotaPolicy } : {}), ...(recoverySignals?.length ? { recoverySignals: [...new Set(recoverySignals)] } : {}),
         }
       }
     }

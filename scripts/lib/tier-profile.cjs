@@ -4,11 +4,48 @@ const fs = require("node:fs");
 const { createHash } = require("node:crypto");
 const TIER_PROFILE_REL = "config/tier-profile.json";
 const PLACEHOLDER_RE = /<(?:CLI|TIER|MODEL|EFFORT|FAMILY|WORKER)[^>]*>|\{\{[^}]*\}\}|^(?:MODEL_ID|CLI_ID)$/i;
+const SAFE_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
 
 function validTierToken(val) {
 	if (typeof val !== "string") return false;
 	const s = val.trim();
 	return s.length > 0 && !/[\0\r\n]/.test(val) && val === s && !PLACEHOLDER_RE.test(s);
+}
+
+function safeProfileId(val) {
+	return typeof val === "string" && SAFE_ID_RE.test(val) && validTierToken(val) && !/secret|token|password|apikey|api_key/i.test(val);
+}
+
+function parseTier3Fallback(fallback) {
+	if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return undefined;
+	const names = [];
+	const addName = (value) => { if (safeProfileId(value) && !names.includes(value)) names.push(value); };
+	if (fallback.accounts !== undefined) {
+		if (!Array.isArray(fallback.accounts)) return { error: "tiers.3.fallback.accounts 형식 오류" };
+		for (const account of fallback.accounts) {
+			if (typeof account === "string") addName(account);
+			else if (account && typeof account === "object" && !Array.isArray(account)) addName(account.name);
+			else if (account !== undefined) return { error: "tiers.3.fallback.accounts 식별자 형식 오류" };
+		}
+	}
+	if (fallback.accountNames !== undefined) {
+		if (!Array.isArray(fallback.accountNames) || !fallback.accountNames.every((name) => safeProfileId(name))) return { error: "tiers.3.fallback.accountNames 형식 오류" };
+		fallback.accountNames.forEach(addName);
+	}
+	const result = { accountNames: names };
+	if (fallback.quota_policy !== undefined) {
+		const q = fallback.quota_policy;
+		if (!q || typeof q !== "object" || Array.isArray(q)) return { error: "tiers.3.fallback.quota_policy 형식 오류" };
+		const pct = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100;
+		if (q.min_remaining_pct !== undefined && !pct(q.min_remaining_pct) || q.switch_threshold_pct !== undefined && !pct(q.switch_threshold_pct) || q.recovery_check_interval_sec !== undefined && !(Number.isSafeInteger(q.recovery_check_interval_sec) && q.recovery_check_interval_sec >= 60)) return { error: "tiers.3.fallback.quota_policy 값 오류" };
+		result.quotaPolicy = { ...(q.min_remaining_pct !== undefined ? { minRemainingPct: q.min_remaining_pct } : {}), ...(q.switch_threshold_pct !== undefined ? { switchThresholdPct: q.switch_threshold_pct } : {}), ...(q.recovery_check_interval_sec !== undefined ? { recoveryCheckIntervalSec: q.recovery_check_interval_sec } : {}) };
+	}
+	if (fallback.recovery !== undefined) {
+		const signals = fallback.recovery && typeof fallback.recovery === "object" && !Array.isArray(fallback.recovery) ? fallback.recovery.accept_any_of : undefined;
+		if (!Array.isArray(signals) || !signals.every(safeProfileId)) return { error: "tiers.3.fallback.recovery.accept_any_of 형식 오류" };
+		result.recoverySignals = [...new Set(signals)];
+	}
+	return result;
 }
 
 /**
@@ -61,6 +98,8 @@ function loadTierProfileFile(targetPath) {
 		return broken("tiers.2.max_parallel 는 1 이상 정수여야 함");
 	}
 	if (!Array.isArray(tier2.candidates) || !tier2.candidates.length) return broken("tiers.2.candidates 누락");
+	const tier3Fallback = parsed.tiers["3"]?.fallback === undefined ? undefined : parseTier3Fallback(parsed.tiers["3"].fallback);
+	if (tier3Fallback?.error) return broken(tier3Fallback.error);
 	const candidates = [];
 	for (let i = 0; i < tier2.candidates.length; i++) {
 		const c = tier2.candidates[i];
@@ -95,6 +134,7 @@ function loadTierProfileFile(targetPath) {
 			maxParallel: tier2.max_parallel ?? null,
 			candidates,
 		},
+		...(tier3Fallback ? { tier3Fallback } : {}),
 	};
 }
 

@@ -85,11 +85,20 @@ try {
           }
         }
       }
-      const accountNames = Array.isArray(fallback.accountNames) ? fallback.accountNames.filter((a) => safeId(a)) : []
+      const accountValues = [
+        ...(Array.isArray(fallback.accountNames) ? fallback.accountNames : []),
+        ...(Array.isArray(fallback.accounts) ? fallback.accounts.map((a) => typeof a === "string" ? a : a && typeof a === "object" ? a.name : undefined) : []),
+      ]
+      const accountNames = [...new Set(accountValues.filter((a) => safeId(a)))]
+      const q = fallback.quota_policy && typeof fallback.quota_policy === "object" ? fallback.quota_policy : undefined
+      const quotaPolicy = q ? { ...(typeof q.min_remaining_pct === "number" ? { minRemainingPct: q.min_remaining_pct } : {}), ...(typeof q.switch_threshold_pct === "number" ? { switchThresholdPct: q.switch_threshold_pct } : {}), ...(typeof q.recovery_check_interval_sec === "number" ? { recoveryCheckIntervalSec: q.recovery_check_interval_sec } : {}) } : undefined
+      const recoverySignals = fallback.recovery && typeof fallback.recovery === "object" && Array.isArray(fallback.recovery.accept_any_of) ? fallback.recovery.accept_any_of.filter((s) => safeId(s)) : undefined
       fallbackSummary = {
         ...(typeof fallback.when === "string" && safe(fallback.when) ? { when: fallback.when } : {}),
         ...(safeId(fallback.to) ? { to: fallback.to } : {}),
         accountNames,
+        ...(quotaPolicy && Object.keys(quotaPolicy).length ? { quotaPolicy } : {}),
+        ...(recoverySignals?.length ? { recoverySignals: [...new Set(recoverySignals)] } : {}),
       }
     }
   }

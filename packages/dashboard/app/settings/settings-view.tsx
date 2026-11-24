@@ -199,6 +199,13 @@ export function SettingsView({ snapshot, health = null, locale: localeProp }: Se
                 ))}
               </div>
               {(snapshot.roleBindings ?? tierProfile.roleBindings ?? []).length > 0 && <div className="pt-2 space-y-1"><div className="text-neutral-400">Role bindings</div>{(snapshot.roleBindings ?? tierProfile.roleBindings ?? []).map((binding) => <div key={binding.role} className="text-xs font-mono text-neutral-300">{binding.role}: {binding.configuredCli ?? "default"} → {binding.effectiveCli ?? "-"}{binding.fallbackActive ? " (fallback)" : ""}</div>)}</div>}
+              {tierProfile.fallbackSummary && <div data-testid="tier-fallback-summary" className="pt-2 space-y-1.5 border-t border-neutral-800">
+                <div className="text-neutral-400">Fallback</div>
+                <div className="flex justify-between gap-3"><span className="text-neutral-400">{t("settings.fallbackAccounts")}</span><span className="font-mono text-neutral-200">{tierProfile.fallbackSummary.accountNames.join(", ") || "-"}</span></div>
+                {tierProfile.fallbackSummary.quotaPolicy && <div className="flex justify-between gap-3"><span className="text-neutral-400">{t("settings.fallbackThresholds")}</span><span className="font-mono text-neutral-200">{tierProfile.fallbackSummary.quotaPolicy.minRemainingPct ?? "-"}% / {tierProfile.fallbackSummary.quotaPolicy.switchThresholdPct ?? "-"}%</span></div>}
+                {tierProfile.fallbackSummary.quotaPolicy?.recoveryCheckIntervalSec !== undefined && <div className="flex justify-between gap-3"><span className="text-neutral-400">{t("settings.fallbackRecoveryInterval")}</span><span className="font-mono text-neutral-200">{tierProfile.fallbackSummary.quotaPolicy.recoveryCheckIntervalSec}s</span></div>}
+                {tierProfile.fallbackSummary.recoverySignals && <div className="flex justify-between gap-3"><span className="text-neutral-400">{t("settings.fallbackRecoverySignals")}</span><span className="font-mono text-neutral-200">{tierProfile.fallbackSummary.recoverySignals.join(", ") || "-"}</span></div>}
+              </div>}
             </div>
           )}
 
