@@ -548,7 +548,7 @@ function inspectTierProfile(root: string, opts?: InspectWorkspaceSettingsOptions
         const accounts = [...new Set(accountValues.filter(isSafeNonSecretIdentifier))]
         const quota = f.quota_policy && typeof f.quota_policy === "object" && !Array.isArray(f.quota_policy) ? f.quota_policy as Record<string, unknown> : undefined
         const validPct = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
-        const validInterval = (value: unknown): value is number => Number.isSafeInteger(value) && value >= 60
+        const validInterval = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 60
         const quotaPolicy = quota && (validPct(quota.min_remaining_pct) || validPct(quota.switch_threshold_pct) || validInterval(quota.recovery_check_interval_sec)) ? {
           ...(validPct(quota.min_remaining_pct) ? { minRemainingPct: quota.min_remaining_pct } : {}),
           ...(validPct(quota.switch_threshold_pct) ? { switchThresholdPct: quota.switch_threshold_pct } : {}),
