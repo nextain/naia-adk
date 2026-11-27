@@ -642,14 +642,13 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
     })
   })
 
-  it("DecisionsPage updates error messages on locale switch without clobbering edited form", async () => {
+  it("DecisionsPage updates error messages on locale switch without clobbering the selected tab", async () => {
+    // The unified /api/portal/decisions inbox replaced the legacy manual
+    // localStorage markdown-table settings form; the locale-switch contract
+    // now pins the shared error text and the preserved tab selection instead.
     await withFakeBrowserEnv(async () => {
       const prevFetch = globalThis.fetch
       globalThis.fetch = (async () => new Response("bad", { status: 500 })) as typeof fetch
-      window.localStorage.setItem(
-        "naia.decision-document.v1",
-        JSON.stringify({ source: "adk", path: "d.md", pendingHeading: "## p", doneHeading: "## d" }),
-      )
 
       let locale: "ko" | "en" = "ko"
       const app = mountTree(() => (
@@ -665,11 +664,13 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
         const alertKo = findElement(tree, (el) => (el.props as Record<string, unknown>).role === "alert")
         assert.ok(textOf(alertKo).includes("문서를 불러오지 못했습니다"))
 
-        // Open settings form so we verify locale switch doesn't re-run mount effect & close form.
-        const toggleBtn = findElement(tree, (el) => el.type === "button" && textOf(el) === "문서 설정")!
-        ;(toggleBtn.props as { onClick: () => void }).onClick()
+        // Pick the history tab so we verify a locale switch doesn't reset local UI state.
+        const historyTab = findElement(
+          tree,
+          (el) => (el.props as Record<string, unknown>)["data-testid"] === "decisions-main-tab-history",
+        )!
+        ;(historyTab.props as { onClick: () => void }).onClick()
         tree = app.render()
-        assert.ok(findElement(tree, (el) => el.type === "form"), "form should be open")
 
         locale = "en"
         app.render()
@@ -678,7 +679,15 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
         tree = app.render()
         const alertEn = findElement(tree, (el) => (el.props as Record<string, unknown>).role === "alert")
         assert.ok(textOf(alertEn).includes("Could not load the doc"), `expected English error, got: ${textOf(alertEn)}`)
-        assert.ok(findElement(tree, (el) => el.type === "form"), "form must stay open across locale switch")
+        const historyTabEn = findElement(
+          tree,
+          (el) => (el.props as Record<string, unknown>)["data-testid"] === "decisions-main-tab-history",
+        )
+        assert.equal(
+          (historyTabEn!.props as Record<string, unknown>)["aria-selected"],
+          true,
+          "history tab must stay selected across locale switch",
+        )
       } finally {
         globalThis.fetch = prevFetch
         app.unmount()

@@ -177,6 +177,15 @@ function LedgerCard({ item, nowMs, locale }: { item: LedgerCardItem; nowMs?: num
         <span className="text-neutral-500 font-mono truncate max-w-[160px]" title={item.id}>
           {item.id}
         </span>
+        {item.status === "waiting_human" && (
+          <Link
+            href={`/decisions?item=${encodeURIComponent(`work:${item.role}:${item.id}`)}`}
+            data-testid={`ledger-decisions-link-${item.id}`}
+            className="inline-flex items-center gap-1 rounded border border-amber-800/70 bg-amber-950/40 px-2 py-0.5 text-amber-300 hover:bg-amber-900/50 transition-colors"
+          >
+            {t("work.viewInDecisions")}
+          </Link>
+        )}
       </div>
 
       <ResultLinksList item={item} />

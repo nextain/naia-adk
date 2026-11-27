@@ -8,18 +8,19 @@
     "start": "node server.mjs -p 3142",
     "test:standalone": "node --test test/ax-messenger-standalone.test.mjs",
     "test:verify": "pnpm build && pnpm test && pnpm test:standalone",
-    "test": "pnpm --filter @naia-adk/ax-messenger build && node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts app/components/nav-tabs.test.ts app/components/ax-messenger-nav.test.ts test/ax-messenger.test.mjs test/ax-messenger-server.test.mjs test/ax-messenger-selection.test.mjs test/ax-messenger-status.test.mjs app/messages/messenger.test.ts app/work/work-ledger-view.test.ts host-guard.test.mjs identity-header-guard.test.mjs messenger-gate.test.mjs merged-identity.test.mjs public-access.test.mjs server.test.mjs scripts/short-link.test.mjs && node --import tsx --test app/i18n/i18n.test.ts app/i18n/i18n.render.test.tsx app/i18n/i18n.fx1-layout.test.tsx app/i18n/i18n.fx1-chrome.test.tsx app/i18n/i18n.fx2-context.test.tsx app/i18n/i18n.fx2-request.test.tsx app/docs/doc-save.test.ts app/docs/*.render.test.tsx app/work/*.render.test.tsx app/messages/*.render.test.tsx app/ax/messenger/*.render.test.tsx app/settings/*.render.test.tsx app/messages/schedule-from-message.test.ts app/schedule/*.test.ts app/schedule/schedule-view.fx1.test.tsx app/schedule/schedule-detail.fx1.test.tsx app/schedule/schedule-detail.fx2.test.tsx short-link-standalone.test.mjs"
+    "test": "pnpm --filter @naia-adk/ax-messenger build && node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts app/components/nav-tabs.test.ts app/components/ax-messenger-nav.test.ts test/ax-messenger.test.mjs test/ax-messenger-server.test.mjs test/ax-messenger-selection.test.mjs test/ax-messenger-status.test.mjs app/messages/messenger.test.ts app/work/work-ledger-view.test.ts host-guard.test.mjs identity-header-guard.test.mjs messenger-gate.test.mjs merged-identity.test.mjs public-access.test.mjs server.test.mjs scripts/short-link.test.mjs && node --import tsx --test app/i18n/i18n.test.ts app/i18n/i18n.render.test.tsx app/i18n/i18n.fx1-layout.test.tsx app/i18n/i18n.fx1-chrome.test.tsx app/i18n/i18n.fx2-context.test.tsx app/i18n/i18n.fx2-request.test.tsx app/docs/doc-save.test.ts app/docs/selection-popup.test.ts app/docs/section-scroll.test.ts app/decisions/decisions-client.test.ts app/docs/*.render.test.tsx app/work/*.render.test.tsx app/messages/*.render.test.tsx app/ax/messenger/*.render.test.tsx app/settings/*.render.test.tsx app/messages/schedule-from-message.test.ts app/schedule/*.test.ts app/schedule/schedule-view.fx1.test.tsx app/schedule/schedule-detail.fx1.test.tsx app/schedule/schedule-detail.fx2.test.tsx short-link-standalone.test.mjs"
   },
   "dependencies": {
+    "@naia-adk/ax-messenger": "workspace:*",
     "@naia-adk/core": "workspace:*",
     "lucide-react": "^0.503.0",
+    "mermaid": "^12.3.0",
     "next": "^15.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "swr": "^2.3.0",
-    "@naia-adk/ax-messenger": "workspace:*"
+    "swr": "^2.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.0",

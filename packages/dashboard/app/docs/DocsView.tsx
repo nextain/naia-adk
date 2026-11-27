@@ -1,9 +1,7 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import {
   Folder,
   FolderOpen,
@@ -31,7 +29,6 @@ import {
   archiveBadgeLabel,
   docHref,
   docVisibleInTab,
-  inferTab,
   isArchiveDirName,
   isArchivedDocPath,
   searchResultHref,
@@ -44,18 +41,36 @@ import {
 import { formatMessage } from "../i18n/index.ts"
 import { useLocale, useT } from "../i18n/provider.tsx"
 import {
-  convertWikiLinks,
-  findWikiTarget,
-  resolveRelativePath,
-  splitFrontmatter,
-  WIKI_HREF_PREFIX,
   type DocTreeNode,
 } from "./markdown"
 import { FavoritesGroup } from "./Favorites"
 import { FolderGrid } from "./FolderGrid"
 import { FileView } from "./FileView"
 import { DocEditor } from "./DocEditor"
+import { DocMarkdown } from "./DocMarkdown"
 import { NotesBanner, NotesPanel } from "./NotesPanel"
+import { PanelResizer } from "./PanelResizer"
+import { MobileMemoButton, MobileMemoSheet } from "./MobileMemoPopup"
+import { computeMemoButtonPosition, isTouchSelectionMode } from "./selection-popup"
+import { scrollToSection } from "./section-scroll"
+import {
+  clampSize,
+  computeTreeAsideClasses,
+  getStoredItem,
+  parseStoredBoolean,
+  parseStoredNumber,
+  setStoredItem,
+  NOTES_WIDTH_DEFAULT,
+  NOTES_WIDTH_MAX,
+  NOTES_WIDTH_MIN,
+  NOTES_WIDTH_STEP,
+  TREE_COLLAPSED_KEY,
+  TREE_WIDTH_DEFAULT,
+  TREE_WIDTH_MAX,
+  TREE_WIDTH_MIN,
+  TREE_WIDTH_STEP,
+  type StorageLike,
+} from "./panel-size"
 import { ShortLinkButton } from "./ShortLinkButton"
 import { LinkedCardsPanel } from "./LinkedCardsPanel"
 import type { LedgerCardItem } from "../work/work-ledger-view"
@@ -237,36 +252,6 @@ function TreeItem({
   )
 }
 
-// ── 코드 블록 ───────────────────────────────────────────────────────────────
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  const ct = useT()
-  const [copied, setCopied] = useState(false)
-  const copy = (e: React.MouseEvent<HTMLButtonElement>) => {
-    const text = e.currentTarget.parentElement?.querySelector("pre")?.innerText ?? ""
-    navigator.clipboard
-      ?.writeText(text.replace(/\n$/, ""))
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-      })
-      .catch(() => {})
-  }
-  return (
-    <div className="relative my-4">
-      <pre className="p-4 pr-16 rounded-lg bg-neutral-900 border border-neutral-800 overflow-x-auto text-xs font-mono text-neutral-200 [&>code]:p-0 [&>code]:border-0 [&>code]:bg-transparent">
-        {children}
-      </pre>
-      <button
-        type="button"
-        onClick={copy}
-        className="absolute top-2 right-2 px-2 py-1 rounded text-xs bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
-      >
-        {copied ? ct("docs.copied") : ct("docs.copy")}
-      </button>
-    </div>
-  )
-}
-
 // ── DocsView Props ──────────────────────────────────────────────────────────
 export interface DocsViewProps {
   activeTab: DocTab
@@ -277,6 +262,10 @@ export interface DocsViewProps {
   noteCounts?: Record<string, number>
   mobileTreeOpen?: boolean
   onToggleMobileTree?: () => void
+  initialTreeCollapsed?: boolean
+  initialTreeWidth?: number
+  initialNotesWidth?: number
+  storage?: StorageLike | null
 
   // 상단 배너
   allOpenNotes?: DocNoteItem[]
@@ -374,6 +363,10 @@ export function DocsView({
   noteCounts,
   mobileTreeOpen = false,
   onToggleMobileTree,
+  initialTreeCollapsed,
+  initialTreeWidth,
+  initialNotesWidth,
+  storage,
   allOpenNotes = [],
   favorites = [],
   onRemoveFavorite,
@@ -426,14 +419,150 @@ export function DocsView({
   const canEdit = canEditDoc(currentSource, isReadOnly, currentSourceObj?.missing)
   const isArchived = currentPath ? isArchivedDocPath(currentPath) : false
 
-  const parsedDoc = docContent ? splitFrontmatter(docContent) : null
-  const docBody = parsedDoc ? convertWikiLinks(parsedDoc.body) : null
-
   const [forbiddenNotice, setForbiddenNotice] = useState(false)
   const [sidePanelOpen, setSidePanelOpen] = useState(true)
   const [sidePanelTab, setSidePanelTab] = useState<"notes" | "cards">("notes")
   const [localSelection, setLocalSelection] = useState<string | null>(null)
   const activeSelection = selectionQuote !== null && selectionQuote !== undefined ? selectionQuote : localSelection
+
+  // Left document tree collapse (persisted) + resizable widths.
+  const [treeCollapsed, setTreeCollapsed] = useState<boolean>(() => {
+    if (initialTreeCollapsed !== undefined) return initialTreeCollapsed
+    return parseStoredBoolean(getStoredItem(TREE_COLLAPSED_KEY, storage), false)
+  })
+  const handleToggleTreeCollapsed = () => {
+    const next = !treeCollapsed
+    setTreeCollapsed(next)
+    setStoredItem(TREE_COLLAPSED_KEY, next ? "1" : "0", storage)
+  }
+  const [treeWidth, setTreeWidth] = useState<number>(() => {
+    if (initialTreeWidth !== undefined) {
+      return clampSize(initialTreeWidth, TREE_WIDTH_MIN, TREE_WIDTH_MAX)
+    }
+    return parseStoredNumber(
+      getStoredItem("docs.treeWidth", storage),
+      TREE_WIDTH_DEFAULT,
+      TREE_WIDTH_MIN,
+      TREE_WIDTH_MAX,
+    )
+  })
+  const handleTreeWidthChange = (val: number) => {
+    const clamped = clampSize(val, TREE_WIDTH_MIN, TREE_WIDTH_MAX)
+    setTreeWidth(clamped)
+    setStoredItem("docs.treeWidth", String(clamped), storage)
+  }
+  const [notesWidth, setNotesWidth] = useState<number>(() => {
+    if (initialNotesWidth !== undefined) {
+      return clampSize(initialNotesWidth, NOTES_WIDTH_MIN, NOTES_WIDTH_MAX)
+    }
+    return parseStoredNumber(
+      getStoredItem("docs.notesWidth", storage),
+      NOTES_WIDTH_DEFAULT,
+      NOTES_WIDTH_MIN,
+      NOTES_WIDTH_MAX,
+    )
+  })
+  const handleNotesWidthChange = (val: number) => {
+    const clamped = clampSize(val, NOTES_WIDTH_MIN, NOTES_WIDTH_MAX)
+    setNotesWidth(clamped)
+    setStoredItem("docs.notesWidth", String(clamped), storage)
+  }
+
+  // Doc body + memo panel refs for independent scroll and touch memo flow.
+  const docBodyRef = useRef<HTMLDivElement | null>(null)
+  const notesPanelRef = useRef<HTMLDivElement | null>(null)
+  const lastPointerTypeRef = useRef<string | null>(null)
+  const [touchQuote, setTouchQuote] = useState<{ text: string; top: number; left: number } | null>(null)
+  const [memoSheetQuote, setMemoSheetQuote] = useState<string | null>(null)
+
+  // Touch devices: `mouseup` never fires on long-press, so watch
+  // `selectionchange` and float the memo action below the selection.
+  useEffect(() => {
+    if (viewMode !== "doc" || typeof window === "undefined" || typeof document === "undefined") return
+    let timer: number | undefined
+    const onPointerDown = (e: PointerEvent) => {
+      lastPointerTypeRef.current = e.pointerType || null
+    }
+    const onTouchStart = () => {
+      lastPointerTypeRef.current = "touch"
+    }
+    const readSelection = () => {
+      const coarse = !!window.matchMedia && window.matchMedia("(pointer: coarse)").matches
+      if (!isTouchSelectionMode(lastPointerTypeRef.current, coarse)) return
+      const sel = window.getSelection()
+      const bodyEl = docBodyRef.current
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !bodyEl) {
+        setTouchQuote(null)
+        return
+      }
+      const range = sel.getRangeAt(0)
+      if (!bodyEl.contains(range.commonAncestorContainer)) {
+        setTouchQuote(null)
+        return
+      }
+      const text = sel.toString().trim()
+      if (!text) {
+        setTouchQuote(null)
+        return
+      }
+      const rects = range.getClientRects()
+      const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect()
+      const pos = computeMemoButtonPosition({
+        rect: last,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      })
+      setTouchQuote({ text, ...pos })
+    }
+    const schedule = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(readSelection, 250)
+    }
+    document.addEventListener("pointerdown", onPointerDown, true)
+    document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true } as AddEventListenerOptions)
+    document.addEventListener("selectionchange", schedule)
+    window.addEventListener("scroll", schedule, { passive: true })
+    window.addEventListener("resize", schedule)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("touchstart", onTouchStart, { capture: true } as EventListenerOptions)
+      document.removeEventListener("selectionchange", schedule)
+      window.removeEventListener("scroll", schedule)
+      window.removeEventListener("resize", schedule)
+    }
+  }, [viewMode, currentSource, currentPath])
+
+  // Address hash (#...) scrolls to the matching heading once the body renders.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (viewMode !== "doc" || docLoading || isEditing || !docContent) return
+    const hash = window.location.hash
+    if (!hash) return
+    const timer = window.setTimeout(() => {
+      scrollToSection(docBodyRef.current, { hash })
+    }, 60)
+    return () => window.clearTimeout(timer)
+  }, [viewMode, docLoading, isEditing, docContent, currentSource, currentPath])
+
+  const scrollNotesIntoViewOnNarrow = () => {
+    if (typeof window === "undefined") return
+    if (window.matchMedia && window.matchMedia("(min-width: 1024px)").matches) return
+    window.setTimeout(() => {
+      notesPanelRef.current?.scrollIntoView({ block: "start", behavior: "smooth" })
+    }, 60)
+  }
+  const openMemoSheetFromTouch = () => {
+    if (!touchQuote) return
+    setMemoSheetQuote(touchQuote.text)
+    setTouchQuote(null)
+  }
+  const closeMemoSheet = () => {
+    setMemoSheetQuote(null)
+    try {
+      window.getSelection()?.removeAllRanges()
+    } catch {}
+  }
 
   const handleBodyMouseUp = () => {
     if (typeof window === "undefined") return
@@ -451,120 +580,19 @@ export function DocsView({
     }
   }
 
-  // 마크다운 링크 렌더러
-  const renderMarkdownLink = (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
-    const { href, children, ...rest } = props
-    if (!href) return <a {...rest}>{children}</a>
-
-    if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
-      return (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300" {...rest}>
-          {children}
-        </a>
-      )
-    }
-
-    if (href.startsWith(WIKI_HREF_PREFIX)) {
-      let target = href.slice(WIKI_HREF_PREFIX.length)
-      try {
-        target = decodeURIComponent(target)
-      } catch {}
-      const tree = sources.find((s) => s.id === currentSource)?.tree ?? []
-      const found = currentSource ? findWikiTarget(tree, target) : null
-      if (!found) {
-        return (
-          <span className="text-neutral-400" title={t("docs.notInFolder")}>
-            {children}
-            <span className="ml-1 text-xs text-neutral-600">{t("docs.notInDocs")}</span>
-          </span>
-        )
-      }
-      const targetTab = inferTab(currentSource, found, activeTab, undefined, sourceTab)
-      const nextHref = docHref(targetTab, currentSource, found)
-      return (
-        <Link
-          href={nextHref}
-          onClick={(e) => {
-            if (onNavigate && !onNavigate(nextHref)) {
-              e.preventDefault()
-            }
-          }}
-          className="text-blue-400 underline hover:text-blue-300"
-        >
-          {children}
-        </Link>
-      )
-    }
-
-    if (href.startsWith("#")) {
-      return (
-        <a href={href} className="text-blue-400 hover:underline" {...rest}>
-          {children}
-        </a>
-      )
-    }
-
-    if (currentSource && currentPath && href.split("#")[0].toLowerCase().endsWith(".md")) {
-      const resolved = resolveRelativePath(currentPath, href)
-      const targetTab = inferTab(currentSource, resolved, activeTab, undefined, sourceTab)
-      const nextHref = docHref(targetTab, currentSource, resolved)
-      return (
-        <Link
-          href={nextHref}
-          onClick={(e) => {
-            if (onNavigate && !onNavigate(nextHref)) {
-              e.preventDefault()
-            }
-          }}
-          className="text-blue-400 underline hover:text-blue-300"
-          {...rest}
-        >
-          {children}
-        </Link>
-      )
-    }
-
-    return (
-      <a href={href} className="text-blue-400 underline hover:text-blue-300" {...rest}>
-        {children}
-      </a>
-    )
-  }
-
-  // 마크다운 이미지 렌더러
-  const renderMarkdownImage = (props: React.ImgHTMLAttributes<HTMLImageElement>) => {
-    const { src, alt, ...rest } = props
-    if (!src || typeof src !== "string") return null
-
-    if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/")) {
-      return <img src={src} alt={alt || ""} className="max-w-full rounded border border-neutral-800 my-4" {...rest} />
-    }
-
-    if (currentSource && currentPath) {
-      const resolved = resolveRelativePath(currentPath, src)
-      const assetUrl = `/api/portal/asset?source=${encodeURIComponent(currentSource)}&path=${encodeURIComponent(resolved)}`
-      return <img src={assetUrl} alt={alt || ""} className="max-w-full rounded border border-neutral-800 my-4" {...rest} />
-    }
-
-    return <img src={src} alt={alt || ""} className="max-w-full rounded border border-neutral-800 my-4" {...rest} />
-  }
-
-  // 미리보기용 마크다운 렌더러
+  // Editor preview reuses the same reader renderer (frontmatter, code blocks,
+  // diagrams, section anchors) so preview matches the published view.
   const renderPreview = (markdown: string) => {
-    const parsed = splitFrontmatter(markdown)
-    const converted = convertWikiLinks(parsed.body)
     return (
-      <div className="prose prose-invert max-w-none text-neutral-200 text-xs">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            a: renderMarkdownLink,
-            img: renderMarkdownImage,
-          }}
-        >
-          {converted}
-        </ReactMarkdown>
-      </div>
+      <DocMarkdown
+        content={markdown}
+        sourceId={currentSource || ""}
+        path={currentPath || ""}
+        sources={sources}
+        activeTab={activeTab}
+        sourceTab={sourceTab}
+        onNavigate={onNavigate}
+      />
     )
   }
 
@@ -626,13 +654,45 @@ export function DocsView({
         </button>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-8 items-start">
+      <div className="flex flex-col md:flex-row gap-4 md:gap-2 items-start">
+        {/* 접힌 상태의 펼치기 띠 (md 이상 세로 스트립) */}
+        {treeCollapsed && (
+          <button
+            type="button"
+            data-testid="tree-collapse-toggle"
+            aria-expanded={false}
+            aria-label={t("docs.expandTree")}
+            title={t("docs.expandTree")}
+            onClick={handleToggleTreeCollapsed}
+            className="hidden md:flex shrink-0 w-8 self-stretch items-start justify-center pt-3 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-400 hover:text-white hover:bg-neutral-900 transition-colors text-xs"
+          >
+            ▶
+          </button>
+        )}
+
         {/* 5. 왼쪽 사이드바 (탭, 즐겨찾기 묶음, 트리 목록) */}
         <aside
-          className={`w-full md:w-72 flex-shrink-0 rounded-lg border border-neutral-800 bg-neutral-950 p-4 space-y-4 ${
-            mobileTreeOpen ? "block" : "hidden md:block"
-          }`}
+          data-testid="docs-tree-aside"
+          style={{ "--tree-width": `${treeWidth}px` } as React.CSSProperties}
+          className={`w-full md:w-[var(--tree-width)] flex-shrink-0 rounded-lg border border-neutral-800 bg-neutral-950 p-4 space-y-4 md:sticky md:top-[4.5rem] md:max-h-[calc(100dvh-5.5rem)] md:overflow-y-auto ${computeTreeAsideClasses(
+            mobileTreeOpen,
+            treeCollapsed,
+          )}`}
         >
+          {/* 상단 접기 단추 (md 이상) */}
+          <div className="hidden md:flex justify-between items-center pb-2 border-b border-neutral-800/60">
+            <span className="text-xs font-semibold text-neutral-400">{t("docs.docList")}</span>
+            <button
+              type="button"
+              data-testid="tree-collapse-toggle"
+              aria-expanded={true}
+              aria-label={t("docs.collapseTree")}
+              onClick={handleToggleTreeCollapsed}
+              className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors text-xs flex items-center gap-1"
+            >
+              <span>◀ {t("docs.collapseTree")}</span>
+            </button>
+          </div>
           {/* 탭 버튼 */}
           <div role="tablist" aria-label={t("docs.tabsLabel")} className="grid grid-cols-3 gap-1 p-1 rounded-md bg-neutral-900 border border-neutral-800">
             {(["common", "brand", "developer"] as DocTab[]).map((tab) => {
@@ -725,6 +785,21 @@ export function DocsView({
             tabSections.length === 0 && <div className="text-xs text-neutral-600 px-2 py-1">{t("docs.noDocs")}</div>
           )}
         </aside>
+
+        {!treeCollapsed && (
+          <PanelResizer
+            className="hidden md:flex self-stretch"
+            mode="left-px"
+            value={treeWidth}
+            min={TREE_WIDTH_MIN}
+            max={TREE_WIDTH_MAX}
+            step={TREE_WIDTH_STEP}
+            defaultValue={TREE_WIDTH_DEFAULT}
+            ariaLabel={t("docs.docList")}
+            onChange={handleTreeWidthChange}
+            data-testid="tree-resizer"
+          />
+        )}
 
         {/* 6. 오른쪽 본문 영역 */}
         <article className="flex-1 min-w-0 w-full rounded-lg border border-neutral-800 bg-neutral-950 p-6 sm:p-8">
@@ -1003,8 +1078,10 @@ export function DocsView({
                                     setForbiddenNotice(true)
                                     return
                                   }
+                                  setSidePanelOpen(true)
                                   const truncated = truncateQuote(activeSelection, 2000)
                                   onQuoteSelect?.(truncated)
+                                  scrollNotesIntoViewOnNarrow()
                                 }}
                                 className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white transition-colors shrink-0"
                               >
@@ -1013,56 +1090,61 @@ export function DocsView({
                             </div>
                           )}
 
-                          {/* 문서 본문 + 메모 패널 (2열 그리드) */}
-                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-                            {/* 마크다운 본문 (2열) */}
-                            <div
-                              onMouseUp={handleBodyMouseUp}
-                              className={`${sidePanelOpen ? "lg:col-span-2" : "lg:col-span-3"} prose prose-invert max-w-none space-y-4 text-neutral-200`}
-                            >
-                              {parsedDoc?.meta && (
-                                <pre className="p-3 rounded bg-neutral-900/60 border border-neutral-800 text-xs text-neutral-400 whitespace-pre-wrap font-mono">
-                                  {parsedDoc.meta}
-                                </pre>
-                              )}
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                components={{
-                                  a: renderMarkdownLink,
-                                  img: renderMarkdownImage,
-                                  h1: ({ children }) => <h1 className="text-2xl font-bold pb-2 border-b border-neutral-800 mt-6 mb-4 text-white">{children}</h1>,
-                                  h2: ({ children }) => <h2 className="text-xl font-semibold pb-1 border-b border-neutral-800/60 mt-6 mb-3 text-neutral-100">{children}</h2>,
-                                  h3: ({ children }) => <h3 className="text-lg font-medium mt-5 mb-2 text-neutral-200">{children}</h3>,
-                                  p: ({ children }) => <p className="leading-relaxed my-3">{children}</p>,
-                                  ul: ({ children }) => <ul className="list-disc list-inside space-y-1 my-3 pl-2">{children}</ul>,
-                                  ol: ({ children }) => <ol className="list-decimal list-inside space-y-1 my-3 pl-2">{children}</ol>,
-                                  li: ({ children }) => <li className="text-neutral-300">{children}</li>,
-                                  blockquote: ({ children }) => (
-                                    <blockquote className="border-l-4 border-neutral-700 pl-4 py-1 italic my-4 text-neutral-400 bg-neutral-900/40 rounded-r">
-                                      {children}
-                                    </blockquote>
-                                  ),
-                                  table: ({ children }) => (
-                                    <div className="overflow-x-auto my-4">
-                                      <table className="min-w-full divide-y divide-neutral-800 border border-neutral-800">{children}</table>
-                                    </div>
-                                  ),
-                                  th: ({ children }) => <th className="px-4 py-2 bg-neutral-900 text-left text-xs font-semibold text-neutral-300 uppercase tracking-wider">{children}</th>,
-                                  td: ({ children }) => <td className="px-4 py-2 text-sm text-neutral-300 border-t border-neutral-800/80">{children}</td>,
-                                  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-                                  code: ({ className, children }) => (
-                                    <code className={className ?? "px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-neutral-200 font-mono text-xs"}>
-                                      {children}
-                                    </code>
-                                  ),
-                                }}
-                              >
-                                {docBody}
-                              </ReactMarkdown>
+                          {/* 문서 본문 + 메모 패널: 본문 스크롤과 메모 스크롤이 분리되어
+                              긴 문서를 읽다가도 맨 위로 올리지 않고 메모를 쓸 수 있다 */}
+                          <div className={sidePanelOpen ? "flex flex-col lg:flex-row gap-6 items-start" : "block"}>
+                            {/* 마크다운 본문 */}
+                            <div ref={docBodyRef} data-testid="doc-body-shell" className="flex-1 min-w-0 w-full">
+                              <DocMarkdown
+                                content={docContent || ""}
+                                sourceId={currentSource || ""}
+                                path={currentPath || ""}
+                                sources={sources}
+                                activeTab={activeTab}
+                                sourceTab={sourceTab}
+                                onNavigate={onNavigate}
+                                onMouseUp={handleBodyMouseUp}
+                              />
                             </div>
 
-                            {/* 연결된 업무 카드 + 메모 목록 (1열, SP-05) */}
-                            {sidePanelOpen && <div className="lg:col-span-1 space-y-4">
+                            {/* 터치 선택 시 뜨는 [메모] 단추와 그 자리 메모 창 */}
+                            {touchQuote && !memoSheetQuote && (
+                              <MobileMemoButton top={touchQuote.top} left={touchQuote.left} onOpen={openMemoSheetFromTouch} />
+                            )}
+                            {memoSheetQuote && (
+                              <MobileMemoSheet
+                                source={currentSource || "adk"}
+                                path={currentPath || ""}
+                                quote={memoSheetQuote}
+                                forbidden={forbidden}
+                                forbiddenMessage={t("docs.forbidden")}
+                                onClose={closeMemoSheet}
+                                onSaved={onNotesChange}
+                              />
+                            )}
+
+                            {/* 메모 칸 경계 손잡이 (lg 이상) */}
+                            {sidePanelOpen && (
+                              <PanelResizer
+                                className="hidden lg:flex self-stretch"
+                                mode="right-px"
+                                value={notesWidth}
+                                min={NOTES_WIDTH_MIN}
+                                max={NOTES_WIDTH_MAX}
+                                step={NOTES_WIDTH_STEP}
+                                defaultValue={NOTES_WIDTH_DEFAULT}
+                                ariaLabel={t("docs.memo")}
+                                onChange={handleNotesWidthChange}
+                                data-testid="notes-resizer"
+                              />
+                            )}
+
+                            {/* 연결된 업무 카드 + 메모 목록: lg 이상에서는 본문과 독립적으로 스크롤 */}
+                            {sidePanelOpen && <div
+                              ref={notesPanelRef}
+                              data-testid="notes-panel"
+                              style={{ "--notes-width": `${notesWidth}px` } as React.CSSProperties}
+                              className="w-full lg:w-[var(--notes-width)] flex-shrink-0 space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto">
                               <div role="tablist" data-testid="docs-side-tabs" className="grid grid-cols-2 rounded-lg border border-neutral-800 bg-neutral-900 p-1">
                                 <button type="button" role="tab" data-testid="docs-side-tab-notes" aria-selected={sidePanelTab === "notes"} onClick={() => setSidePanelTab("notes")} className="rounded px-2 py-1.5 text-xs text-neutral-300">{t("docs.notesTab")} ({notes.length})</button>
                                 <button type="button" role="tab" data-testid="docs-side-tab-cards" aria-selected={sidePanelTab === "cards"} onClick={() => setSidePanelTab("cards")} className="rounded px-2 py-1.5 text-xs text-neutral-300">{t("docs.cardsTab")} ({linkedCards.length})</button>

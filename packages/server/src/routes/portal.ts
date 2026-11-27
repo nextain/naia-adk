@@ -53,6 +53,16 @@ import {
   validateScheduleOverridePatch,
   type ScheduleComment,
 } from "../company-schedule-feedback.js"
+import {
+  collectDecisions,
+  resolveDecisionItem,
+} from "../decisions-service.js"
+import {
+  DocOverlayStore,
+  isValidOverlaySource,
+  overlayDbPath,
+} from "../doc-overlay-store.js"
+import { writeNoteWake } from "../note-wake.js"
 
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
@@ -1152,6 +1162,33 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
   const getFolderCtx = (): FolderCheckContext | undefined => (app as any).folderCheckContext
   const beforeRenameHook = opts?.beforeRename
 
+  // Non-git AX doc overlay: dashboard edits survive `git reset --hard` and
+  // read-only mounts. Reads prefer the overlay; writes record it.
+  let overlayStore: DocOverlayStore | null = null
+  try {
+    overlayStore = new DocOverlayStore(overlayDbPath(root))
+  } catch (error) {
+    app.log.warn({ error: String(error) }, "Doc overlay store unavailable; doc writes stay git-only")
+    overlayStore = null
+  }
+  app.addHook("onClose", async () => {
+    try {
+      overlayStore?.close()
+    } catch {}
+  })
+
+  const dashboardActor = (req: FastifyRequest): string => {
+    const headerName = (process.env.NAIA_NOTE_USER_HEADER || "x-ax-user").toLowerCase()
+    const raw = req.headers[headerName]
+    if (typeof raw === "string" && raw && !raw.includes(",")) {
+      try {
+        const name = decodeURIComponent(raw).trim()
+        if (name && name.length <= 128 && !/[\x00-\x1f\x7f]/.test(name)) return name
+      } catch {}
+    }
+    return "dashboard"
+  }
+
   // GET /api/portal
   app.get("/", async (req, reply) => {
     // The dashboard hides its messages tab when NAIA_MESSENGER_ENABLED turns the messenger routes off or they failed to start.
@@ -1478,6 +1515,23 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       return reply.code(404).send({ error: "File not found or not markdown" })
     }
 
+    // Overlay wins over the git checkout baseline, so a periodic
+    // `git reset --hard` never loses dashboard edits.
+    try {
+      const overlayHit = overlayStore && isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
+      if (overlayHit) {
+        return reply
+          .header("X-Content-Type-Options", "nosniff")
+          .header("ETag", crypto.createHash("sha256").update(overlayHit.content, "utf-8").digest("hex"))
+          .header("X-Doc-Source", "overlay")
+          .header("X-Overlay-Updated-At", overlayHit.updatedAt)
+          .type("text/markdown; charset=utf-8")
+          .send(overlayHit.content)
+      }
+    } catch {
+      // Fall through to the git baseline.
+    }
+
     const source = resolveSourceBase(root, sourceId, getFolderCtx())
     if (!source) {
       return reply.code(404).send({ error: "Source not found" })
@@ -1505,6 +1559,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       return reply
         .header("X-Content-Type-Options", "nosniff")
         .header("ETag", hash)
+        .header("X-Doc-Source", "git")
         .type("text/markdown; charset=utf-8")
         .send(content)
     } catch {
@@ -1897,8 +1952,41 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         return reply.code(404).send({ error: "Document not found" })
       }
 
+      const cleanBaseHash = bodyBaseHash.trim().replace(/^"|"$/g, "")
+
+      // 오버레이 우선 베이스: 대시보드는 오버레이 우선으로 읽으므로, 오버레이
+      // 리비전이 있으면 baseHash는 그 내용을 가리킨다. git 체크아웃이 리셋돼도
+      // baseHash가 오버레이와 맞으면 409가 아니라 저장으로 간다.
+      let overlayBase: string | null = null
+      try {
+        const existing = overlayStore && isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
+        if (existing) {
+          if (crypto.createHash("sha256").update(existing.content, "utf-8").digest("hex") !== cleanBaseHash) {
+            return reply.code(409).send({ error: "changed" })
+          }
+          overlayBase = existing.content
+        }
+      } catch {
+        overlayBase = null
+      }
+
       // 프로세스 안 잠금 (realpath 하나 단위 Promise 사슬)이 첫 열기부터 rename까지 감싼다.
-      return withDocWriteLock(realPath, async () => {
+      // 읽기 전용 체크아웃(EROFS/EACCES/EPERM)에서는 git 쓰기 대신 오버레이에만 저장한다.
+      try {
+        return await withDocWriteLock(realPath, async () => {
+        // 오버레이가 있으면 잠금 안에서 다시 견준다 (동시 PUT 충돌 보호).
+        if (overlayBase) {
+          let fresh: string | null = null
+          try {
+            fresh = overlayStore?.get(sourceId, normPath)?.content ?? null
+          } catch {
+            fresh = null
+          }
+          if (!fresh || crypto.createHash("sha256").update(fresh, "utf-8").digest("hex") !== cleanBaseHash) {
+            return reply.code(409).send({ error: "changed" })
+          }
+          overlayBase = fresh
+        }
         // 경로 및 허용 폴더 검사
         const allowedDir = matchingAllowedDir(source, normPath)
         if (!allowedDir) return reply.code(404).send({ error: "Document not found" })
@@ -1965,13 +2053,13 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
           const initialContentBuf = readBuf.subarray(0, totalRead)
           const currentHash = crypto.createHash("sha256").update(initialContentBuf).digest("hex")
-          const cleanBaseHash = bodyBaseHash.trim().replace(/^"|"$/g, "")
 
-          if (currentHash !== cleanBaseHash) {
+          // 오버레이가 baseHash와 맞았으면 git 쪽 해시는 리셋으로 어긋나 있을 수 있어 견주지 않는다.
+          if (!overlayBase && currentHash !== cleanBaseHash) {
             return reply.code(409).send({ error: "changed" })
           }
 
-          const originalStr = initialContentBuf.toString("utf-8")
+          const originalStr = overlayBase ?? initialContentBuf.toString("utf-8")
           const isCRLF = originalStr.includes("\r\n")
           const finalContent = isCRLF
             ? bodyContent.replace(/\r?\n/g, "\r\n")
@@ -2031,7 +2119,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             }
 
             const reHash = crypto.createHash("sha256").update(reReadBuf.subarray(0, reReadTotal)).digest("hex")
-            if (reHash !== cleanBaseHash) {
+            if (!overlayBase && reHash !== cleanBaseHash) {
               return reply.code(409).send({ error: "changed" })
             }
 
@@ -2064,6 +2152,17 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             fs.renameSync(tempPath, realPath)
             renameCompleted = true
 
+            // git 쓰기가 끝났으니 오버레이에도 같은 리비전을 남긴다 (best-effort).
+            try {
+              overlayStore?.put({
+                source: sourceId,
+                path: normPath,
+                content: finalContent,
+                updatedBy: dashboardActor(req),
+                baseGitSha: cleanBaseHash,
+              })
+            } catch {}
+
             const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
             return reply.header("ETag", newHash).send({ ok: true, sha256: newHash })
           } finally {
@@ -2078,7 +2177,37 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             fs.closeSync(targetFd)
           } catch {}
         }
-      })
+        })
+      } catch (err: any) {
+        const readOnly = err && (err.code === "EROFS" || err.code === "EACCES" || err.code === "EPERM")
+        if (!readOnly || !overlayStore) throw err
+        // 읽기 전용 체크아웃: 오버레이 우선 현재 본문과 baseHash를 견주고 오버레이에만 저장한다.
+        let currentContent: string | null = null
+        try {
+          const overlayHit = isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
+          currentContent = overlayHit ? overlayHit.content : fs.readFileSync(realPath, "utf-8")
+        } catch {
+          return reply.code(404).send({ error: "Document not found" })
+        }
+        const currentHash = crypto.createHash("sha256").update(currentContent, "utf-8").digest("hex")
+        if (currentHash !== cleanBaseHash) {
+          return reply.code(409).send({ error: "changed" })
+        }
+        const isCRLF = currentContent.includes("\r\n")
+        const fallbackContent = isCRLF ? bodyContent.replace(/\r?\n/g, "\r\n") : bodyContent.replace(/\r\n/g, "\n")
+        if (Buffer.byteLength(fallbackContent, "utf-8") > MAX_DOC_BYTES) {
+          return reply.code(400).send({ error: "Content exceeds 2MB limit" })
+        }
+        overlayStore.put({
+          source: sourceId,
+          path: normPath,
+          content: fallbackContent,
+          updatedBy: dashboardActor(req),
+          baseGitSha: cleanBaseHash,
+        })
+        const newHash = crypto.createHash("sha256").update(fallbackContent, "utf-8").digest("hex")
+        return reply.header("ETag", newHash).header("X-Doc-Source", "overlay").send({ ok: true, sha256: newHash })
+      }
     },
   )
 
@@ -2197,6 +2326,10 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       await withFileLock(filePath, () => {
         saveNote(root, note)
       })
+      // Route the memo to the responsible role's wake (best-effort: memo writes survive).
+      try {
+        writeNoteWake({ root, note, absDocPath: result.absPath })
+      } catch {}
       return reply.code(201).send({ ok: true, note })
     } catch (err) {
       if (err instanceof FileLockTimeoutError) {
@@ -2512,6 +2645,53 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       query,
     })
     return reply.header("cache-control", "no-store").send(data)
+  })
+
+  // GET /api/portal/docs — overlay entries: dashboard edits that survive git resets.
+  app.get("/docs", async (req, reply) => {
+    if (!isNewViewAllowed(req)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+    try {
+      return reply.send({ overlays: overlayStore?.list() ?? [] })
+    } catch {
+      return reply.code(500).send({ error: "Overlay unavailable" })
+    }
+  })
+
+  // GET /api/portal/decisions — unified human-review inbox (single source of truth).
+  // Trusted dashboard sessions only: public-domain requests never see decisions.
+  app.get("/decisions", async (req, reply) => {
+    if (!isNewViewAllowed(req)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+    const snapshot = await collectDecisions(root)
+    return reply.header("cache-control", "no-store").send(snapshot)
+  })
+
+  // POST /api/portal/decisions/:id/resolve — confirm / reject / acknowledge.
+  app.post("/decisions/:id/resolve", async (req, reply) => {
+    if (!checkWriteSecurity(req, reply, true)) {
+      return
+    }
+    const { id } = req.params as { id: string }
+    if (!id || typeof id !== "string" || id.length > 512) {
+      return reply.code(400).send({ error: "Invalid id" })
+    }
+    const body = req.body as { action?: unknown; comment?: unknown } | undefined
+    try {
+      const item = await resolveDecisionItem(root, id, {
+        action: body?.action as "approve" | "reject" | "acknowledge",
+        actor: dashboardActor(req),
+        via: "portal-decisions",
+        comment: typeof body?.comment === "string" ? body.comment : undefined,
+      })
+      return reply.send({ ok: true, item })
+    } catch (err: any) {
+      const status = typeof err?.statusCode === "number" ? err.statusCode : 500
+      if (status === 500) throw err
+      return reply.code(status).send({ error: err?.message ?? "Failed to resolve" })
+    }
   })
 
   done()

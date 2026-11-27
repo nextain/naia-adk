@@ -7,6 +7,7 @@ import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
 import { observeAxMessengerStatus } from "./ax-messenger-status.mjs"
 import { useI18n, useOptionalLocale } from "../i18n/provider.tsx"
 import { tFor } from "../i18n/index.ts"
+import { DecisionsBadge } from "../decisions/DecisionsBadge.tsx"
 import type { Locale } from "../i18n/types.ts"
 import {
   DEFAULT_FONT_SIZE_STEP,
@@ -194,6 +195,8 @@ export function Nav({
     )
   }, [hasAxMessengerProp])
 
+
+
   useEffect(() => {
     if (hasLedgerProp !== undefined) return
     fetch("/api/portal/ledger?status=todo", { cache: "no-store" })
@@ -259,6 +262,7 @@ export function Nav({
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
 
   return (
+    <>
     <nav className="sticky top-0 z-10 h-14 border-b border-neutral-800 bg-neutral-950 px-2 sm:px-6 flex items-center gap-1 sm:gap-6">
       <Link href="/docs" className="font-bold text-[13px] sm:text-lg text-white shrink-0 whitespace-nowrap">
          {workspaceDisplayName}
@@ -267,6 +271,7 @@ export function Nav({
       <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} locale={localeProp} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
+        <DecisionsBadge />
         {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
         <div className="hidden xl:flex items-center gap-1">
           <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">{t("nav.devTools")}</span>
@@ -355,5 +360,6 @@ export function Nav({
         </div>
       </div>
     </nav>
+    </>
   )
 }
