@@ -223,6 +223,46 @@ describe("Portal doc overlay (/api/portal/doc + /api/portal/docs)", () => {
     expect(fs.readFileSync(docPath, "utf-8")).toBe("첫 고침\n")
   })
 
+  it("before-rename race 409 rolls back the overlay: checkout and GET keep the external edit", async () => {
+    const docPath = path.join(tempRoot, "docs", "race-rollback.md")
+    const initialStr = "1234567890\n"
+    fs.writeFileSync(docPath, initialStr, "utf-8")
+    const baseHash = sha256(initialStr)
+    const tamperedStr = "abcdefghij\n"
+    // rename 직전 훅이 같은 길이의 다른 바이트를 덮어쓴다: PUT은 409이고
+    // 오버레이 커밋까지 되돌려 다음 GET이 거부된 AX 편집이 아니라 외부 편집을 내놓는다.
+    const hookApp = await createServer({
+      root: tempRoot,
+      port: 3177,
+      host: "127.0.0.1",
+      beforeRenameHook: async () => {
+        fs.writeFileSync(docPath, tamperedStr, "utf-8")
+      },
+    })
+    ;(hookApp as any).proxySecret = TEST_SECRET
+    try {
+      const put = await hookApp.inject({
+        method: "PUT",
+        url: "/api/portal/doc?source=adk&path=race-rollback.md",
+        headers: { ...WRITE_HEADERS, host: "localhost:3177" },
+        payload: JSON.stringify({ content: "rejected ax edit\n", baseHash }),
+      })
+      expect(put.statusCode).toBe(409)
+      expect(JSON.parse(put.body)).toEqual({ error: "changed" })
+      expect(fs.readFileSync(docPath, "utf-8")).toBe(tamperedStr)
+      const get = await hookApp.inject({
+        method: "GET",
+        url: "/api/portal/doc?source=adk&path=race-rollback.md",
+        headers: { ...READ_HEADERS, host: "localhost:3177" },
+      })
+      expect(get.statusCode).toBe(200)
+      expect(get.body).toBe(tamperedStr)
+      expect(get.headers["x-doc-source"]).toBe("git")
+    } finally {
+      await hookApp.close()
+    }
+  })
+
   it("PUT to a restricted folder returns 403 even with a stale baseHash, never 409", async () => {
     const coDir = path.join(tempRoot, "data-company", "co-locked")
     fs.mkdirSync(path.join(coDir, "allowed"), { recursive: true })

@@ -252,6 +252,102 @@ function appendAuditLog(root: string, entry: DecisionAuditEntry): void {
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf-8")
 }
 
+/** 결정된 메신저 승인 행에서 영구 감사 항목을 만든다(부재 시 backfill용). */
+function decidedRowAuditEntry(row: any): DecisionAuditEntry | null {
+  const messageId = String(row?.message_id ?? "")
+  if (!messageId) return null
+  const status = String(row?.status ?? "")
+  if (status !== "approved" && status !== "rejected") return null
+  const body = String(row?.body ?? "")
+  const titleMatch = body.match(/^1\.\s*제목:\s*(.+)$/m)
+  const title = oneLine(titleMatch ? titleMatch[1].trim() : body.split("\n").find(Boolean) || messageId)
+  return {
+    at: msToIso(row?.decided_at) ?? new Date().toISOString(),
+    id: `approval:${messageId}`,
+    decisionId: `${String(row?.plan_code ?? "")}/${String(row?.step_code ?? "")}`,
+    kind: "approval",
+    action: status === "approved" ? "approve" : "reject",
+    outcome: status,
+    actor: String(row?.decided_by ?? row?.author_id ?? "dashboard"),
+    via: "backfill",
+    title,
+    comment: null,
+  }
+}
+
+function readDecidedApprovalRows(dbPath: string, messageId?: string): any[] {
+  if (!fs.existsSync(dbPath)) return []
+  let db: DatabaseSync | null = null
+  try {
+    db = new DatabaseSync(dbPath)
+    db.exec("PRAGMA busy_timeout=5000")
+    const sql = messageId === undefined
+      ? `SELECT a.message_id, a.plan_code, a.step_code, a.status, a.decided_by, a.decided_at,
+                m.author_id, m.body FROM approvals a JOIN messages m ON m.id = a.message_id
+         WHERE a.status != 'pending'`
+      : `SELECT a.message_id, a.plan_code, a.step_code, a.status, a.decided_by, a.decided_at,
+                m.author_id, m.body FROM approvals a JOIN messages m ON m.id = a.message_id
+         WHERE a.message_id = ? AND a.status != 'pending'`
+    const args = messageId === undefined ? [] : [messageId]
+    return db.prepare(sql).all(...args) as any[]
+  } catch {
+    return []
+  } finally {
+    try {
+      db?.close()
+    } catch {}
+  }
+}
+
+/**
+ * 이미 결정된 메신저 승인데 감사 기록에 없는 항목을 멱등하게 채운다.
+ * 커밋 뒤 쓰기 실패(500) 뒤에도 다음 읽기·재시도가 DB 제거 전에
+ * 영구 기록을 치유한다. best-effort: 실패는 조용히 무시하고 추가된 수를 돌려준다.
+ */
+export function backfillMissingApprovalAudits(
+  root: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  dbPath?: string,
+): number {
+  const rows = readDecidedApprovalRows(dbPath ?? messengerDbPath(root, env))
+  if (rows.length === 0) return 0
+  const known = new Set(readAuditLog(root).map((e) => e.id))
+  let added = 0
+  for (const row of rows) {
+    const entry = decidedRowAuditEntry(row)
+    if (!entry || known.has(entry.id)) continue
+    try {
+      appendAuditLog(root, entry)
+      known.add(entry.id)
+      added += 1
+    } catch {}
+  }
+  return added
+}
+
+/**
+ * 메신저 409 경로용 단일 항목 backfill: 이미 결정된 승인인데
+ * 감사 기록에 없으면 한 줄을 채우고 true를 돌려준다(best-effort).
+ */
+export function backfillApprovalAuditForMessage(
+  root: string,
+  messageId: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  dbPath?: string,
+): boolean {
+  if (!messageId) return false
+  if (readAuditLog(root).some((e) => e.id === `approval:${messageId}`)) return false
+  const rows = readDecidedApprovalRows(dbPath ?? messengerDbPath(root, env), messageId)
+  const entry = rows.length > 0 ? decidedRowAuditEntry(rows[0]) : null
+  if (!entry) return false
+  try {
+    appendAuditLog(root, entry)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * 메신저 쪽 해결을 영구 감사 기록에 비춘다. 메신저 DB가 나중에 없어져도
  * `/api/portal/decisions` history는 이 기록으로 살아남는다.
@@ -360,6 +456,11 @@ export async function collectDecisions(
 ): Promise<DecisionsSnapshot> {
   const env = opts.env ?? process.env
   const approvals = readApprovalItems(root, env)
+  // 결정됐는데 감사 기록에서 빠진 승인은 여기서 치유한다: 커밋 뒤
+  // 쓰기 실패(500) 뒤의 첫 읽기·재시도가 DB 제거 전에 영구 기록을 살린다.
+  try {
+    backfillMissingApprovalAudits(root, env)
+  } catch {}
   const notes = readNoteItems(root)
   const work = await readWorkWaitItems(root)
   const publish: { pending: DecisionItem[]; history: DecisionItem[] } = { pending: [], history: [] }

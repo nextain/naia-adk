@@ -4,7 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { MessengerStore, MAX_LIST_LIMIT, approvalDocWarning } from '../messenger-store.js'
-import { appendDecisionAudit, assertDecisionAuditWritable, messengerApprovalAuditEntry } from '../decisions-service.js'
+import { appendDecisionAudit, assertDecisionAuditWritable, backfillApprovalAuditForMessage, messengerApprovalAuditEntry } from '../decisions-service.js'
 import { MessengerWatch } from '../messenger-watch.js'
 import { validateAttachment, parseMultipartAttachment, MAX_ATTACHMENT_BYTES } from '../messenger-attachments.js'
 import { messengerRoles } from '../messenger-roles.js'
@@ -186,7 +186,20 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     } catch (error: any) {
       return reply.code(error?.statusCode ?? 503).send({ error: 'Audit log unavailable' })
     }
-    const result = store.decideApproval(id(req),who,decision)
+    // 이미 결정된 승인(409)인데 감사 기록에 없으면 여기서 멱등하게
+    // 채운 뒤 409를 돌려준다: 커밋 뒤 쓰기 실패(500) 뒤의 재시도가
+    // DB 제거 전에 영구 기록을 살린다(best-effort).
+    let result: ReturnType<typeof store.decideApproval>
+    try {
+      result = store.decideApproval(id(req),who,decision)
+    } catch (error: any) {
+      if (error?.statusCode === 409) {
+        try {
+          backfillApprovalAuditForMessage(root, id(req), process.env, dbPath)
+        } catch {}
+      }
+      throw error
+    }
     publish('approval',result.message)
     if (result.codeMessage) publish('message',result.codeMessage)
     // 메신저 쪽 해결도 영구 감사 기록에 비춘다. DB가 나중에 없어져도

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -332,6 +332,85 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     expect(patched.statusCode).toBe(200)
     const flipped = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
     expect(JSON.parse(flipped.body).counts.notes).toBe(notesBefore + 3)
+  })
+
+  it("a one-shot post-commit audit failure self-heals on retry/read and survives DB removal", async () => {
+    // 독립 루트에서 돌린다: DB 제거가 공용 suite DB의 WAL을 깨지 않게 한다.
+    const root2 = fs.mkdtempSync(path.join(os.tmpdir(), "adk-decisions-heal-"))
+    fs.mkdirSync(path.join(root2, "docs"), { recursive: true })
+    fs.writeFileSync(path.join(root2, "docs", "plan.md"), "# 계획 문서\n", "utf-8")
+    const dbPath = path.join(root2, "data-company", "messenger", "messenger.db")
+    const setup = new MessengerStore(dbPath)
+    let pendingId: string
+    try {
+      pendingId = setup.createMessage("업무-요청", { id: "boss", kind: "human" }, APPROVAL_BODY).id
+    } finally {
+      setup.close()
+    }
+    const app2 = await createServer({ root: root2, port: 3142, host: "127.0.0.1" })
+    ;(app2 as any).proxySecret = TEST_SECRET
+    try {
+      const auditFile = path.join(root2, ".agents", "work", "state", "decisions-audit.jsonl")
+      // 커밋 뒤 감사 쓰기 한 번만 실패시킨다: pre-check(503)는 통과하고 append에서 500.
+      const appendSpy = vi.spyOn(fs, "appendFileSync").mockImplementationOnce(() => {
+        throw new Error("injected post-commit audit failure")
+      })
+      try {
+        const failed = await app2.inject({
+          method: "POST",
+          url: `/api/portal/messenger/approvals/${pendingId}`,
+          headers: { ...GATE_HEADERS, host: "localhost:3142" },
+          payload: JSON.stringify({ decision: "reject" }),
+        })
+        expect(failed.statusCode).toBe(500)
+        expect(JSON.parse(failed.body)).toEqual({ error: "Audit log unavailable" })
+      } finally {
+        appendSpy.mockRestore()
+      }
+      // 커밋은 됐지만 감사 기록은 비어 있다.
+      const decided = new MessengerStore(dbPath)
+      try {
+        expect((decided.db.prepare("SELECT status FROM approvals WHERE message_id=?").get(pendingId) as any)?.status).toBe("rejected")
+      } finally {
+        decided.close()
+      }
+      expect(fs.readFileSync(auditFile, "utf-8")).not.toContain(`approval:${pendingId}`)
+      // 재시도는 409이지만 그 전에 영구 기록을 치유한다.
+      const retry = await app2.inject({
+        method: "POST",
+        url: `/api/portal/messenger/approvals/${pendingId}`,
+        headers: { ...GATE_HEADERS, host: "localhost:3142" },
+        payload: JSON.stringify({ decision: "reject" }),
+      })
+      expect(retry.statusCode).toBe(409)
+      expect(fs.readFileSync(auditFile, "utf-8")).toContain(`approval:${pendingId}`)
+      // 읽기 경로도 치유한다: 다시 읽어도 감사 기록이 유지된다.
+      const reread = await app2.inject({ method: "GET", url: "/api/portal/decisions", headers: { ...READ_HEADERS, host: "localhost:3142" } })
+      expect(reread.statusCode).toBe(200)
+      expect(JSON.parse(reread.body).history.map((i: any) => i.id)).toContain(`approval:${pendingId}`)
+      // 메신저 DB를 통째로 치워도 영구 history에 결정이 남는다.
+      await app2.close()
+      fs.renameSync(dbPath, `${dbPath}.healed`)
+      try {
+        fs.rmSync(`${dbPath}-wal`, { force: true })
+        fs.rmSync(`${dbPath}-shm`, { force: true })
+      } catch {}
+      const app3 = await createServer({ root: root2, port: 3143, host: "127.0.0.1" })
+      ;(app3 as any).proxySecret = TEST_SECRET
+      try {
+        const snap = await app3.inject({ method: "GET", url: "/api/portal/decisions", headers: { ...READ_HEADERS, host: "localhost:3143" } })
+        expect(snap.statusCode).toBe(200)
+        const hist = (JSON.parse(snap.body).history as any[]).find((i) => i.id === `approval:${pendingId}`)
+        expect(hist?.status).toBe("rejected")
+      } finally {
+        await app3.close()
+      }
+    } finally {
+      try {
+        await app2.close()
+      } catch {}
+      fs.rmSync(root2, { recursive: true, force: true })
+    }
   })
 
   it("messenger-side resolution stays in history even when its DB is gone", async () => {

@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState } from "react"
+import { createPortal } from "react-dom"
 import { MessageSquarePlus, X } from "lucide-react"
 import { createNote } from "./NotesPanel"
 import { truncateQuote } from "./kinds"
@@ -84,82 +85,87 @@ export function MobileMemoSheet({
     }
   }
 
-  return (
-    <div
-      data-testid="mobile-memo-sheet"
-      data-print="hide"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("docs.memo")}
-      className="print:hidden fixed inset-0 z-[70]"
-    >
-      {/* 배경과 시트는 형제 요소로 둔다: 부모 래퍼의 클릭 판정이
-          모바일 확대 뷰포트에서 터치 탭을 가로채지 않게 한다. */}
+  // 배경과 시트는 겹치지 않는 형제 고정 요소로 둔다: DocsView 안쪽
+  // transform/overflow/sticky 쌓임 맥락을 벗어나 390px 터치 탭이
+  // 시트·단추 행 컨테이너에 가로막히지 않게 body에 직접 포털한다.
+  const modal = (
+    <>
       <div
         data-testid="mobile-memo-backdrop"
         aria-hidden="true"
         onClick={() => {
           if (!submitting && Date.now() - openedAt > 500) onClose()
         }}
-        className="absolute inset-0 z-40 bg-black/50"
+        className="fixed inset-0 z-40 bg-black/50"
       />
-      <div className="absolute inset-0 z-50 flex items-start justify-center p-2 pt-[max(0.5rem,env(safe-area-inset-top))] pointer-events-none">
-        {/* 시트는 85dvh 안에 스크롤되게 두어 저장 단추가 390px에서도 잘리지 않는다. */}
-        <div className="pointer-events-auto w-full max-w-lg max-h-[85dvh] overflow-y-auto rounded-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-white">{t("docs.memo")}</span>
-          <button
-            type="button"
-            aria-label={t("common.close")}
-            onClick={onClose}
-            disabled={submitting}
-            className="p-1.5 -m-1.5 rounded text-neutral-400 hover:text-white"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="text-xs text-neutral-400 max-h-20 overflow-y-auto border-l-2 border-blue-700 pl-2">
-          <span className="italic">&quot;{truncateQuote(quoted, 300)}&quot;</span>
-        </div>
-        {forbidden ? (
-          <p className="text-xs text-neutral-400">{forbiddenMessage}</p>
-        ) : (
-          <>
-            <textarea
-              data-testid="mobile-memo-input"
-              value={body}
-              autoFocus
-              onChange={(e) => setBody(e.target.value)}
+      {/* 시트는 85dvh 안에 스크롤되게 두어 저장 단추가 390px에서도 잘리지 않는다. */}
+      <div
+        data-testid="mobile-memo-sheet"
+        data-print="hide"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("docs.memo")}
+        className="print:hidden fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto"
+      >
+        <div className="mx-auto w-full max-w-lg rounded-t-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-white">{t("docs.memo")}</span>
+            <button
+              type="button"
+              aria-label={t("common.close")}
+              onClick={onClose}
               disabled={submitting}
-              placeholder={t("docs.notePlaceholder")}
-              // 16px keeps the mobile keyboard from zooming the viewport.
-              className="w-full h-28 p-2.5 rounded bg-neutral-950 border border-neutral-800 text-base text-neutral-200 focus:outline-none focus:border-neutral-600 resize-none"
-            />
-            {error && <p className="text-xs text-amber-400">{error}</p>}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
+              className="p-2 rounded text-neutral-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="text-xs text-neutral-400 max-h-20 overflow-y-auto border-l-2 border-blue-700 pl-2">
+            <span className="italic">&quot;{truncateQuote(quoted, 300)}&quot;</span>
+          </div>
+          {forbidden ? (
+            <p className="text-xs text-neutral-400">{forbiddenMessage}</p>
+          ) : (
+            <>
+              <textarea
+                data-testid="mobile-memo-input"
+                value={body}
+                autoFocus
+                onChange={(e) => setBody(e.target.value)}
                 disabled={submitting}
-                className="px-4 py-2 rounded bg-neutral-800 text-sm text-neutral-300"
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                data-testid="mobile-memo-save"
-                onClick={handleSave}
-                disabled={submitting || !body.trim()}
-                style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
-                className="px-4 py-2 rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50 select-none"
-              >
-                {submitting ? t("common.saving") : t("common.save")}
-              </button>
-            </div>
-          </>
-        )}
+                placeholder={t("docs.notePlaceholder")}
+                // 16px keeps the mobile keyboard from zooming the viewport.
+                className="w-full h-28 p-2.5 rounded bg-neutral-950 border border-neutral-800 text-base text-neutral-200 focus:outline-none focus:border-neutral-600 resize-none"
+              />
+              {error && <p className="text-xs text-amber-400">{error}</p>}
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={submitting}
+                  className="px-4 min-h-[44px] rounded bg-neutral-800 text-sm text-neutral-300"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="mobile-memo-save"
+                  onClick={handleSave}
+                  disabled={submitting || !body.trim()}
+                  style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
+                  className="px-4 min-h-[44px] rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {submitting ? t("common.saving") : t("common.save")}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
-    </div>
+    </>
   )
+  if (typeof document !== "undefined" && document.body) {
+    return createPortal(modal, document.body)
+  }
+  return <div className="print:hidden fixed inset-0 z-[70]">{modal}</div>
 }

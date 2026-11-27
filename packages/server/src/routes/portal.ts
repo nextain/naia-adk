@@ -61,6 +61,7 @@ import {
 } from "../decisions-service.js"
 import {
   DocOverlayStore,
+  type OverlayEntry,
   isValidOverlaySource,
   overlayDbPath,
 } from "../doc-overlay-store.js"
@@ -2047,9 +2048,12 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         }
         // 오버레이가 있으면 잠금 안에서 다시 견준다 (동시 PUT 충돌 보호).
         // 엄격한 null 비교: 빈 문자열 ""도 유효한 오버레이 본문이다.
+        // rename 직전 409에서 오버레이 커밋을 되돌릴 수 있게 이전 행 전체를 잡아 둔다.
         let overlayNow: string | null = null
+        let overlayPrevEntry: OverlayEntry | null = null
         try {
-          overlayNow = isValidOverlaySource(sourceId) ? (store.get(sourceId, normPath)?.content ?? null) : null
+          overlayPrevEntry = isValidOverlaySource(sourceId) ? (store.get(sourceId, normPath) ?? null) : null
+          overlayNow = overlayPrevEntry?.content ?? null
         } catch {
           return reply.code(503).send({ error: "Overlay unavailable" })
         }
@@ -2136,7 +2140,10 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           // SQLite 오버레이를 git 체크아웃 쓰기보다 먼저 커밋한다(단일
           // BEGIN IMMEDIATE 트랜잭션: CAS + 리비전 + 현재 행 + 이력).
           // CAS 충돌(409)이나 저장소 오류(500)는 체크아웃을 건드리지 않고 거절한다.
+          // 커밋 뒤 rename 직전 검사가 409를 내면 아래 rollbackOverlayAnd409가
+          // 오버레이 커밋까지 되돌려 체크아웃·오버레이 둘 다 거부한다.
           let overlayUpdatedAt: string
+          let committedRevision: number | null = null
           try {
             const entry = store.put({
               source: sourceId,
@@ -2147,11 +2154,20 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
               expectedBaseHash: overlayBase !== null ? cleanBaseHash : null,
             })
             overlayUpdatedAt = entry.updatedAt
+            committedRevision = entry.revision
           } catch (err: any) {
             if (err?.statusCode === 409) {
               return reply.code(409).send({ error: "changed" })
             }
             return reply.code(500).send({ error: "Overlay unavailable" })
+          }
+          const rollbackOverlayAnd409 = () => {
+            if (committedRevision !== null) {
+              try {
+                store.rollbackRevision(sourceId, normPath, committedRevision, overlayPrevEntry)
+              } catch {}
+            }
+            return reply.code(409).send({ error: "changed" })
           }
 
           const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
@@ -2203,11 +2219,11 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
               reStat.ino !== initialStat.ino ||
               reStat.nlink !== initialStat.nlink
             ) {
-              return reply.code(409).send({ error: "changed" })
+              return rollbackOverlayAnd409()
             }
 
             if (reStat.size > MAX_DOC_BYTES) {
-              return reply.code(409).send({ error: "changed" })
+              return rollbackOverlayAnd409()
             }
 
             const reReadBuf = Buffer.alloc(reStat.size)
@@ -2220,7 +2236,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
             const reHash = crypto.createHash("sha256").update(reReadBuf.subarray(0, reReadTotal)).digest("hex")
             if (overlayBase === null && reHash !== cleanBaseHash) {
-              return reply.code(409).send({ error: "changed" })
+              return rollbackOverlayAnd409()
             }
 
             // (나) 경로를 O_NOFOLLOW로 다시 열어 같은 dev·ino인지 확인하고, 둘 다 맞을 때만 즉시 rename한다.
@@ -2229,7 +2245,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
               verifyFd = fs.openSync(realPath, OPEN_READ_FLAGS)
             } catch (err: any) {
               if (err?.code === "ELOOP") {
-                return reply.code(409).send({ error: "changed" })
+                return rollbackOverlayAnd409()
               }
               return reply.code(404).send({ error: "Document not found" })
             }
@@ -2240,7 +2256,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
                 return reply.code(404).send({ error: "Document not found" })
               }
               if (pathStat.dev !== initialStat.dev || pathStat.ino !== initialStat.ino) {
-                return reply.code(409).send({ error: "changed" })
+                return rollbackOverlayAnd409()
               }
             } finally {
               try {

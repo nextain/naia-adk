@@ -131,11 +131,40 @@ describe("DocMarkdown 렌더 (frontmatter·코드·섹션·mermaid)", () => {
     assert.equal(isUnsafeSvgHrefValue("javascript:alert(1)"), true)
     assert.equal(isUnsafeSvgHrefValue("  JaVaScRiPt:x"), true)
     assert.equal(isUnsafeSvgHrefValue("data:text/html,<h1>x</h1>"), true)
+    assert.equal(isUnsafeSvgHrefValue("vbscript:x"), true)
     assert.equal(isUnsafeSvgHrefValue("https://example.com/a"), false)
     assert.equal(isUnsafeSvgHrefValue("data:image/svg+xml,%3Csvg"), false)
     assert.equal(isUnsafeSvgHrefValue("#section"), false)
     assert.equal(isUnsafeSvgHrefValue(null), false)
     assert.equal(isUnsafeSvgHrefValue(""), false)
+  })
+
+  it("isUnsafeSvgHrefValue가 제어 문자로 가린 javascript:를 막는다", () => {
+    const tab = String.fromCharCode(9)
+    const lf = String.fromCharCode(10)
+    const cr = String.fromCharCode(13)
+    assert.equal(isUnsafeSvgHrefValue("java" + tab + "script:alert(1)"), true)
+    assert.equal(isUnsafeSvgHrefValue("java" + lf + "script:alert(1)"), true)
+    assert.equal(isUnsafeSvgHrefValue("java" + cr + "script:alert(1)"), true)
+    assert.equal(isUnsafeSvgHrefValue(tab + " vbscript:x"), true)
+  })
+
+  it("sanitizeMermaidSvg: 제어 문자로 가린 위험 href를 지운다", () => {
+    const tab = String.fromCharCode(9)
+    const lf = String.fromCharCode(10)
+    const clean = withShimDom(() =>
+      sanitizeMermaidSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><a href="java' +
+          tab +
+          'script:alert(1)"><text>y</text></a>' +
+          '<a href="java' +
+          lf +
+          'script:alert(1)">z</a></svg>',
+      ),
+    )
+    assert.ok(clean, "살균된 SVG가 있어야 함")
+    assert.ok(!clean.includes("alert(1)"), "가려진 javascript: href가 남아 있으면 안 됨")
+    assert.ok(!clean.includes("href="), "위험 href 속성이 남아 있으면 안 됨")
   })
 
   it("handleCodeBlockCopy가 복사 성공·실패를 그대로 돌려준다", async () => {

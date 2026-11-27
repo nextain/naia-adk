@@ -214,6 +214,70 @@ export class DocOverlayStore {
     }
   }
 
+  /**
+   * 실패한 오버레이 커밋을 되돌린다: 실패한 `revision` 행을 `doc_revisions`에서
+   * 지우고, `doc_overlays` 현재 행을 `previousRow`로 되돌린다(새로 생긴
+   * 행이었으면 지운다). rename 직전 409처럼 체크아웃 쓰기를 거부하면서
+   * 오버레이만 앞서간 경우에 둘을 함께 거부한다. 동시 작성자가 이미
+   * 덮어썼으면(현재 리비전이 다르면) 현재 행은 건드리지 않는다.
+   */
+  rollbackRevision(source: string, docPath: string, revision: number, previousRow: OverlayEntry | null): void {
+    const normPath = normalizeOverlayPath(docPath)
+    if (!isValidOverlaySource(source) || !normPath) fail("Invalid source or path", 400)
+    if (!Number.isSafeInteger(revision) || revision < 1) fail("Invalid revision", 400)
+    if (previousRow !== null && (previousRow.source !== source || previousRow.path !== normPath)) {
+      fail("Revision mismatch", 400)
+    }
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.db.prepare(
+        "DELETE FROM doc_revisions WHERE source=? AND path=? AND revision=?",
+      ).run(source, normPath, revision)
+      const current = this.db.prepare(
+        "SELECT revision FROM doc_overlays WHERE source=? AND path=?",
+      ).get(source, normPath) as any
+      if (current === undefined || current === null) {
+        if (previousRow !== null) {
+          this.db.prepare(
+            `INSERT INTO doc_overlays(source, path, content, updated_at, updated_by, base_git_sha, revision)
+             VALUES(?,?,?,?,?,?,?)`,
+          ).run(
+            previousRow.source,
+            previousRow.path,
+            previousRow.content,
+            previousRow.updatedAt,
+            previousRow.updatedBy,
+            previousRow.baseGitSha,
+            previousRow.revision,
+          )
+        }
+      } else if (Number(current.revision) === revision) {
+        if (previousRow === null) {
+          this.db.prepare("DELETE FROM doc_overlays WHERE source=? AND path=?").run(source, normPath)
+        } else {
+          this.db.prepare(
+            `UPDATE doc_overlays SET content=?, updated_at=?, updated_by=?, base_git_sha=?, revision=?
+             WHERE source=? AND path=?`,
+          ).run(
+            previousRow.content,
+            previousRow.updatedAt,
+            previousRow.updatedBy,
+            previousRow.baseGitSha,
+            previousRow.revision,
+            source,
+            normPath,
+          )
+        }
+      }
+      this.db.exec("COMMIT")
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK")
+      } catch {}
+      throw error
+    }
+  }
+
   history(source: string, docPath: string, limit = 50): OverlayEntry[] {
     const n = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 500) : 50
     return (this.db.prepare(

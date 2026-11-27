@@ -276,8 +276,10 @@ function isMermaidCodeElement(node: React.ReactNode): boolean {
 // 위험 href(`javascript:`/`data:text/html`)를 지운 뒤에만 마운트한다.
 // 틀리면 null(대체 상자).
 export function isUnsafeSvgHrefValue(value: string | null | undefined): boolean {
-  const v = String(value ?? "").trim().toLowerCase()
-  return v.startsWith("javascript:") || v.startsWith("data:text/html")
+  // 브라우저 URL 파서가 ASCII 탭·개행·제어 문자를 무시하고 붙이므로, 검사 전에
+  // 제어 문자·공백을 전부 걷어낸다(`java\tscript:`, `java\nscript:` 차단).
+  const v = String(value ?? "").replace(/[\x00-\x20\x7f]+/g, "").toLowerCase()
+  return v.startsWith("javascript:") || v.startsWith("vbscript:") || v.startsWith("data:text/html")
 }
 
 export function sanitizeMermaidSvg(raw: string): string | null {
