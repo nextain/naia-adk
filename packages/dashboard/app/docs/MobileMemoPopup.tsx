@@ -85,18 +85,23 @@ export function MobileMemoSheet({
     }
   }
 
-  // 배경과 시트는 겹치지 않는 형제 고정 요소로 둔다: DocsView 안쪽
-  // transform/overflow/sticky 쌓임 맥락을 벗어나 390px 터치 탭이
-  // 시트·단추 행 컨테이너에 가로막히지 않게 body에 직접 포털한다.
+  // 배경과 시트는 하나의 고정 컨테이너 안에 순서대로 둔다: 컨테이너가
+  // body 직속 단일 쌓임 맥락을 만들고 인라인 z-index를 박아, Tailwind
+  // 클래스 생성 여부와 무관하게 390px 터치 탭이 항상 시트에 닿는다.
+  // DocsView 안쪽 transform/overflow/sticky 맥락을 벗어나게 body에 직접 포털한다.
   const modal = (
-    <>
+    <div
+      data-testid="mobile-memo-sheet-root"
+      className="fixed inset-0"
+      style={{ zIndex: 9999 }}
+    >
       <div
         data-testid="mobile-memo-backdrop"
         aria-hidden="true"
         onClick={() => {
           if (!submitting && Date.now() - openedAt > 500) onClose()
         }}
-        className="fixed inset-0 z-40 bg-black/50"
+        className="absolute inset-0 bg-black/50"
       />
       {/* 시트는 85dvh 안에 스크롤되게 두어 저장 단추가 390px에서도 잘리지 않는다. */}
       <div
@@ -105,7 +110,7 @@ export function MobileMemoSheet({
         role="dialog"
         aria-modal="true"
         aria-label={t("docs.memo")}
-        className="print:hidden fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto"
+        className="print:hidden absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-lg rounded-t-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl">
           <div className="flex items-center justify-between">
@@ -162,7 +167,7 @@ export function MobileMemoSheet({
           )}
         </div>
       </div>
-    </>
+    </div>
   )
   if (typeof document !== "undefined" && document.body) {
     return createPortal(modal, document.body)

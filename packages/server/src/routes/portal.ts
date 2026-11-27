@@ -1150,6 +1150,8 @@ export interface PortalOptions {
   beforeRename?: () => Promise<void> | void
   /** Messenger state shared with portal-messenger; off when disabled or its initialization failed. */
   messengerStatus?: { enabled: boolean }
+  /** Effective messenger DB path resolved by `createServer` (explicit `messenger.dbPath` or env/default). */
+  messengerDbPath?: string
 }
 
 // 로그인 게이트가 확인한 사람 계정 키 모양(메신저 게이트와 같은 규칙).
@@ -2161,11 +2163,18 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             }
             return reply.code(500).send({ error: "Overlay unavailable" })
           }
+          // 오버레이 되돌림이 실패하면 409로 속이지 않고 500으로 알린다(fail closed):
+          // 되돌림 실패는 거부된 편집이 오버레이에 남았다는 뜻이라 깨끗한 거부가 아니다.
           const rollbackOverlayAnd409 = () => {
             if (committedRevision !== null) {
               try {
                 store.rollbackRevision(sourceId, normPath, committedRevision, overlayPrevEntry)
-              } catch {}
+              } catch (rollbackErr: any) {
+                return reply.code(500).send({
+                  error: "overlay_rollback_failed",
+                  detail: String(rollbackErr?.message ?? rollbackErr),
+                })
+              }
             }
             return reply.code(409).send({ error: "changed" })
           }
@@ -2891,7 +2900,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     if (isPublicProxyRequest(req)) {
       return reply.code(403).send({ error: "Forbidden" })
     }
-    const snapshot = await collectDecisions(root)
+    const snapshot = await collectDecisions(root, { dbPath: opts?.messengerDbPath })
     return reply.header("cache-control", "no-store").send(snapshot)
   })
 
@@ -2928,6 +2937,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         actorKind,
         via: "portal-decisions",
         comment: typeof body?.comment === "string" ? body.comment : undefined,
+        dbPath: opts?.messengerDbPath,
       })
       return reply.send({ ok: true, item })
     } catch (err: any) {

@@ -1,6 +1,8 @@
 import Fastify, { FastifyInstance } from "fastify"
+import path from "node:path"
 import cors from "@fastify/cors"
 import websocket from "@fastify/websocket"
+import { messengerDbPath } from "./decisions-service.js"
 import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { watchRoutes } from "./routes/watch.js"
@@ -101,13 +103,23 @@ export async function createServer(config: ServerConfig) {
   app.register(watchRoutes, { prefix: "/api/ws" })
   // Shared with the messenger plugin, which turns it off when its DB or spool cannot be created.
   const messengerStatus = { enabled: messengerEnabled() }
+  // Effective messenger DB path, resolved once: explicit `messenger.dbPath`
+  // wins, otherwise the env/default resolver. Both portal route trees and
+  // `collectDecisions` healing read this same path, so a custom dbPath is
+  // never silently replaced by the default location.
+  const configuredDbPath = config.messenger?.dbPath
+  const resolvedMessengerDbPath =
+    typeof configuredDbPath === "string" && configuredDbPath
+      ? path.isAbsolute(configuredDbPath) ? configuredDbPath : path.join(config.root, configuredDbPath)
+      : messengerDbPath(config.root)
   app.register(portalRoutes, {
     prefix: "/api/portal",
     beforeRename: config.beforeRenameHook,
     messengerStatus,
+    messengerDbPath: resolvedMessengerDbPath,
   })
 
-  if (messengerStatus.enabled) app.register(portalMessengerRoutes, { prefix: "/api/portal/messenger", ...config.messenger, status: messengerStatus })
+  if (messengerStatus.enabled) app.register(portalMessengerRoutes, { prefix: "/api/portal/messenger", ...config.messenger, dbPath: resolvedMessengerDbPath, status: messengerStatus })
 
   app.get("/api/health", async () => ({
     status: "ok",

@@ -263,7 +263,7 @@ export function Nav({
 
   return (
     <>
-    <nav className="sticky top-0 z-10 h-14 border-b border-neutral-800 bg-neutral-950 px-2 sm:px-6 flex items-center gap-1 sm:gap-6">
+    <nav className="sticky top-0 z-10 h-14 border-b border-neutral-800 bg-neutral-950 px-2 sm:px-6 flex items-center gap-1 sm:gap-6 overflow-x-auto">
       <Link href="/docs" className="font-bold text-[13px] sm:text-lg text-white shrink-0 whitespace-nowrap">
          {workspaceDisplayName}
       </Link>

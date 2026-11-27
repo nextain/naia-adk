@@ -4,6 +4,16 @@ html {
   color-scheme: dark;
 }
 
+/* 390px phones: never let page-level horizontal overflow widen the layout
+   viewport. An expanded layout viewport breaks fixed bottom sheets: taps map
+   to the visual viewport while the sheet geometry lives in the expanded
+   space, so the backdrop swallows the tap. Components with legitimately wide
+   content keep their own internal scroll containers. */
+html,
+body {
+  overflow-x: clip;
+}
+
 html[data-font-size="sm"] {
   font-size: 14px;
 }

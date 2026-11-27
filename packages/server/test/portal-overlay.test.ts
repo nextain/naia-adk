@@ -263,6 +263,42 @@ describe("Portal doc overlay (/api/portal/doc + /api/portal/docs)", () => {
     }
   })
 
+  it("a failed overlay rollback answers 500, never a clean 409", async () => {
+    const docPath = path.join(tempRoot, "docs", "rollback-fail.md")
+    const initialStr = "1234567890\n"
+    fs.writeFileSync(docPath, initialStr, "utf-8")
+    const baseHash = sha256(initialStr)
+    const tamperedStr = "abcdefghij\n"
+    // 이력 삭제를 막는 트리거: 되돌림이 값 검증 뒤에 실패한다.
+    const raw = new DatabaseSync(overlayFile)
+    raw.exec("CREATE TRIGGER no_rollback_delete BEFORE DELETE ON doc_revisions BEGIN SELECT RAISE(ABORT, 'delete blocked'); END;")
+    const hookApp = await createServer({
+      root: tempRoot,
+      port: 3178,
+      host: "127.0.0.1",
+      beforeRenameHook: async () => {
+        fs.writeFileSync(docPath, tamperedStr, "utf-8")
+      },
+    })
+    ;(hookApp as any).proxySecret = TEST_SECRET
+    try {
+      const put = await hookApp.inject({
+        method: "PUT",
+        url: "/api/portal/doc?source=adk&path=rollback-fail.md",
+        headers: { ...WRITE_HEADERS, host: "localhost:3178" },
+        payload: JSON.stringify({ content: "rejected ax edit\n", baseHash }),
+      })
+      expect(put.statusCode).toBe(500)
+      expect(JSON.parse(put.body).error).toBe("overlay_rollback_failed")
+    } finally {
+      try {
+        await hookApp.close()
+      } catch {}
+      raw.exec("DROP TRIGGER IF EXISTS no_rollback_delete")
+      raw.close()
+    }
+  })
+
   it("PUT to a restricted folder returns 403 even with a stale baseHash, never 409", async () => {
     const coDir = path.join(tempRoot, "data-company", "co-locked")
     fs.mkdirSync(path.join(coDir, "allowed"), { recursive: true })

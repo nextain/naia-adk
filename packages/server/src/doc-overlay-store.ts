@@ -216,18 +216,17 @@ export class DocOverlayStore {
 
   /**
    * 실패한 오버레이 커밋을 되돌린다: 실패한 `revision` 행을 `doc_revisions`에서
-   * 지우고, `doc_overlays` 현재 행을 `previousRow`로 되돌린다(새로 생긴
-   * 행이었으면 지운다). rename 직전 409처럼 체크아웃 쓰기를 거부하면서
-   * 오버레이만 앞서간 경우에 둘을 함께 거부한다. 동시 작성자가 이미
-   * 덮어썼으면(현재 리비전이 다르면) 현재 행은 건드리지 않는다.
+   * 지운 뒤, 살아남은 최신 이력 행에서 `doc_overlays` 현재 행을 되살린다.
+   * 호출자가 넘긴 `previousRow`는 절대 믿지 않는다: 겹친 작성자가 그 사이
+   * 이력을 이미 지웠을 수 있어 낡은 행을 되살리면 없는 이력을 가리키는
+   * 고아가 된다. rename 직전 409처럼 체크아웃 쓰기를 거부하면서 오버레이만
+   * 앞서간 경우에 둘을 함께 거부한다. 동시 작성자가 이미 덮어썼으면
+   * (현재 리비전이 다르면) 현재 행은 건드리지 않는다.
    */
-  rollbackRevision(source: string, docPath: string, revision: number, previousRow: OverlayEntry | null): void {
+  rollbackRevision(source: string, docPath: string, revision: number, _previousRow?: OverlayEntry | null): void {
     const normPath = normalizeOverlayPath(docPath)
     if (!isValidOverlaySource(source) || !normPath) fail("Invalid source or path", 400)
     if (!Number.isSafeInteger(revision) || revision < 1) fail("Invalid revision", 400)
-    if (previousRow !== null && (previousRow.source !== source || previousRow.path !== normPath)) {
-      fail("Revision mismatch", 400)
-    }
     this.db.exec("BEGIN IMMEDIATE")
     try {
       this.db.prepare(
@@ -236,38 +235,33 @@ export class DocOverlayStore {
       const current = this.db.prepare(
         "SELECT revision FROM doc_overlays WHERE source=? AND path=?",
       ).get(source, normPath) as any
-      if (current === undefined || current === null) {
-        if (previousRow !== null) {
-          this.db.prepare(
-            `INSERT INTO doc_overlays(source, path, content, updated_at, updated_by, base_git_sha, revision)
-             VALUES(?,?,?,?,?,?,?)`,
-          ).run(
-            previousRow.source,
-            previousRow.path,
-            previousRow.content,
-            previousRow.updatedAt,
-            previousRow.updatedBy,
-            previousRow.baseGitSha,
-            previousRow.revision,
-          )
-        }
-      } else if (Number(current.revision) === revision) {
-        if (previousRow === null) {
-          this.db.prepare("DELETE FROM doc_overlays WHERE source=? AND path=?").run(source, normPath)
-        } else {
-          this.db.prepare(
-            `UPDATE doc_overlays SET content=?, updated_at=?, updated_by=?, base_git_sha=?, revision=?
-             WHERE source=? AND path=?`,
-          ).run(
-            previousRow.content,
-            previousRow.updatedAt,
-            previousRow.updatedBy,
-            previousRow.baseGitSha,
-            previousRow.revision,
-            source,
-            normPath,
-          )
-        }
+      // 다른 작성자가 이미 덮어썼으면 현재 행은 그대로 둔다.
+      if (current !== undefined && current !== null && Number(current.revision) !== revision) {
+        this.db.exec("COMMIT")
+        return
+      }
+      // 살아남은 최신 이력 행에서 현재 행을 되살린다. 없으면 현재 행도 지운다.
+      const latest = this.db.prepare(
+        `SELECT source, path, content, updated_at, updated_by, base_git_sha, revision
+         FROM doc_revisions WHERE source=? AND path=? ORDER BY revision DESC LIMIT 1`,
+      ).get(source, normPath) as any
+      if (latest === undefined || latest === null) {
+        this.db.prepare("DELETE FROM doc_overlays WHERE source=? AND path=?").run(source, normPath)
+      } else {
+        this.db.prepare(
+          `INSERT INTO doc_overlays(source, path, content, updated_at, updated_by, base_git_sha, revision)
+           VALUES(?,?,?,?,?,?,?)
+           ON CONFLICT(source, path) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at,
+             updated_by=excluded.updated_by, base_git_sha=excluded.base_git_sha, revision=excluded.revision`,
+        ).run(
+          String(latest.source),
+          String(latest.path),
+          String(latest.content),
+          String(latest.updated_at),
+          String(latest.updated_by),
+          String(latest.base_git_sha),
+          Number(latest.revision),
+        )
       }
       this.db.exec("COMMIT")
     } catch (error) {

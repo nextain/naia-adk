@@ -195,7 +195,7 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     } catch (error: any) {
       if (error?.statusCode === 409) {
         try {
-          backfillApprovalAuditForMessage(root, id(req), process.env, dbPath)
+          await backfillApprovalAuditForMessage(root, id(req), process.env, dbPath)
         } catch {}
       }
       throw error

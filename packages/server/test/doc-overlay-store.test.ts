@@ -98,6 +98,36 @@ describe("doc-overlay-store (CRUD + revisions)", () => {
     }
   })
 
+  it("rolls back overlapping commits from surviving history, never stale rows", () => {
+    const store = new DocOverlayStore(":memory:")
+    try {
+      store.put({ source: "adk", path: "o.md", content: "# v0", baseGitSha: "a" })
+      store.put({ source: "adk", path: "o.md", content: "# v1", baseGitSha: "a" })
+      store.put({ source: "adk", path: "o.md", content: "# v2", baseGitSha: "a" })
+      // Rolling back the older commit leaves the newer current row alone.
+      store.rollbackRevision("adk", "o.md", 2)
+      expect(store.get("adk", "o.md")?.content).toBe("# v2")
+      expect(store.get("adk", "o.md")?.revision).toBe(3)
+      expect(store.history("adk", "o.md").map((h) => h.revision)).toEqual([3, 1])
+      // Rolling back the newer commit restores the latest SURVIVING row (v0),
+      // never the already-rolled-back v1 — even when the caller passes it back.
+      const staleRow = { source: "adk", path: "o.md", content: "# STALE", updatedAt: "t", updatedBy: "x", baseGitSha: "a", revision: 2 }
+      store.rollbackRevision("adk", "o.md", 3, staleRow)
+      const cur = store.get("adk", "o.md")
+      expect(cur?.content).toBe("# v0")
+      expect(cur?.revision).toBe(1)
+      expect(store.history("adk", "o.md").map((h) => h.revision)).toEqual([1])
+      // Rolling back the last surviving revision deletes the current row:
+      // no orphaned current row without history.
+      store.rollbackRevision("adk", "o.md", 1)
+      expect(store.get("adk", "o.md")).toBeNull()
+      expect(store.history("adk", "o.md")).toEqual([])
+      expect(store.list()).toEqual([])
+    } finally {
+      store.close()
+    }
+  })
+
   it("rejects bad input with 400 status codes", () => {
     const store = new DocOverlayStore(":memory:")
     try {

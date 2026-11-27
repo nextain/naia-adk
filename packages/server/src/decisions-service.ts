@@ -17,6 +17,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { withFileLock } from "./file-lock.js"
 import { listNotes, noteAwaiting, readNote, saveNote } from "./notes.js"
 import { queryPortalWorkLedger } from "./work-ledger-portal.js"
 import { MessengerStore } from "./messenger-store.js"
@@ -111,10 +112,11 @@ function msToIso(ms: unknown): string | null {
 function readApprovalItems(
   root: string,
   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  dbPathOverride?: string,
 ): { pending: DecisionItem[]; history: DecisionItem[] } {
   const pending: DecisionItem[] = []
   const history: DecisionItem[] = []
-  const dbPath = messengerDbPath(root, env)
+  const dbPath = dbPathOverride ?? messengerDbPath(root, env)
   if (!fs.existsSync(dbPath)) return { pending, history }
   let db: DatabaseSync | null = null
   try {
@@ -303,46 +305,61 @@ function readDecidedApprovalRows(dbPath: string, messageId?: string): any[] {
  * 이미 결정된 메신저 승인데 감사 기록에 없는 항목을 멱등하게 채운다.
  * 커밋 뒤 쓰기 실패(500) 뒤에도 다음 읽기·재시도가 DB 제거 전에
  * 영구 기록을 치유한다. best-effort: 실패는 조용히 무시하고 추가된 수를 돌려준다.
+ * 읽기와 쓰기를 감사 파일 잠금(`decisions-audit.jsonl.lock`) 안에서 묶는다:
+ * 같은 감사 파일을 쓰는 동시 워커가 같은 id를 두 번 채우지 못한다.
  */
-export function backfillMissingApprovalAudits(
+export async function backfillMissingApprovalAudits(
   root: string,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
   dbPath?: string,
-): number {
+): Promise<number> {
   const rows = readDecidedApprovalRows(dbPath ?? messengerDbPath(root, env))
   if (rows.length === 0) return 0
-  const known = new Set(readAuditLog(root).map((e) => e.id))
-  let added = 0
-  for (const row of rows) {
-    const entry = decidedRowAuditEntry(row)
-    if (!entry || known.has(entry.id)) continue
-    try {
-      appendAuditLog(root, entry)
-      known.add(entry.id)
-      added += 1
-    } catch {}
+  try {
+    return await withFileLock(decisionsAuditPath(root), async () => {
+      const known = new Set(readAuditLog(root).map((e) => e.id))
+      let added = 0
+      for (const row of rows) {
+        const entry = decidedRowAuditEntry(row)
+        if (!entry || known.has(entry.id)) continue
+        try {
+          appendAuditLog(root, entry)
+          known.add(entry.id)
+          added += 1
+        } catch {}
+      }
+      return added
+    })
+  } catch {
+    return 0
   }
-  return added
 }
 
 /**
  * 메신저 409 경로용 단일 항목 backfill: 이미 결정된 승인인데
  * 감사 기록에 없으면 한 줄을 채우고 true를 돌려준다(best-effort).
+ * 전체 backfill과 같은 감사 파일 잠금을 써서 동시 채움이 한 줄만 남긴다.
  */
-export function backfillApprovalAuditForMessage(
+export async function backfillApprovalAuditForMessage(
   root: string,
   messageId: string,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
   dbPath?: string,
-): boolean {
+): Promise<boolean> {
   if (!messageId) return false
-  if (readAuditLog(root).some((e) => e.id === `approval:${messageId}`)) return false
-  const rows = readDecidedApprovalRows(dbPath ?? messengerDbPath(root, env), messageId)
-  const entry = rows.length > 0 ? decidedRowAuditEntry(rows[0]) : null
-  if (!entry) return false
   try {
-    appendAuditLog(root, entry)
-    return true
+    return await withFileLock(decisionsAuditPath(root), async () => {
+      if (readAuditLog(root).some((e) => e.id === `approval:${messageId}`)) return false
+      const rows = readDecidedApprovalRows(dbPath ?? messengerDbPath(root, env), messageId)
+      const entry = rows.length > 0 ? decidedRowAuditEntry(rows[0]) : null
+      if (!entry) return false
+      try {
+        appendAuditLog(root, entry)
+        return true
+      } catch {
+        return false
+      }
+    })
   } catch {
     return false
   }
@@ -452,14 +469,18 @@ function auditOutcomeToHistory(entry: DecisionAuditEntry): DecisionItem {
 
 export async function collectDecisions(
   root: string,
-  opts: { env?: NodeJS.ProcessEnv | Record<string, string | undefined> } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv | Record<string, string | undefined>
+    /** `createServer({ messenger: { dbPath } })`로 고정한 메신저 DB 경로. 없으면 env/기본값. */
+    dbPath?: string
+  } = {},
 ): Promise<DecisionsSnapshot> {
   const env = opts.env ?? process.env
-  const approvals = readApprovalItems(root, env)
+  const approvals = readApprovalItems(root, env, opts.dbPath)
   // 결정됐는데 감사 기록에서 빠진 승인은 여기서 치유한다: 커밋 뒤
   // 쓰기 실패(500) 뒤의 첫 읽기·재시도가 DB 제거 전에 영구 기록을 살린다.
   try {
-    backfillMissingApprovalAudits(root, env)
+    await backfillMissingApprovalAudits(root, env, opts.dbPath)
   } catch {}
   const notes = readNoteItems(root)
   const work = await readWorkWaitItems(root)
@@ -508,6 +529,8 @@ export interface ResolveOptions {
   via?: string
   comment?: string
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>
+  /** 고정된 메신저 DB 경로(없으면 env/기본값). */
+  dbPath?: string
 }
 
 const TERMINAL: Record<DecisionAction, DecisionStatus> = {
@@ -543,7 +566,7 @@ export async function resolveDecisionItem(
     // 메신저 승인 게이트와 같은 검증: 로그인 게이트 확인 계정만 사람 행위자다.
     const messengerActor = verifiedMessengerActorName(opts.actor, opts.actorKind ?? "human")
     const env = opts.env ?? process.env
-    const dbPath = messengerDbPath(root, env)
+    const dbPath = opts.dbPath ?? messengerDbPath(root, env)
     if (!fs.existsSync(dbPath)) fail("Messenger unavailable", 503)
     const store = new MessengerStore(dbPath)
     try {
@@ -625,7 +648,7 @@ export async function resolveDecisionItem(
 
   if (id.startsWith("work:") || id.startsWith("publish:")) {
     const kind: DecisionKind = id.startsWith("work:") ? "work" : "publish"
-    const snapshot = await collectDecisions(root, { env: opts.env })
+    const snapshot = await collectDecisions(root, { env: opts.env, dbPath: opts.dbPath })
     const found = snapshot.pending.find((i) => i.id === id)
     if (!found) fail("Unknown decision item", 404)
     const item: DecisionItem = { ...found, status: outcome, detail: comment ?? found.detail, actor, updatedAt: at }

@@ -1,5 +1,13 @@
 import React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
+
+// 390px phones get a 390 CSS px layout viewport (not the ~980px desktop
+// fallback): without this, bottom sheets render zoomed-out and taps land on
+// the backdrop instead of the controls.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+}
 import "./globals.css"
 import { Nav } from "./components/Nav"
 import { MainArea } from "./components/MainArea"

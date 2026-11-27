@@ -4,6 +4,7 @@ import path from "node:path"
 import os from "node:os"
 import { createServer } from "../src/server.js"
 import { MessengerStore } from "../src/messenger-store.js"
+import { backfillMissingApprovalAudits } from "../src/decisions-service.js"
 
 const APPROVAL_BODY = [
   "1. 제목: [승인 요청] 새 문서 발행",
@@ -436,6 +437,105 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     expect(json.pending.map((i: any) => i.id)).not.toContain(`approval:${pendingId}`)
     const hist = json.history.find((i: any) => i.id === `approval:${pendingId}`)
     expect(hist?.status).toBe("rejected")
+  })
+
+  it("heals a post-commit audit gap from a configured messenger dbPath on GET-only read", async () => {
+    // Custom `createServer({ messenger: { dbPath } })`: no 409 retry at all —
+    // one GET must heal the audit, stay at one row, and survive DB removal.
+    const root3 = fs.mkdtempSync(path.join(os.tmpdir(), "adk-decisions-customdb-"))
+    fs.mkdirSync(path.join(root3, "docs"), { recursive: true })
+    fs.writeFileSync(path.join(root3, "docs", "plan.md"), "# 계획 문서\n", "utf-8")
+    const customDbPath = path.join(root3, "custom", "msg.db")
+    const setup = new MessengerStore(customDbPath)
+    let pendingId: string
+    try {
+      pendingId = setup.createMessage("업무-요청", { id: "boss", kind: "human" }, APPROVAL_BODY).id
+    } finally {
+      setup.close()
+    }
+    const app3 = await createServer({ root: root3, port: 3144, host: "127.0.0.1", messenger: { dbPath: customDbPath } })
+    ;(app3 as any).proxySecret = TEST_SECRET
+    try {
+      const auditFile = path.join(root3, ".agents", "work", "state", "decisions-audit.jsonl")
+      const appendSpy = vi.spyOn(fs, "appendFileSync").mockImplementationOnce(() => {
+        throw new Error("injected post-commit audit failure")
+      })
+      try {
+        const failed = await app3.inject({
+          method: "POST",
+          url: `/api/portal/messenger/approvals/${pendingId}`,
+          headers: { ...GATE_HEADERS, host: "localhost:3144" },
+          payload: JSON.stringify({ decision: "approve" }),
+        })
+        expect(failed.statusCode).toBe(500)
+        expect(JSON.parse(failed.body)).toEqual({ error: "Audit log unavailable" })
+      } finally {
+        appendSpy.mockRestore()
+      }
+      const decided = new MessengerStore(customDbPath)
+      try {
+        expect((decided.db.prepare("SELECT status FROM approvals WHERE message_id=?").get(pendingId) as any)?.status).toBe("approved")
+      } finally {
+        decided.close()
+      }
+      expect(fs.readFileSync(auditFile, "utf-8")).not.toContain(`approval:${pendingId}`)
+      // GET-only healing: no 409 retry happens before this read.
+      const first = await app3.inject({ method: "GET", url: "/api/portal/decisions", headers: { ...READ_HEADERS, host: "localhost:3144" } })
+      expect(first.statusCode).toBe(200)
+      expect(JSON.parse(first.body).history.map((i: any) => i.id)).toContain(`approval:${pendingId}`)
+      expect(fs.readFileSync(auditFile, "utf-8").split("\n").filter((l) => l.trim())).toHaveLength(1)
+      // A second GET stays at exactly one row (no duplicate append).
+      const second = await app3.inject({ method: "GET", url: "/api/portal/decisions", headers: { ...READ_HEADERS, host: "localhost:3144" } })
+      expect(second.statusCode).toBe(200)
+      expect(fs.readFileSync(auditFile, "utf-8").split("\n").filter((l) => l.trim())).toHaveLength(1)
+      // Removing the custom DB keeps the decision in permanent history.
+      await app3.close()
+      fs.rmSync(customDbPath, { force: true })
+      try {
+        fs.rmSync(`${customDbPath}-wal`, { force: true })
+        fs.rmSync(`${customDbPath}-shm`, { force: true })
+      } catch {}
+      const app4 = await createServer({ root: root3, port: 3145, host: "127.0.0.1", messenger: { dbPath: customDbPath } })
+      ;(app4 as any).proxySecret = TEST_SECRET
+      try {
+        const snap = await app4.inject({ method: "GET", url: "/api/portal/decisions", headers: { ...READ_HEADERS, host: "localhost:3145" } })
+        expect(snap.statusCode).toBe(200)
+        const hist = (JSON.parse(snap.body).history as any[]).find((i) => i.id === `approval:${pendingId}`)
+        expect(hist?.status).toBe("approved")
+      } finally {
+        await app4.close()
+      }
+    } finally {
+      try {
+        await app3.close()
+      } catch {}
+      fs.rmSync(root3, { recursive: true, force: true })
+    }
+  })
+
+  it("concurrent backfills append exactly one audit line per decision", async () => {
+    const rootC = fs.mkdtempSync(path.join(os.tmpdir(), "adk-decisions-race-"))
+    fs.mkdirSync(path.join(rootC, "docs"), { recursive: true })
+    fs.writeFileSync(path.join(rootC, "docs", "plan.md"), "# 계획 문서\n", "utf-8")
+    const customDbPath = path.join(rootC, "custom", "msg.db")
+    const setup = new MessengerStore(customDbPath)
+    let pendingId: string
+    try {
+      pendingId = setup.createMessage("업무-요청", { id: "boss", kind: "human" }, APPROVAL_BODY).id
+      setup.decideApproval(pendingId, { id: "boss", kind: "human" }, "approve")
+    } finally {
+      setup.close()
+    }
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => backfillMissingApprovalAudits(rootC, process.env, customDbPath)),
+    )
+    expect(results.reduce((sum, n) => sum + n, 0)).toBe(1)
+    const lines = fs.readFileSync(path.join(rootC, ".agents", "work", "state", "decisions-audit.jsonl"), "utf-8")
+      .split("\n")
+      .filter((l) => l.trim())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(`approval:${pendingId}`)
+    fs.rmSync(rootC, { recursive: true, force: true })
   })
 
   function makeApproval(plan: string, step: string): string {
