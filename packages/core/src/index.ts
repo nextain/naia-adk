@@ -18,6 +18,8 @@ export {
   parseCompanyConfig,
 } from "./company.js"
 export * from "./work-ledger.js"
+export * from "./negative-prompts.js"
+export * from "./stop-readiness.js"
 
 export function loadProjectIndex(root: string): ProjectIndex | null {
   const indexPath = path.join(root, ".agents", "context", "project-index.yaml")
