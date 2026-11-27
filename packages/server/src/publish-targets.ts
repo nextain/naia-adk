@@ -184,7 +184,7 @@ function readTargetsFile(filePath: string): Record<string, PublishTargetProfile>
     const bytes = Buffer.alloc(stat.size)
     let offset = 0
     while (offset < bytes.length) {
-      const count = fs.readSync(fd, bytes, offset, bytes.length - offset)
+      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, null)
       if (!count) break
       offset += count
     }
