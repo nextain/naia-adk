@@ -3,6 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
+import { DatabaseSync } from "node:sqlite"
 import { createServer } from "../src/server.js"
 
 describe("Portal doc overlay (/api/portal/doc + /api/portal/docs)", () => {
@@ -185,6 +186,105 @@ describe("Portal doc overlay (/api/portal/doc + /api/portal/docs)", () => {
     fs.rmSync(coDir, { recursive: true, force: true })
     const get3 = await getDocAt("company:co-bound", "allowed/note.md")
     expect(get3.statusCode).toBe(404)
+  })
+
+  it("failed overlay write returns 5xx with zero checkout writes", async () => {
+    const docPath = path.join(tempRoot, "docs", "fragile.md")
+    fs.writeFileSync(docPath, "원본\n", "utf-8")
+    const baseHash = sha256("원본\n")
+    // 이력 insert를 막는 트리거: overlay 트랜잭션이 값 검증 뒤에 실패한다.
+    const raw = new DatabaseSync(overlayFile)
+    raw.exec("CREATE TRIGGER no_history BEFORE INSERT ON doc_revisions BEGIN SELECT RAISE(ABORT, 'history blocked'); END;")
+    try {
+      const put = await putDocAt("adk", "fragile.md", "바뀜\n", baseHash)
+      expect([500, 503]).toContain(put.statusCode)
+      expect(put.statusCode).not.toBe(200)
+      // 거절된 편집이 체크아웃에 남지 않는다.
+      expect(fs.readFileSync(docPath, "utf-8")).toBe("원본\n")
+      expect(fs.readdirSync(path.join(tempRoot, "docs")).filter((n) => n.startsWith(".tmp-"))).toEqual([])
+    } finally {
+      raw.exec("DROP TRIGGER IF EXISTS no_history")
+      raw.close()
+    }
+    // 트리거를 걷으면 같은 PUT이 그대로 성공한다.
+    const retry = await putDocAt("adk", "fragile.md", "바뀜\n", baseHash)
+    expect(retry.statusCode).toBe(200)
+    expect(retry.headers["x-doc-source"]).toBe("overlay")
+  })
+
+  it("stale overlay CAS conflict returns 409 with zero checkout writes", async () => {
+    const docPath = path.join(tempRoot, "docs", "cas-guard.md")
+    fs.writeFileSync(docPath, "원본\n", "utf-8")
+    const first = await putDocAt("adk", "cas-guard.md", "첫 고침\n", sha256("원본\n"))
+    expect(first.statusCode).toBe(200)
+    // 낡은 baseHash로 다시 저장: 오버레이 CAS에서 409, 체크아웃은 첫 고침 그대로.
+    const stale = await putDocAt("adk", "cas-guard.md", "낡은 고침\n", sha256("원본\n"))
+    expect(stale.statusCode).toBe(409)
+    expect(fs.readFileSync(docPath, "utf-8")).toBe("첫 고침\n")
+  })
+
+  it("PUT to a restricted folder returns 403 even with a stale baseHash, never 409", async () => {
+    const coDir = path.join(tempRoot, "data-company", "co-locked")
+    fs.mkdirSync(path.join(coDir, "allowed"), { recursive: true })
+    fs.mkdirSync(path.join(coDir, "other"), { recursive: true })
+    const config = (include: string[]) =>
+      fs.writeFileSync(path.join(coDir, "adk-company.json"), JSON.stringify({ schemaVersion: 1, title: "잠금", docs: { include } }))
+    try {
+      config(["allowed"])
+      fs.writeFileSync(path.join(coDir, "allowed", "note.md"), "원본\n", "utf-8")
+      const put = await putDocAt("company:co-locked", "allowed/note.md", "고침\n", sha256("원본\n"))
+      expect(put.statusCode).toBe(200)
+      // 허용 폴더를 좁히면 낡은 오버레이 행이 있어도 403이다(ETag 409 누출 금지).
+      config(["other"])
+      const stale = await putDocAt("company:co-locked", "allowed/note.md", "바꿈\n", sha256("낡은해시\n"))
+      expect(stale.statusCode).toBe(403)
+      const current = await putDocAt("company:co-locked", "allowed/note.md", "바꿈\n", sha256("고침\n"))
+      expect(current.statusCode).toBe(403)
+      // 좁혀진 뒤에는 체크아웃도 건드리지 않는다.
+      expect(fs.readFileSync(path.join(coDir, "allowed", "note.md"), "utf-8")).toBe("고침\n")
+    } finally {
+      fs.rmSync(coDir, { recursive: true, force: true })
+    }
+  })
+
+  it("PUT rejects a symlinked checkout target even when an overlay row exists", async () => {
+    const docPath = path.join(tempRoot, "docs", "link-guard.md")
+    fs.writeFileSync(docPath, "원본\n", "utf-8")
+    const first = await putDocAt("adk", "link-guard.md", "오버레이\n", sha256("원본\n"))
+    expect(first.statusCode).toBe(200)
+    const overlayHash = sha256("오버레이\n")
+    // 체크아웃 파일을 바깥 파일을 가리키는 심볼릭 링크로 바꾼다.
+    fs.rmSync(docPath)
+    fs.writeFileSync(path.join(tempRoot, "outside-target.md"), "바깥\n", "utf-8")
+    fs.symlinkSync(path.join(tempRoot, "outside-target.md"), docPath)
+    try {
+      const put = await putDocAt("adk", "link-guard.md", "바꿈\n", overlayHash)
+      expect(put.statusCode).toBe(404)
+      // 링크는 그대로 두고 바깥 파일에도 쓰지 않는다.
+      expect(fs.lstatSync(docPath).isSymbolicLink()).toBe(true)
+      expect(fs.readFileSync(path.join(tempRoot, "outside-target.md"), "utf-8")).toBe("바깥\n")
+    } finally {
+      fs.rmSync(docPath)
+      fs.rmSync(path.join(tempRoot, "outside-target.md"))
+    }
+  })
+
+  it("read-only fallback still verifies the checkout descriptor when an overlay row exists", async () => {
+    const docPath = path.join(tempRoot, "docs", "ro-guard.md")
+    fs.writeFileSync(docPath, "원본\n", "utf-8")
+    const first = await putDocAt("adk", "ro-guard.md", "오버레이\n", sha256("원본\n"))
+    expect(first.statusCode).toBe(200)
+    const overlayHash = sha256("오버레이\n")
+    // 읽을 수 없게 막으면 주 분기가 EACCES로 떨어지고 대체 분기로 간다.
+    fs.chmodSync(docPath, 0o000)
+    try {
+      const put = await putDocAt("adk", "ro-guard.md", "바꿈\n", overlayHash)
+      // 오버레이 행이 있어도 기술자 검사를 건너뛰지 않으므로 200이 아니다.
+      expect(put.statusCode).not.toBe(200)
+      expect(put.statusCode).toBe(404)
+    } finally {
+      fs.chmodSync(docPath, 0o644)
+    }
   })
 
   it("rejects path traversal and hides overlay/docs/decisions from untrusted callers", async () => {

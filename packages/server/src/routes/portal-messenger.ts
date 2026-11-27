@@ -4,7 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { MessengerStore, MAX_LIST_LIMIT, approvalDocWarning } from '../messenger-store.js'
-import { appendDecisionAudit, messengerApprovalAuditEntry } from '../decisions-service.js'
+import { appendDecisionAudit, assertDecisionAuditWritable, messengerApprovalAuditEntry } from '../decisions-service.js'
 import { MessengerWatch } from '../messenger-watch.js'
 import { validateAttachment, parseMultipartAttachment, MAX_ATTACHMENT_BYTES } from '../messenger-attachments.js'
 import { messengerRoles } from '../messenger-roles.js'
@@ -174,16 +174,24 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     const data = {channel_id:id(req),reader_id:actor(req).id,reader_kind:actor(req).kind,last_message_id:last}
     publish('read',data); return data
   })
-  app.post('/approvals/:id', async req => {
+  app.post('/approvals/:id', async (req, reply) => {
     const who = actor(req)
     if (who.kind !== 'human') throw failure(403,'Human approval required')
     const decision = (req.body as any)?.decision
     if (decision !== 'approve' && decision !== 'reject') throw failure(400,'Invalid decision')
+    // 영구 감사 미러가 쓰기 가능해야 해결을 커밋한다(fail closed).
+    // 200은 감사 기록이 디스크에 남은 해결에만 돌려준다.
+    try {
+      assertDecisionAuditWritable(root)
+    } catch (error: any) {
+      return reply.code(error?.statusCode ?? 503).send({ error: 'Audit log unavailable' })
+    }
     const result = store.decideApproval(id(req),who,decision)
     publish('approval',result.message)
     if (result.codeMessage) publish('message',result.codeMessage)
     // 메신저 쪽 해결도 영구 감사 기록에 비춘다. DB가 나중에 없어져도
-    // /api/portal/decisions history에 남는다(기록 실패가 해결을 막지는 않는다).
+    // /api/portal/decisions history에 남는다. 커밋 뒤 쓰기가 실패하면
+    // 200을 속이지 않고 500으로 알린다.
     try {
       const approval = (result.message as any)?.approval
       appendDecisionAudit(root, messengerApprovalAuditEntry({
@@ -198,6 +206,7 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
       }))
     } catch (error) {
       app.log.warn({ messageId: id(req), error: String((error as any)?.message ?? error) }, 'Messenger audit mirror failed')
+      return reply.code(500).send({ error: 'Audit log unavailable' })
     }
     return result.message
   })

@@ -6,7 +6,9 @@ import {
   DocMarkdown,
   handleCodeBlockCopy,
   isUnsafeMarkdownHref,
+  isUnsafeSvgHrefValue,
   MermaidBlock,
+  sanitizeMermaidSvg,
   slugifyHeading,
 } from "./DocMarkdown.tsx"
 
@@ -90,6 +92,52 @@ describe("DocMarkdown 렌더 (frontmatter·코드·섹션·mermaid)", () => {
     assert.equal(slugifyHeading("  "), "")
   })
 
+  it("sanitizeMermaidSvg: 루트 <svg>의 onload를 지운다", () => {
+    const clean = withShimDom(() =>
+      sanitizeMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><rect width="1" height="1"/></svg>'),
+    )
+    assert.ok(clean, "살균된 SVG가 있어야 함")
+    assert.ok(!clean.includes("onload"), "루트 onload가 남아 있으면 안 됨")
+    assert.ok(!clean.includes("alert(1)"))
+    assert.ok(clean.includes("<svg"))
+    assert.ok(clean.includes("<rect"))
+  })
+
+  it("sanitizeMermaidSvg: 자손 on*·script·위험 href를 지우고 안전한 href는 둔다", () => {
+    const clean = withShimDom(() =>
+      sanitizeMermaidSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><g onclick="x(1)"><a href="javascript:alert(1)"><text>y</text></a>' +
+          '<a xlink:href="data:text/html,<h1>x</h1>">z</a><a href="https://example.com/a">ok</a>' +
+          "<script>alert(2)</script></g></svg>",
+      ),
+    )
+    assert.ok(clean, "살균된 SVG가 있어야 함")
+    assert.ok(!clean.includes("onclick"))
+    assert.ok(!clean.includes("javascript:"))
+    assert.ok(!clean.includes("data:text/html"))
+    assert.ok(!clean.includes("<script"))
+    assert.ok(!clean.includes("alert("))
+    assert.ok(clean.includes('href="https://example.com/a"'))
+  })
+
+  it("sanitizeMermaidSvg: svg가 아니거나 깨진 입력은 null이다", () => {
+    assert.equal(sanitizeMermaidSvg("<div>hi</div>"), null)
+    assert.equal(sanitizeMermaidSvg(""), null)
+    const broken = withShimDom(() => sanitizeMermaidSvg("<svg><g></svg>"))
+    assert.equal(broken, null)
+  })
+
+  it("isUnsafeSvgHrefValue가 위험 스킴만 가린다", () => {
+    assert.equal(isUnsafeSvgHrefValue("javascript:alert(1)"), true)
+    assert.equal(isUnsafeSvgHrefValue("  JaVaScRiPt:x"), true)
+    assert.equal(isUnsafeSvgHrefValue("data:text/html,<h1>x</h1>"), true)
+    assert.equal(isUnsafeSvgHrefValue("https://example.com/a"), false)
+    assert.equal(isUnsafeSvgHrefValue("data:image/svg+xml,%3Csvg"), false)
+    assert.equal(isUnsafeSvgHrefValue("#section"), false)
+    assert.equal(isUnsafeSvgHrefValue(null), false)
+    assert.equal(isUnsafeSvgHrefValue(""), false)
+  })
+
   it("handleCodeBlockCopy가 복사 성공·실패를 그대로 돌려준다", async () => {
     assert.equal(await handleCodeBlockCopy({ innerText: "code\n" }, async () => true), "copied")
     assert.equal(await handleCodeBlockCopy({ innerText: "code\n" }, async () => false), "failed")
@@ -102,3 +150,145 @@ describe("DocMarkdown 렌더 (frontmatter·코드·섹션·mermaid)", () => {
     assert.equal(await handleCodeBlockCopy(null, async () => true), "copied")
   })
 })
+
+// sanitizeMermaidSvg는 브라우저 DOMParser/XMLSerializer를 쓴다.
+// node --test 환경에는 DOM이 없으므로, 여기서만 쓰는 최소 XML 이중자를
+// 깔아 실제 살균 루프(루트 포함·속성 제거·직렬화)를 실행한다.
+interface ShimAttr {
+  name: string
+  value: string
+}
+
+class ShimElement {
+  tagName: string
+  attributes: ShimAttr[] = []
+  children: ShimElement[] = []
+  parent: ShimElement | null = null
+
+  constructor(tagName: string) {
+    this.tagName = tagName
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes = this.attributes.filter((a) => a.name !== name)
+  }
+
+  remove(): void {
+    if (this.parent) {
+      this.parent.children = this.parent.children.filter((c) => c !== this)
+      this.parent = null
+    }
+  }
+
+  querySelectorAll(sel: string): ShimElement[] {
+    const out: ShimElement[] = []
+    const walk = (el: ShimElement) => {
+      for (const child of el.children) {
+        if (sel === "*" || child.tagName.toLowerCase() === sel.toLowerCase()) out.push(child)
+        walk(child)
+      }
+    }
+    walk(this)
+    return out
+  }
+}
+
+class ShimDocument {
+  children: ShimElement[] = []
+
+  get documentElement(): ShimElement | null {
+    return this.children[0] ?? null
+  }
+
+  querySelector(sel: string): ShimElement | null {
+    const out: ShimElement[] = []
+    const walk = (el: ShimElement) => {
+      if (el.tagName.toLowerCase() === sel.toLowerCase()) out.push(el)
+      for (const child of el.children) walk(child)
+    }
+    for (const child of this.children) walk(child)
+    return out[0] ?? null
+  }
+}
+
+function parseShimSvg(text: string, doc: ShimDocument): void {
+  const stack: ShimElement[] = []
+  const tagRe = /<(\/?)([A-Za-z][\w:.-]*)((?:\s+[^\s=/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"']*))?)*)\s*(\/?)>/g
+  const attrRe = /([^\s=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g
+  let ok = true
+  let m: RegExpExecArray | null
+  while (ok && (m = tagRe.exec(text)) !== null) {
+    const closing = m[1] === "/"
+    const tag = m[2]
+    if (closing) {
+      const top = stack.pop()
+      if (!top || top.tagName !== tag) {
+        ok = false
+        break
+      }
+      continue
+    }
+    const node = new ShimElement(tag)
+    attrRe.lastIndex = 0
+    let am: RegExpExecArray | null
+    while ((am = attrRe.exec(m[3])) !== null) {
+      const name = am[1]
+      if (!name || name.startsWith("/")) continue
+      let value = am[2] ?? ""
+      if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1)
+      else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1)
+      node.attributes.push({ name, value })
+    }
+    if (stack.length > 0) {
+      const parent = stack[stack.length - 1]
+      node.parent = parent
+      parent.children.push(node)
+    } else {
+      doc.children.push(node)
+    }
+    if (m[4] !== "/") stack.push(node)
+  }
+  if (!ok || stack.length !== 0) {
+    doc.children = [new ShimElement("parsererror")]
+  }
+}
+
+function escapeShimAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+function serializeShim(el: ShimElement): string {
+  const attrs = el.attributes.map((a) => ` ${a.name}="${escapeShimAttr(a.value)}"`).join("")
+  if (el.children.length === 0) return `<${el.tagName}${attrs}/>`
+  return `<${el.tagName}${attrs}>${el.children.map(serializeShim).join("")}</${el.tagName}>`
+}
+
+class ShimDOMParser {
+  parseFromString(text: string, _mime: string): ShimDocument {
+    const doc = new ShimDocument()
+    parseShimSvg(String(text ?? ""), doc)
+    return doc
+  }
+}
+
+class ShimXMLSerializer {
+  serializeToString(doc: ShimDocument): string {
+    return doc.children.map(serializeShim).join("")
+  }
+}
+
+function withShimDom<T>(fn: () => T): T {
+  const g = globalThis as any
+  const prevParser = g.DOMParser
+  const prevSerializer = g.XMLSerializer
+  g.DOMParser = ShimDOMParser
+  g.XMLSerializer = ShimXMLSerializer
+  try {
+    return fn()
+  } finally {
+    if (prevParser === undefined) delete g.DOMParser
+    else g.DOMParser = prevParser
+    if (prevSerializer === undefined) delete g.XMLSerializer
+    else g.XMLSerializer = prevSerializer
+  }
+}

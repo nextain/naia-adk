@@ -272,8 +272,14 @@ function isMermaidCodeElement(node: React.ReactNode): boolean {
 }
 
 // Rendered SVG를 그대로 믿지 않는다: DOMParser(image/svg+xml)로 읽어
-// 루트가 `<svg>` 하나인지 확인하고, `<script>`와 `on*` 행위 속성을 지운
-// 뒤에만 마운트한다. 틀리면 null(대체 상자).
+// 루트가 `<svg>` 하나인지 확인하고, `<script>`와 `on*` 행위 속성,
+// 위험 href(`javascript:`/`data:text/html`)를 지운 뒤에만 마운트한다.
+// 틀리면 null(대체 상자).
+export function isUnsafeSvgHrefValue(value: string | null | undefined): boolean {
+  const v = String(value ?? "").trim().toLowerCase()
+  return v.startsWith("javascript:") || v.startsWith("data:text/html")
+}
+
 export function sanitizeMermaidSvg(raw: string): string | null {
   const text = typeof raw === "string" ? raw.trim() : ""
   if (!text.startsWith("<svg")) return null
@@ -283,11 +289,17 @@ export function sanitizeMermaidSvg(raw: string): string | null {
     const root = doc.documentElement
     if (!root || root.tagName.toLowerCase() !== "svg") return null
     root.querySelectorAll("script").forEach((el) => el.remove())
-    root.querySelectorAll("*").forEach((el) => {
+    // 루트 `<svg>` 자체를 포함해 모든 요소의 행위 속성과 위험 href를 지운다.
+    for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
       for (const attr of Array.from(el.attributes)) {
-        if (/^on/i.test(attr.name)) el.removeAttribute(attr.name)
+        const name = attr.name.toLowerCase()
+        if (/^on/i.test(attr.name)) {
+          el.removeAttribute(attr.name)
+        } else if ((name === "href" || name === "xlink:href") && isUnsafeSvgHrefValue(attr.value)) {
+          el.removeAttribute(attr.name)
+        }
       }
-    })
+    }
     return new XMLSerializer().serializeToString(doc)
   } catch {
     return null

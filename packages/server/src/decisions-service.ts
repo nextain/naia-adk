@@ -260,6 +260,35 @@ export function appendDecisionAudit(root: string, entry: DecisionAuditEntry): vo
   appendAuditLog(root, entry)
 }
 
+/**
+ * 감사 로그가 지금 쓸 수 있는지 미리 확인한다(fail closed).
+ * 대상 경로가 디렉터리이거나 쓸 수 없으면 503으로 던진다.
+ * 메신저 승인 해결은 이 검사를 먼저 통과해야 커밋된다: 검사를
+ * 통과하지 못하면 `decideApproval`을 부르지 않는다.
+ */
+export function assertDecisionAuditWritable(root: string): void {
+  const file = decisionsAuditPath(root)
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+  } catch {
+    fail("Audit log unavailable", 503)
+  }
+  try {
+    fs.accessSync(path.dirname(file), fs.constants.W_OK)
+    const existing = fs.existsSync(file) ? fs.statSync(file) : null
+    if (existing && !existing.isFile()) fail("Audit log unavailable", 503)
+    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600)
+    try {
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch (error: any) {
+    if (error?.statusCode === 503) throw error
+    fail("Audit log unavailable", 503)
+  }
+}
+
 /** 메신저 승인 메시지에서 감사 기록 항목을 만든다(portal-messenger와 공유). */
 export function messengerApprovalAuditEntry(params: {
   messageId: string

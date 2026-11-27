@@ -133,6 +133,27 @@ describe('messenger REST',()=>{
   expect(retained[0]).toMatchObject({reactions:[],approval:null})
   expect((await app.inject({method:'POST',url:url+'/approvals/'+message.id,headers,payload:{decision:'approve'}})).statusCode).toBe(400)
  })
+ it('fails closed with 5xx when the permanent audit log is unavailable, without committing',async()=>{
+  const {app,headers,agent,url,post,root}=await fixture()
+  const form='1. 제목: [배포] 조치\n2. 요약: 시험\n3. 문서: https://dashboard.example.com/d/test\n4. 승인 코드\nPLAN-ABC123 STEP-DEF456'
+  const message=(await post(form,agent as any)).json()
+  const auditFile=path.join(root,'.agents','work','state','decisions-audit.jsonl')
+  fs.mkdirSync(path.dirname(auditFile),{recursive:true})
+  // 감사 로그 자리에 디렉터리를 두어 쓰기를 막는다.
+  fs.mkdirSync(auditFile)
+  try {
+    const blocked=await app.inject({method:'POST',url:url+'/approvals/'+message.id,headers,payload:{decision:'reject'}})
+    expect(blocked.statusCode).toBe(503)
+    expect(blocked.json()).toEqual({ error: 'Audit log unavailable' })
+  } finally {
+    fs.rmdirSync(auditFile)
+  }
+  // 막힌 동안 해결이 커밋되지 않았으므로 같은 결정이 그대로 200으로 끝난다.
+  const decided=await app.inject({method:'POST',url:url+'/approvals/'+message.id,headers,payload:{decision:'reject'}})
+  expect(decided.statusCode).toBe(200)
+  expect(decided.json().approval.status).toBe('rejected')
+  expect(fs.readFileSync(auditFile,'utf-8')).toContain(message.id)
+ })
  it('binds uploaded attachment ids to a message and prevents stealing an unbound upload',async()=>{
   const {app,headers,url}=await fixture()
   const other={...headers,'x-ax-account-key':'other-human'}

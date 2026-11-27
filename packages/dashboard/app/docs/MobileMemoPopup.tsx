@@ -91,16 +91,21 @@ export function MobileMemoSheet({
       role="dialog"
       aria-modal="true"
       aria-label={t("docs.memo")}
-      className="print:hidden fixed inset-0 z-[70] flex items-start justify-center bg-black/50 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !submitting && Date.now() - openedAt > 500) onClose()
-      }}
+      className="print:hidden fixed inset-0 z-[70]"
     >
-      {/* 카드 안 탭은 배경 닫기로 새지 않게 막는다(터치 탭 가로채기 방지). */}
+      {/* 배경과 시트는 형제 요소로 둔다: 부모 래퍼의 클릭 판정이
+          모바일 확대 뷰포트에서 터치 탭을 가로채지 않게 한다. */}
       <div
-        className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+        data-testid="mobile-memo-backdrop"
+        aria-hidden="true"
+        onClick={() => {
+          if (!submitting && Date.now() - openedAt > 500) onClose()
+        }}
+        className="absolute inset-0 z-40 bg-black/50"
+      />
+      <div className="absolute inset-0 z-50 flex items-start justify-center p-2 pt-[max(0.5rem,env(safe-area-inset-top))] pointer-events-none">
+        {/* 시트는 85dvh 안에 스크롤되게 두어 저장 단추가 390px에서도 잘리지 않는다. */}
+        <div className="pointer-events-auto w-full max-w-lg max-h-[85dvh] overflow-y-auto rounded-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-white">{t("docs.memo")}</span>
           <button
@@ -146,13 +151,14 @@ export function MobileMemoSheet({
                 onClick={handleSave}
                 disabled={submitting || !body.trim()}
                 style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
-                className="relative z-10 pointer-events-auto px-4 py-2 rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50 select-none"
+                className="px-4 py-2 rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50 select-none"
               >
                 {submitting ? t("common.saving") : t("common.save")}
               </button>
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   )

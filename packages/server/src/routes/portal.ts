@@ -1984,6 +1984,13 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         return reply.code(404).send({ error: "File not found or not markdown" })
       }
 
+      // 폴더 허용 목록을 오버레이 조회·ETag 비교보다 먼저 확인한다.
+      // 허용되지 않은 폴더는 오버레이 유무와 baseHash 일치 여부와
+      // 무관하게 항상 403으로 거절한다(ETag 누출 409 방지).
+      if (!matchingAllowedDir(source, normPath)) {
+        return reply.code(403).send({ error: "Forbidden" })
+      }
+
       // 오버레이 저장소가 없으면 쓰기를 절대 200으로 속이지 않는다.
       const store = overlayStore
       if (store === null) {
@@ -2025,6 +2032,19 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       // 읽기 전용 체크아웃(EROFS/EACCES/EPERM)에서는 git 쓰기 대신 오버레이에만 저장한다.
       try {
         return await withDocWriteLock(realPath, async () => {
+        // 경로 및 허용 폴더 검사를 오버레이 조회·ETag 비교보다 먼저 한다.
+        // 허용되지 않은 폴더는 항상 403으로 거절한다(ETag 누출 409 방지).
+        const allowedDir = matchingAllowedDir(source, normPath)
+        if (!allowedDir) return reply.code(403).send({ error: "Forbidden" })
+
+        let realAllowedDir: string
+        let realBaseDir: string
+        try {
+          realAllowedDir = fs.realpathSync.native(allowedDir)
+          realBaseDir = fs.realpathSync.native(source.baseDir)
+        } catch {
+          return reply.code(404).send({ error: "Document not found" })
+        }
         // 오버레이가 있으면 잠금 안에서 다시 견준다 (동시 PUT 충돌 보호).
         // 엄격한 null 비교: 빈 문자열 ""도 유효한 오버레이 본문이다.
         let overlayNow: string | null = null
@@ -2040,18 +2060,6 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           overlayBase = overlayNow
         } else {
           overlayBase = null
-        }
-        // 경로 및 허용 폴더 검사
-        const allowedDir = matchingAllowedDir(source, normPath)
-        if (!allowedDir) return reply.code(404).send({ error: "Document not found" })
-
-        let realAllowedDir: string
-        let realBaseDir: string
-        try {
-          realAllowedDir = fs.realpathSync.native(allowedDir)
-          realBaseDir = fs.realpathSync.native(source.baseDir)
-        } catch {
-          return reply.code(404).send({ error: "Document not found" })
         }
 
         if (!isInside(realPath, realAllowedDir)) {
@@ -2125,12 +2133,50 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             return reply.code(400).send({ error: "Content exceeds 2MB limit" })
           }
 
+          // SQLite 오버레이를 git 체크아웃 쓰기보다 먼저 커밋한다(단일
+          // BEGIN IMMEDIATE 트랜잭션: CAS + 리비전 + 현재 행 + 이력).
+          // CAS 충돌(409)이나 저장소 오류(500)는 체크아웃을 건드리지 않고 거절한다.
+          let overlayUpdatedAt: string
+          try {
+            const entry = store.put({
+              source: sourceId,
+              path: normPath,
+              content: finalContent,
+              updatedBy: dashboardActor(req),
+              baseGitSha: cleanBaseHash,
+              expectedBaseHash: overlayBase !== null ? cleanBaseHash : null,
+            })
+            overlayUpdatedAt = entry.updatedAt
+          } catch (err: any) {
+            if (err?.statusCode === 409) {
+              return reply.code(409).send({ error: "changed" })
+            }
+            return reply.code(500).send({ error: "Overlay unavailable" })
+          }
+
+          const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
+          const overlaySuccess = () =>
+            reply
+              .header("ETag", newHash)
+              .header("X-Doc-Source", "overlay")
+              .header("X-Overlay-Updated-At", overlayUpdatedAt)
+              .send({ ok: true, sha256: newHash })
+
+          // 오버레이가 이미 커밋됐으므로 체크아웃 쓰기는 선택 사항이다.
           const targetDir = path.dirname(realPath)
           const tempPath = path.join(
             targetDir,
             `.tmp-${path.basename(realPath)}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
           )
-          fs.writeFileSync(tempPath, finalBuf)
+          try {
+            fs.writeFileSync(tempPath, finalBuf)
+          } catch (err: any) {
+            // 읽기 전용 체크아웃(EACCES/EROFS/EPERM): 오버레이 성공을 그대로 돌려준다.
+            if (err?.code === "EACCES" || err?.code === "EROFS" || err?.code === "EPERM") {
+              return overlaySuccess()
+            }
+            throw err
+          }
 
           let renameCompleted = false
           try {
@@ -2206,32 +2252,13 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             fs.renameSync(tempPath, realPath)
             renameCompleted = true
 
-            // git 쓰기가 끝났으니 오버레이에도 같은 리비전을 남긴다.
-            // CAS 기대값으로 잠금 밖 경합까지 막고, 실패는 절대 삼키지 않는다.
-            let overlayUpdatedAt: string
-            try {
-              const entry = store.put({
-                source: sourceId,
-                path: normPath,
-                content: finalContent,
-                updatedBy: dashboardActor(req),
-                baseGitSha: cleanBaseHash,
-                expectedBaseHash: overlayBase !== null ? cleanBaseHash : null,
-              })
-              overlayUpdatedAt = entry.updatedAt
-            } catch (err: any) {
-              if (err?.statusCode === 409) {
-                return reply.code(409).send({ error: "changed" })
-              }
-              return reply.code(500).send({ error: "Overlay unavailable" })
+            return overlaySuccess()
+          } catch (err: any) {
+            // rename 단계 읽기 전용: 오버레이는 이미 커밋됐으므로 성공으로 돌려준다.
+            if (!renameCompleted && (err?.code === "EACCES" || err?.code === "EROFS" || err?.code === "EPERM")) {
+              return overlaySuccess()
             }
-
-            const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
-            return reply
-              .header("ETag", newHash)
-              .header("X-Doc-Source", "overlay")
-              .header("X-Overlay-Updated-At", overlayUpdatedAt)
-              .send({ ok: true, sha256: newHash })
+            throw err
           } finally {
             if (!renameCompleted) {
               try {
@@ -2251,9 +2278,11 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         // 읽기 전용 체크아웃: 잠금 안에서 경로·폴더 경계를 다시 확인하고,
         // 오버레이 우선 현재 본문과 baseHash를 견준 뒤 오버레이에만 저장한다.
         // 잠금 밖 평범한 읽기나 경계 없는 되돌림은 절대 쓰지 않는다.
+        // 폴더 허용 목록은 오버레이 조회보다 먼저 확인하고(403),
+        // O_NOFOLLOW 기술자·정규 파일 검사는 오버레이 행이 있어도 항상 수행한다.
         return await withDocWriteLock(realPath, async () => {
           const allowedDir = matchingAllowedDir(source, normPath)
-          if (!allowedDir) return reply.code(404).send({ error: "Document not found" })
+          if (!allowedDir) return reply.code(403).send({ error: "Forbidden" })
           let realAllowedDir: string
           let realBaseDir: string
           try {
@@ -2277,47 +2306,45 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           if (path.extname(freshReal).toLowerCase() !== ".md") {
             return reply.code(404).send({ error: "Document not found" })
           }
+          // 오버레이 행이 있어도 기술자 검사를 건너뛰지 않는다.
+          let fd: number
+          try {
+            fd = fs.openSync(freshReal, OPEN_READ_FLAGS)
+          } catch (openErr: any) {
+            if (openErr?.code === "ELOOP") return reply.code(409).send({ error: "changed" })
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          let fdContent: string
+          try {
+            const stat = fs.fstatSync(fd)
+            if (!stat.isFile() || stat.nlink > 1) {
+              return reply.code(404).send({ error: "Document not found" })
+            }
+            if (stat.size > MAX_DOC_BYTES) {
+              return reply.code(409).send({ error: "changed" })
+            }
+            const buf = Buffer.alloc(stat.size)
+            let totalRead = 0
+            while (totalRead < stat.size) {
+              const n = fs.readSync(fd, buf, totalRead, stat.size - totalRead, totalRead)
+              if (n === 0) break
+              totalRead += n
+            }
+            fdContent = buf.subarray(0, totalRead).toString("utf-8")
+          } catch {
+            return reply.code(404).send({ error: "Document not found" })
+          } finally {
+            try {
+              fs.closeSync(fd)
+            } catch {}
+          }
           let overlayNow: string | null = null
           try {
             overlayNow = isValidOverlaySource(sourceId) ? (store.get(sourceId, normPath)?.content ?? null) : null
           } catch {
             return reply.code(503).send({ error: "Overlay unavailable" })
           }
-          let currentContent: string
-          if (overlayNow !== null) {
-            currentContent = overlayNow
-          } else {
-            let fd: number
-            try {
-              fd = fs.openSync(freshReal, OPEN_READ_FLAGS)
-            } catch (openErr: any) {
-              if (openErr?.code === "ELOOP") return reply.code(409).send({ error: "changed" })
-              return reply.code(404).send({ error: "Document not found" })
-            }
-            try {
-              const stat = fs.fstatSync(fd)
-              if (!stat.isFile() || stat.nlink > 1) {
-                return reply.code(404).send({ error: "Document not found" })
-              }
-              if (stat.size > MAX_DOC_BYTES) {
-                return reply.code(409).send({ error: "changed" })
-              }
-              const buf = Buffer.alloc(stat.size)
-              let totalRead = 0
-              while (totalRead < stat.size) {
-                const n = fs.readSync(fd, buf, totalRead, stat.size - totalRead, totalRead)
-                if (n === 0) break
-                totalRead += n
-              }
-              currentContent = buf.subarray(0, totalRead).toString("utf-8")
-            } catch {
-              return reply.code(404).send({ error: "Document not found" })
-            } finally {
-              try {
-                fs.closeSync(fd)
-              } catch {}
-            }
-          }
+          const currentContent: string = overlayNow !== null ? overlayNow : fdContent
           const currentHash = crypto.createHash("sha256").update(currentContent, "utf-8").digest("hex")
           if (currentHash !== cleanBaseHash) {
             return reply.code(409).send({ error: "changed" })
