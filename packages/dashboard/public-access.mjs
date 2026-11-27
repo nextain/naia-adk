@@ -166,8 +166,19 @@ const NEXT_STATIC_RE = /^\/_next\/static\/[A-Za-z0-9_.~\-/]+$/
  * 공개 모드에서 열 경로인지.
  * 돌려주는 값: "redirect-docs" | "next" | "api" | "short" | null(404)
  */
+/**
+ * 결재/확인 보관함은 공개 모드에서 절대 열지 않는다.
+ * GET·POST 가리지 않고 403으로 막는다(API 로 넘기지 않는다).
+ */
+export function isBlockedDecisionsPath(rawPathname) {
+  if (typeof rawPathname !== "string") return false
+  const lower = rawPathname.toLowerCase()
+  return lower === "/api/portal/decisions" || lower.startsWith("/api/portal/decisions/")
+}
+
 export function classifyPublicPath(rawPathname) {
   if (isUnsafePublicPath(rawPathname)) return null
+  if (isBlockedDecisionsPath(rawPathname)) return null
   if (rawPathname === "/") return "redirect-docs"
   if (rawPathname === "/docs" || rawPathname === "/docs/") return "next"
   if (rawPathname.startsWith("/_next/static/")) return NEXT_STATIC_RE.test(rawPathname) ? "next" : null

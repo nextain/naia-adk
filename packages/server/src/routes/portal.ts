@@ -11,6 +11,7 @@ import {
 } from "../view-folders.js"
 import {
   isValidNoteId,
+  isValidNoteAwaiting,
   generateNoteId,
   readNote,
   saveNote,
@@ -20,6 +21,7 @@ import {
   validateNoteLengths,
   getNoteFilePath,
   type DocNote,
+  type NoteAwaiting,
 } from "../notes.js"
 import {
   readFavorites,
@@ -671,7 +673,7 @@ export function resolveSourceBase(
 }
 
 // 문서가 속한 보여 주기 폴더(ADK 문서는 docs 전체)를 돌려준다. 없으면 null.
-function matchingAllowedDir(source: ResolvedSource, normPath: string): string | null {
+export function matchingAllowedDir(source: ResolvedSource, normPath: string): string | null {
   if (source.allowedPrefixes === null) return source.baseDir
   for (const prefix of source.allowedPrefixes) {
     const cleanPrefix = prefix.replace(/\\/g, "/").replace(/\/+$/, "")
@@ -1131,11 +1133,26 @@ export function isSourceAllowedForUntrusted(sourceId: string, isTrusted: boolean
   return true
 }
 
+/**
+ * 공개 모드 프록시가 붙인 표시. 대시보드는 공개 모드에서 검증한 메일만
+ * `x-naia-user-email` 로 넘기고, 내부 모드에서는 이 머리글을 항상 지운다.
+ * 루프백 비밀 값만으로는 이 표시를 우회할 수 없다: decisions 보관함은
+ * 이 표시가 있으면 403.
+ */
+export function isPublicProxyRequest(req: FastifyRequest): boolean {
+  const raw = req.headers["x-naia-user-email"]
+  const first = Array.isArray(raw) ? raw[0] : raw
+  return typeof first === "string" && first.trim() !== ""
+}
+
 export interface PortalOptions {
   beforeRename?: () => Promise<void> | void
   /** Messenger state shared with portal-messenger; off when disabled or its initialization failed. */
   messengerStatus?: { enabled: boolean }
 }
+
+// 로그인 게이트가 확인한 사람 계정 키 모양(메신저 게이트와 같은 규칙).
+const VERIFIED_ACCOUNT_KEY_RE = /^[a-z][a-z0-9-]{1,31}$/
 
 const docWriteLocks = new Map<string, Promise<void>>()
 
@@ -1164,11 +1181,16 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
   // Non-git AX doc overlay: dashboard edits survive `git reset --hard` and
   // read-only mounts. Reads prefer the overlay; writes record it.
+  // 저장소가 준비되지 않으면 쓰기는 절대 200으로 속이지 않는다(fail closed).
+  const overlayConfigured =
+    typeof process.env.NAIA_AX_DOC_STORE === "string" && process.env.NAIA_AX_DOC_STORE.trim() !== ""
   let overlayStore: DocOverlayStore | null = null
+  let overlayInitError: string | null = null
   try {
     overlayStore = new DocOverlayStore(overlayDbPath(root))
   } catch (error) {
-    app.log.warn({ error: String(error) }, "Doc overlay store unavailable; doc writes stay git-only")
+    overlayInitError = String((error as any)?.message ?? error)
+    app.log.warn({ error: overlayInitError }, "Doc overlay store unavailable; doc writes fail closed")
     overlayStore = null
   }
   app.addHook("onClose", async () => {
@@ -1187,6 +1209,18 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       } catch {}
     }
     return "dashboard"
+  }
+
+  // 메신저 승인 게이트와 같은 사람 신원 확인. 대시보드는 로그인 게이트를
+  // 통과한 요청에만 이 표시와 계정 키를 붙여 넘긴다. 표시 이름·합성 값은
+  // 신원 근거가 아니라서 여기서 읽지 않는다.
+  const verifiedMessengerAccount = (req: FastifyRequest): string | null => {
+    const mark = req.headers["x-naia-gate-verified"]
+    if (mark !== "1") return null
+    const raw = req.headers["x-ax-account-key"]
+    const account = Array.isArray(raw) ? raw[0] : raw
+    if (typeof account !== "string" || !VERIFIED_ACCOUNT_KEY_RE.test(account)) return null
+    return account
   }
 
   // GET /api/portal
@@ -1515,26 +1549,36 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       return reply.code(404).send({ error: "File not found or not markdown" })
     }
 
-    // Overlay wins over the git checkout baseline, so a periodic
-    // `git reset --hard` never loses dashboard edits.
-    try {
-      const overlayHit = overlayStore && isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
-      if (overlayHit) {
-        return reply
-          .header("X-Content-Type-Options", "nosniff")
-          .header("ETag", crypto.createHash("sha256").update(overlayHit.content, "utf-8").digest("hex"))
-          .header("X-Doc-Source", "overlay")
-          .header("X-Overlay-Updated-At", overlayHit.updatedAt)
-          .type("text/markdown; charset=utf-8")
-          .send(overlayHit.content)
-      }
-    } catch {
-      // Fall through to the git baseline.
-    }
-
+    // 출처·폴더 경계를 먼저 확인한다. 출처가 사라지거나 허용 폴더가
+    // 좁혀지면 낡은 오버레이 행을 절대 내놓지 않는다(403/404).
     const source = resolveSourceBase(root, sourceId, getFolderCtx())
     if (!source) {
       return reply.code(404).send({ error: "Source not found" })
+    }
+    if (!matchingAllowedDir(source, normPath)) {
+      return reply.code(404).send({ error: "Document not found" })
+    }
+
+    // Overlay wins over the git checkout baseline, so a periodic
+    // `git reset --hard` never loses dashboard edits. 존재 검사는 엄격한
+    // null 비교로 한다(빈 문자열 ""도 유효한 오버레이 본문이다).
+    if (overlayStore !== null) {
+      try {
+        const overlayHit = isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
+        if (overlayHit !== null) {
+          return reply
+            .header("X-Content-Type-Options", "nosniff")
+            .header("ETag", crypto.createHash("sha256").update(overlayHit.content, "utf-8").digest("hex"))
+            .header("X-Doc-Source", "overlay")
+            .header("X-Overlay-Updated-At", overlayHit.updatedAt)
+            .type("text/markdown; charset=utf-8")
+            .send(overlayHit.content)
+        }
+      } catch {
+        return reply.code(503).send({ error: "Overlay unavailable" })
+      }
+    } else if (overlayConfigured) {
+      return reply.code(503).send({ error: "Overlay unavailable" })
     }
 
     const result = resolveSecureFile(source, normPath, { keepFdOpen: true })
@@ -1940,6 +1984,12 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         return reply.code(404).send({ error: "File not found or not markdown" })
       }
 
+      // 오버레이 저장소가 없으면 쓰기를 절대 200으로 속이지 않는다.
+      const store = overlayStore
+      if (store === null) {
+        return reply.code(503).send({ error: "Overlay unavailable" })
+      }
+
       const absPath = path.resolve(source.baseDir, normPath)
       if (!fs.existsSync(absPath)) {
         return reply.code(404).send({ error: "Document not found" })
@@ -1957,17 +2007,18 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       // 오버레이 우선 베이스: 대시보드는 오버레이 우선으로 읽으므로, 오버레이
       // 리비전이 있으면 baseHash는 그 내용을 가리킨다. git 체크아웃이 리셋돼도
       // baseHash가 오버레이와 맞으면 409가 아니라 저장으로 간다.
+      // 존재 검사는 엄격한 null 비교로 한다(빈 문자열 ""도 유효한 본문이다).
       let overlayBase: string | null = null
       try {
-        const existing = overlayStore && isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
-        if (existing) {
+        const existing = isValidOverlaySource(sourceId) ? store.get(sourceId, normPath) : null
+        if (existing !== null) {
           if (crypto.createHash("sha256").update(existing.content, "utf-8").digest("hex") !== cleanBaseHash) {
             return reply.code(409).send({ error: "changed" })
           }
           overlayBase = existing.content
         }
       } catch {
-        overlayBase = null
+        return reply.code(503).send({ error: "Overlay unavailable" })
       }
 
       // 프로세스 안 잠금 (realpath 하나 단위 Promise 사슬)이 첫 열기부터 rename까지 감싼다.
@@ -1975,17 +2026,20 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       try {
         return await withDocWriteLock(realPath, async () => {
         // 오버레이가 있으면 잠금 안에서 다시 견준다 (동시 PUT 충돌 보호).
-        if (overlayBase) {
-          let fresh: string | null = null
-          try {
-            fresh = overlayStore?.get(sourceId, normPath)?.content ?? null
-          } catch {
-            fresh = null
-          }
-          if (!fresh || crypto.createHash("sha256").update(fresh, "utf-8").digest("hex") !== cleanBaseHash) {
+        // 엄격한 null 비교: 빈 문자열 ""도 유효한 오버레이 본문이다.
+        let overlayNow: string | null = null
+        try {
+          overlayNow = isValidOverlaySource(sourceId) ? (store.get(sourceId, normPath)?.content ?? null) : null
+        } catch {
+          return reply.code(503).send({ error: "Overlay unavailable" })
+        }
+        if (overlayNow !== null) {
+          if (crypto.createHash("sha256").update(overlayNow, "utf-8").digest("hex") !== cleanBaseHash) {
             return reply.code(409).send({ error: "changed" })
           }
-          overlayBase = fresh
+          overlayBase = overlayNow
+        } else {
+          overlayBase = null
         }
         // 경로 및 허용 폴더 검사
         const allowedDir = matchingAllowedDir(source, normPath)
@@ -2055,7 +2109,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           const currentHash = crypto.createHash("sha256").update(initialContentBuf).digest("hex")
 
           // 오버레이가 baseHash와 맞았으면 git 쪽 해시는 리셋으로 어긋나 있을 수 있어 견주지 않는다.
-          if (!overlayBase && currentHash !== cleanBaseHash) {
+          if (overlayBase === null && currentHash !== cleanBaseHash) {
             return reply.code(409).send({ error: "changed" })
           }
 
@@ -2119,7 +2173,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             }
 
             const reHash = crypto.createHash("sha256").update(reReadBuf.subarray(0, reReadTotal)).digest("hex")
-            if (!overlayBase && reHash !== cleanBaseHash) {
+            if (overlayBase === null && reHash !== cleanBaseHash) {
               return reply.code(409).send({ error: "changed" })
             }
 
@@ -2152,19 +2206,32 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             fs.renameSync(tempPath, realPath)
             renameCompleted = true
 
-            // git 쓰기가 끝났으니 오버레이에도 같은 리비전을 남긴다 (best-effort).
+            // git 쓰기가 끝났으니 오버레이에도 같은 리비전을 남긴다.
+            // CAS 기대값으로 잠금 밖 경합까지 막고, 실패는 절대 삼키지 않는다.
+            let overlayUpdatedAt: string
             try {
-              overlayStore?.put({
+              const entry = store.put({
                 source: sourceId,
                 path: normPath,
                 content: finalContent,
                 updatedBy: dashboardActor(req),
                 baseGitSha: cleanBaseHash,
+                expectedBaseHash: overlayBase !== null ? cleanBaseHash : null,
               })
-            } catch {}
+              overlayUpdatedAt = entry.updatedAt
+            } catch (err: any) {
+              if (err?.statusCode === 409) {
+                return reply.code(409).send({ error: "changed" })
+              }
+              return reply.code(500).send({ error: "Overlay unavailable" })
+            }
 
             const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
-            return reply.header("ETag", newHash).send({ ok: true, sha256: newHash })
+            return reply
+              .header("ETag", newHash)
+              .header("X-Doc-Source", "overlay")
+              .header("X-Overlay-Updated-At", overlayUpdatedAt)
+              .send({ ok: true, sha256: newHash })
           } finally {
             if (!renameCompleted) {
               try {
@@ -2180,33 +2247,109 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         })
       } catch (err: any) {
         const readOnly = err && (err.code === "EROFS" || err.code === "EACCES" || err.code === "EPERM")
-        if (!readOnly || !overlayStore) throw err
-        // 읽기 전용 체크아웃: 오버레이 우선 현재 본문과 baseHash를 견주고 오버레이에만 저장한다.
-        let currentContent: string | null = null
-        try {
-          const overlayHit = isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
-          currentContent = overlayHit ? overlayHit.content : fs.readFileSync(realPath, "utf-8")
-        } catch {
-          return reply.code(404).send({ error: "Document not found" })
-        }
-        const currentHash = crypto.createHash("sha256").update(currentContent, "utf-8").digest("hex")
-        if (currentHash !== cleanBaseHash) {
-          return reply.code(409).send({ error: "changed" })
-        }
-        const isCRLF = currentContent.includes("\r\n")
-        const fallbackContent = isCRLF ? bodyContent.replace(/\r?\n/g, "\r\n") : bodyContent.replace(/\r\n/g, "\n")
-        if (Buffer.byteLength(fallbackContent, "utf-8") > MAX_DOC_BYTES) {
-          return reply.code(400).send({ error: "Content exceeds 2MB limit" })
-        }
-        overlayStore.put({
-          source: sourceId,
-          path: normPath,
-          content: fallbackContent,
-          updatedBy: dashboardActor(req),
-          baseGitSha: cleanBaseHash,
+        if (!readOnly) throw err
+        // 읽기 전용 체크아웃: 잠금 안에서 경로·폴더 경계를 다시 확인하고,
+        // 오버레이 우선 현재 본문과 baseHash를 견준 뒤 오버레이에만 저장한다.
+        // 잠금 밖 평범한 읽기나 경계 없는 되돌림은 절대 쓰지 않는다.
+        return await withDocWriteLock(realPath, async () => {
+          const allowedDir = matchingAllowedDir(source, normPath)
+          if (!allowedDir) return reply.code(404).send({ error: "Document not found" })
+          let realAllowedDir: string
+          let realBaseDir: string
+          try {
+            realAllowedDir = fs.realpathSync.native(allowedDir)
+            realBaseDir = fs.realpathSync.native(source.baseDir)
+          } catch {
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          let freshReal: string
+          try {
+            freshReal = fs.realpathSync.native(absPath)
+          } catch {
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          if (!isInside(freshReal, realAllowedDir)) {
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          if (isHiddenPath(path.relative(realBaseDir, freshReal))) {
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          if (path.extname(freshReal).toLowerCase() !== ".md") {
+            return reply.code(404).send({ error: "Document not found" })
+          }
+          let overlayNow: string | null = null
+          try {
+            overlayNow = isValidOverlaySource(sourceId) ? (store.get(sourceId, normPath)?.content ?? null) : null
+          } catch {
+            return reply.code(503).send({ error: "Overlay unavailable" })
+          }
+          let currentContent: string
+          if (overlayNow !== null) {
+            currentContent = overlayNow
+          } else {
+            let fd: number
+            try {
+              fd = fs.openSync(freshReal, OPEN_READ_FLAGS)
+            } catch (openErr: any) {
+              if (openErr?.code === "ELOOP") return reply.code(409).send({ error: "changed" })
+              return reply.code(404).send({ error: "Document not found" })
+            }
+            try {
+              const stat = fs.fstatSync(fd)
+              if (!stat.isFile() || stat.nlink > 1) {
+                return reply.code(404).send({ error: "Document not found" })
+              }
+              if (stat.size > MAX_DOC_BYTES) {
+                return reply.code(409).send({ error: "changed" })
+              }
+              const buf = Buffer.alloc(stat.size)
+              let totalRead = 0
+              while (totalRead < stat.size) {
+                const n = fs.readSync(fd, buf, totalRead, stat.size - totalRead, totalRead)
+                if (n === 0) break
+                totalRead += n
+              }
+              currentContent = buf.subarray(0, totalRead).toString("utf-8")
+            } catch {
+              return reply.code(404).send({ error: "Document not found" })
+            } finally {
+              try {
+                fs.closeSync(fd)
+              } catch {}
+            }
+          }
+          const currentHash = crypto.createHash("sha256").update(currentContent, "utf-8").digest("hex")
+          if (currentHash !== cleanBaseHash) {
+            return reply.code(409).send({ error: "changed" })
+          }
+          const isCRLF = currentContent.includes("\r\n")
+          const fallbackContent = isCRLF ? bodyContent.replace(/\r?\n/g, "\r\n") : bodyContent.replace(/\r\n/g, "\n")
+          if (Buffer.byteLength(fallbackContent, "utf-8") > MAX_DOC_BYTES) {
+            return reply.code(400).send({ error: "Content exceeds 2MB limit" })
+          }
+          let updatedAt: string
+          try {
+            updatedAt = store.put({
+              source: sourceId,
+              path: normPath,
+              content: fallbackContent,
+              updatedBy: dashboardActor(req),
+              baseGitSha: cleanBaseHash,
+              expectedBaseHash: overlayNow !== null ? cleanBaseHash : null,
+            }).updatedAt
+          } catch (putErr: any) {
+            if (putErr?.statusCode === 409) {
+              return reply.code(409).send({ error: "changed" })
+            }
+            return reply.code(503).send({ error: "Overlay unavailable" })
+          }
+          const newHash = crypto.createHash("sha256").update(fallbackContent, "utf-8").digest("hex")
+          return reply
+            .header("ETag", newHash)
+            .header("X-Doc-Source", "overlay")
+            .header("X-Overlay-Updated-At", updatedAt)
+            .send({ ok: true, sha256: newHash })
         })
-        const newHash = crypto.createHash("sha256").update(fallbackContent, "utf-8").digest("hex")
-        return reply.header("ETag", newHash).header("X-Doc-Source", "overlay").send({ ok: true, sha256: newHash })
       }
     },
   )
@@ -2268,10 +2411,27 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       quote?: unknown
       body?: unknown
       reply?: unknown
+      awaiting?: unknown
+      authorKind?: unknown
     } | undefined
 
     if (!body || typeof body.source !== "string" || typeof body.path !== "string") {
       return reply.code(400).send({ error: "Invalid body: source and path are required strings" })
+    }
+
+    // 다음 차례: 명시한 값이 있으면 그대로, 없으면 작성 주체 기본값.
+    // 사람이 남긴 피드백은 담당 차례("agent"), 담당이 남긴 질문·요청은
+    // 사람 차례("human")가 기본이다.
+    let awaiting: NoteAwaiting
+    if (body.awaiting === undefined || body.awaiting === null) {
+      awaiting = body.authorKind === "agent" ? "human" : "agent"
+    } else if (isValidNoteAwaiting(body.awaiting)) {
+      awaiting = body.awaiting
+    } else {
+      return reply.code(400).send({ error: "Invalid body: awaiting must be 'human' or 'agent'" })
+    }
+    if (body.authorKind !== undefined && body.authorKind !== "human" && body.authorKind !== "agent") {
+      return reply.code(400).send({ error: "Invalid body: authorKind must be 'human' or 'agent'" })
     }
 
     const lengthCheck = validateNoteLengths({
@@ -2319,6 +2479,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       updatedAt: now,
       reply: null,
       resolvedAt: null,
+      awaiting,
     }
 
     const filePath = getNoteFilePath(root, noteId)
@@ -2355,10 +2516,15 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       status?: unknown
       reply?: unknown
       quote?: unknown
+      awaiting?: unknown
     } | undefined
 
     if (!body || typeof body !== "object") {
       return reply.code(400).send({ error: "Invalid request body" })
+    }
+
+    if (body.awaiting !== undefined && body.awaiting !== null && !isValidNoteAwaiting(body.awaiting)) {
+      return reply.code(400).send({ error: "Invalid body: awaiting must be 'human' or 'agent'" })
     }
 
     const lengthCheck = validateNoteLengths({
@@ -2404,6 +2570,10 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
         if (body.reply !== undefined) {
           existing.reply = body.reply === null ? null : (body.reply as string)
+        }
+
+        if (body.awaiting !== undefined) {
+          existing.awaiting = body.awaiting === null ? null : (body.awaiting as NoteAwaiting)
         }
 
         existing.updatedAt = new Date().toISOString()
@@ -2648,14 +2818,24 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
   })
 
   // GET /api/portal/docs — overlay entries: dashboard edits that survive git resets.
+  // 출처·폴더 경계 검증을 통과한 행만 내놓는다. 출처가 사라지거나 허용
+  // 폴더가 좁혀진 낡은 행은 버린다.
   app.get("/docs", async (req, reply) => {
     if (!isNewViewAllowed(req)) {
       return reply.code(403).send({ error: "Forbidden" })
     }
+    if (overlayStore === null) {
+      return reply.code(503).send({ error: "Overlay unavailable" })
+    }
     try {
-      return reply.send({ overlays: overlayStore?.list() ?? [] })
+      const rows = overlayStore.list()
+      const live = rows.filter((row) => {
+        const source = resolveSourceBase(root, row.source, getFolderCtx())
+        return source !== null && matchingAllowedDir(source, row.path) !== null
+      })
+      return reply.send({ overlays: live })
     } catch {
-      return reply.code(500).send({ error: "Overlay unavailable" })
+      return reply.code(503).send({ error: "Overlay unavailable" })
     }
   })
 
@@ -2665,24 +2845,44 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     if (!isNewViewAllowed(req)) {
       return reply.code(403).send({ error: "Forbidden" })
     }
+    if (isPublicProxyRequest(req)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
     const snapshot = await collectDecisions(root)
     return reply.header("cache-control", "no-store").send(snapshot)
   })
 
   // POST /api/portal/decisions/:id/resolve — confirm / reject / acknowledge.
+  // 승인 항목은 메신저 승인 게이트와 같은 검증을 거친다: 로그인 게이트가
+  // 확인한 계정 키(`x-ax-account-key` + `x-naia-gate-verified: 1`)만 사람
+  // 행위자로 믿고, 합성 `"dashboard"`·표시 이름은 절대 쓰지 않는다.
   app.post("/decisions/:id/resolve", async (req, reply) => {
     if (!checkWriteSecurity(req, reply, true)) {
       return
+    }
+    if (isPublicProxyRequest(req)) {
+      return reply.code(403).send({ error: "Forbidden" })
     }
     const { id } = req.params as { id: string }
     if (!id || typeof id !== "string" || id.length > 512) {
       return reply.code(400).send({ error: "Invalid id" })
     }
     const body = req.body as { action?: unknown; comment?: unknown } | undefined
+    let actor = dashboardActor(req)
+    let actorKind = "dashboard"
+    if (id.startsWith("approval:")) {
+      const verified = verifiedMessengerAccount(req)
+      if (!verified) {
+        return reply.code(401).send({ error: "Human identity required" })
+      }
+      actor = verified
+      actorKind = "human"
+    }
     try {
       const item = await resolveDecisionItem(root, id, {
         action: body?.action as "approve" | "reject" | "acknowledge",
-        actor: dashboardActor(req),
+        actor,
+        actorKind,
         via: "portal-decisions",
         comment: typeof body?.comment === "string" ? body.comment : undefined,
       })

@@ -17,7 +17,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { listNotes, readNote, saveNote } from "./notes.js"
+import { listNotes, noteAwaiting, readNote, saveNote } from "./notes.js"
 import { queryPortalWorkLedger } from "./work-ledger-portal.js"
 import { MessengerStore } from "./messenger-store.js"
 
@@ -185,8 +185,10 @@ function readNoteItems(root: string): { pending: DecisionItem[]; history: Decisi
       createdAt: note.createdAt ?? null,
       updatedAt: note.updatedAt ?? null,
     }
-    if (item.status === "pending") pending.push(item)
-    else history.push(item)
+    // 사람이 답할 차례(awaiting === "human")인 열린 메모만 보관함에 집계한다.
+    // 담당 차례(awaiting === "agent" 또는 없음)인 피드백은 문서 화면에만 둔다.
+    if (item.status === "resolved") history.push(item)
+    else if (noteAwaiting(note) === "human") pending.push(item)
   }
   return { pending, history }
 }
@@ -248,6 +250,59 @@ function appendAuditLog(root: string, entry: DecisionAuditEntry): void {
   const file = decisionsAuditPath(root)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf-8")
+}
+
+/**
+ * 메신저 쪽 해결을 영구 감사 기록에 비춘다. 메신저 DB가 나중에 없어져도
+ * `/api/portal/decisions` history는 이 기록으로 살아남는다.
+ */
+export function appendDecisionAudit(root: string, entry: DecisionAuditEntry): void {
+  appendAuditLog(root, entry)
+}
+
+/** 메신저 승인 메시지에서 감사 기록 항목을 만든다(portal-messenger와 공유). */
+export function messengerApprovalAuditEntry(params: {
+  messageId: string
+  body: string
+  planCode: string
+  stepCode: string
+  action: DecisionAction
+  outcome: DecisionStatus
+  actor: string
+  via: string
+  at?: string
+  comment?: string | null
+}): DecisionAuditEntry {
+  const titleMatch = String(params.body ?? "").match(/^1\.\s*제목:\s*(.+)$/m)
+  const title = oneLine((titleMatch ? titleMatch[1].trim() : String(params.body ?? "").split("\n").find(Boolean)) || params.messageId)
+  return {
+    at: params.at ?? new Date().toISOString(),
+    id: `approval:${params.messageId}`,
+    decisionId: `${params.planCode}/${params.stepCode}`,
+    kind: "approval",
+    action: params.action,
+    outcome: params.outcome,
+    actor: params.actor,
+    via: params.via,
+    title,
+    comment: params.comment ?? null,
+  }
+}
+
+// 메신저 게이트의 사람 신원 규칙과 같은 모양: 로그인 게이트가 확인한
+// 계정 키만 믿는다. 표시 이름·합성 대체 값은 신원이 아니다.
+const VERIFIED_ACCOUNT_KEY_RE = /^[a-z][a-z0-9-]{1,31}$/
+
+/**
+ * 승인 항목 해결용 사람 행위자를 검증한다. 게이트를 거치지 않은
+ * 호출(비어 있음·합성 `"dashboard"`·형식 오류)은 401/403으로 거절한다.
+ */
+export function verifiedMessengerActorName(actor: unknown, kind?: unknown): string {
+  if (kind !== undefined && kind !== "human") fail("Human approval required", 403)
+  const name = typeof actor === "string" ? actor.trim() : ""
+  if (!name) fail("Human identity required", 401)
+  if (name === "dashboard" || !VERIFIED_ACCOUNT_KEY_RE.test(name)) fail("Unverified actor", 403)
+  return name
 }
 
 function auditOutcomeToHistory(entry: DecisionAuditEntry): DecisionItem {
@@ -318,6 +373,8 @@ export async function collectDecisions(
 export interface ResolveOptions {
   action: DecisionAction
   actor?: string
+  /** 승인 항목은 "human"만 받는다(게이트 확인 계정). 다른 값은 403. */
+  actorKind?: string
   via?: string
   comment?: string
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>
@@ -353,6 +410,8 @@ export async function resolveDecisionItem(
   if (id.startsWith("approval:")) {
     const messageId = id.slice("approval:".length)
     if (!messageId) fail("Unknown decision item", 404)
+    // 메신저 승인 게이트와 같은 검증: 로그인 게이트 확인 계정만 사람 행위자다.
+    const messengerActor = verifiedMessengerActorName(opts.actor, opts.actorKind ?? "human")
     const env = opts.env ?? process.env
     const dbPath = messengerDbPath(root, env)
     if (!fs.existsSync(dbPath)) fail("Messenger unavailable", 503)
@@ -360,10 +419,18 @@ export async function resolveDecisionItem(
     try {
       const before = store.db.prepare("SELECT status, plan_code, step_code FROM approvals WHERE message_id=?").get(messageId) as any
       if (!before) fail("Unknown decision item", 404)
+      if (action === "acknowledge" && before.status === "pending") {
+        // 보류 중인 승인은 approve/reject로만 닫는다. acknowledge로는
+        // 보관함에서 숨기면서 메신저 쪽이 pending으로 남는 일이 없게 한다.
+        fail("Pending approvals require approve or reject", 400)
+      }
       if (action === "acknowledge") {
-        // No approval-code write; the audit log carries the acknowledgement.
+        // 이미 끝난 승인에 대한 확인: 승인 코드 쓰기 없이 감사 기록만 남긴다.
       } else if (before.status === "pending") {
-        store.decideApproval(messageId, { id: actor, kind: "human" }, action)
+        // 메신저 쪽 해결과 같은 쓰기 + 같은 SSE 방출(DB 사건 기록).
+        const decided = store.decideApproval(messageId, { id: messengerActor, kind: "human" }, action)
+        store.addEvent("approval", decided.message)
+        if (decided.codeMessage) store.addEvent("message", decided.codeMessage)
       }
       const after = store.db.prepare(
         `SELECT a.status, a.decided_by, a.decided_at, a.plan_code, a.step_code, m.channel_id, m.author_id, m.body, m.created_at
@@ -381,12 +448,12 @@ export async function resolveDecisionItem(
         source: `messenger:${String(after.channel_id ?? "")}`,
         path: null,
         url: null,
-        actor,
+        actor: messengerActor,
         method: "approval-code",
         createdAt: msToIso(after.created_at),
         updatedAt: after.decided_at ? msToIso(after.decided_at) : at,
       }
-      appendAuditLog(root, { at, id, decisionId: item.decisionId, kind: "approval", action, outcome: item.status, actor, via, title, comment })
+      appendAuditLog(root, { at, id, decisionId: item.decisionId, kind: "approval", action, outcome: item.status, actor: messengerActor, via, title, comment })
       return item
     } finally {
       try {

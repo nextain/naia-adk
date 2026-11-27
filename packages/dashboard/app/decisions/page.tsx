@@ -94,11 +94,6 @@ function DecisionsRow({
             {item.kind === "work" ? t("dec.viewWork") : t("dec.openInDocs")}
           </Link>
         )}
-        {item.kind === "work" && (
-          <Link href="/work" className="text-xs text-blue-400 underline hover:text-blue-300">
-            {t("dec.viewWork")}
-          </Link>
-        )}
         {item.status === "pending" && (
           <span className="ml-auto flex items-center gap-1.5">
             {item.kind === "approval" ? (

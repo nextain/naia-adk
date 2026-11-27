@@ -110,7 +110,7 @@ export function decisionHref(item: DecisionItem): string | null {
     return `/docs?source=${encodeURIComponent(item.source)}&path=${encodeURIComponent(item.path)}`
   }
   if (item.kind === "work") {
-    return `/decisions?item=${encodeURIComponent(item.id)}`
+    return "/work"
   }
   return null
 }

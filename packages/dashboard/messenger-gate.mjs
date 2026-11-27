@@ -24,6 +24,19 @@ function isMessengerApiPath(url) {
   return pathname === MESSENGER_API_PATH || pathname.startsWith(`${MESSENGER_API_PATH}/`) || pathname === "/api/ax-messenger" || pathname.startsWith("/api/ax-messenger/") || pathname === "/ax/messenger" || pathname.startsWith("/ax/messenger/")
 }
 
+// 통합 결재 보관함 해결(POST /api/portal/decisions/:id/resolve)은 메신저
+// 승인과 같은 사람 신원 게이트를 거친다. 앞단 게이트 비밀·계정 머리글을
+// 확인한 요청에만 계정·표시 이름과 검증 표시를 넘긴다.
+function isDecisionsPath(url) {
+  if (typeof url !== "string") return false
+  const pathname = url.split("?")[0]
+  return pathname === "/api/portal/decisions" || pathname.startsWith("/api/portal/decisions/")
+}
+
+function isIdentityForwardPath(url) {
+  return isMessengerApiPath(url) || isDecisionsPath(url)
+}
+
 /**
  * 로그인 게이트가 넘긴 요청인지 확인한다(닫힌 쪽 기본값).
  * 비밀이 없거나, 믿는 출처가 아니거나, 비밀·계정 머리글이 맞지 않으면 사람 신원은 없다.
@@ -31,7 +44,7 @@ function isMessengerApiPath(url) {
  */
 export function verifyMessengerGate(req, env = process.env) {
   verifiedAccounts.delete(req)
-  if (!isMessengerApiPath(req?.url)) return false
+  if (!isIdentityForwardPath(req?.url)) return false
   const gateSecret = readGateSecret(env)
   if (!gateSecret) return false
   if (!isTrustedIdentityPeer(req.socket?.remoteAddress, env)) return false
@@ -89,7 +102,7 @@ export function isAllowedMessengerOrigin(
  * 표시 이름은 확인 때 읽은 값으로 다시 쓴다(앞단 게이트가 x-ax-user 를 덮어쓴다는 규약에 기댄다).
  */
 export function applyMessengerIdentity(outHeaders, req, env = process.env) {
-  if (!isMessengerApiPath(req?.url)) return
+  if (!isIdentityForwardPath(req?.url)) return
   const verified = verifiedAccounts.get(req)
   const noteHeader = typeof env?.NAIA_NOTE_USER_HEADER === "string" ? env.NAIA_NOTE_USER_HEADER.trim().toLowerCase() : ""
   for (const key of Object.keys(outHeaders)) {

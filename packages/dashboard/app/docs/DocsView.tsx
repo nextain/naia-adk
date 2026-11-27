@@ -426,10 +426,19 @@ export function DocsView({
   const activeSelection = selectionQuote !== null && selectionQuote !== undefined ? selectionQuote : localSelection
 
   // Left document tree collapse (persisted) + resizable widths.
+  // 초깃값은 결정적으로 둔다(React #418 하이드레이션 불일치 방지).
+  // 명시 저장소 prop이 있으면 같은 객체를 서버·클라이언트가 함께 보므로
+  // 동기 읽기여도 어긋나지 않는다. 기본 브라우저 저장소는 마운트 뒤에 읽는다.
   const [treeCollapsed, setTreeCollapsed] = useState<boolean>(() => {
     if (initialTreeCollapsed !== undefined) return initialTreeCollapsed
-    return parseStoredBoolean(getStoredItem(TREE_COLLAPSED_KEY, storage), false)
+    if (storage) return parseStoredBoolean(getStoredItem(TREE_COLLAPSED_KEY, storage), false)
+    return false
   })
+  useEffect(() => {
+    if (initialTreeCollapsed !== undefined || storage) return
+    setTreeCollapsed(parseStoredBoolean(getStoredItem(TREE_COLLAPSED_KEY, storage), false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const handleToggleTreeCollapsed = () => {
     const next = !treeCollapsed
     setTreeCollapsed(next)

@@ -4,6 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { MessengerStore, MAX_LIST_LIMIT, approvalDocWarning } from '../messenger-store.js'
+import { appendDecisionAudit, messengerApprovalAuditEntry } from '../decisions-service.js'
 import { MessengerWatch } from '../messenger-watch.js'
 import { validateAttachment, parseMultipartAttachment, MAX_ATTACHMENT_BYTES } from '../messenger-attachments.js'
 import { messengerRoles } from '../messenger-roles.js'
@@ -181,6 +182,23 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     const result = store.decideApproval(id(req),who,decision)
     publish('approval',result.message)
     if (result.codeMessage) publish('message',result.codeMessage)
+    // 메신저 쪽 해결도 영구 감사 기록에 비춘다. DB가 나중에 없어져도
+    // /api/portal/decisions history에 남는다(기록 실패가 해결을 막지는 않는다).
+    try {
+      const approval = (result.message as any)?.approval
+      appendDecisionAudit(root, messengerApprovalAuditEntry({
+        messageId: id(req),
+        body: String((result.message as any)?.body ?? ''),
+        planCode: String(approval?.plan_code ?? ''),
+        stepCode: String(approval?.step_code ?? ''),
+        action: decision,
+        outcome: decision === 'approve' ? 'approved' : 'rejected',
+        actor: who.id,
+        via: 'messenger',
+      }))
+    } catch (error) {
+      app.log.warn({ messageId: id(req), error: String((error as any)?.message ?? error) }, 'Messenger audit mirror failed')
+    }
     return result.message
   })
   app.get('/alerts', async req => store.db.prepare("SELECT w.*,m.channel_id,m.body FROM watch_state w JOIN messages m ON m.id=w.message_id WHERE stage='alert30'").all().filter(row=>store.canAccess(String(row.channel_id),actor(req))))

@@ -46,7 +46,7 @@ describe("decisions-client (pure helpers)", () => {
     assert.equal(groups.publish.length, 0)
   })
 
-  it("decisionHref links notes to /docs and work waits to /decisions", () => {
+  it("decisionHref links notes to /docs and work waits to /work", () => {
     assert.equal(
       decisionHref(item({ id: "note:1", kind: "note", source: "adk", path: "a.md" })),
       "/docs?source=adk&path=a.md",
@@ -54,7 +54,7 @@ describe("decisions-client (pure helpers)", () => {
     assert.equal(decisionHref(item({ id: "note:1", kind: "note" })), null)
     assert.equal(
       decisionHref(item({ id: "work:helper:w1", kind: "work" })),
-      "/decisions?item=work%3Ahelper%3Aw1",
+      "/work",
     )
     assert.equal(decisionHref(item({ id: "approval:1", kind: "approval" })), null)
   })

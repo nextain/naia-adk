@@ -2,6 +2,14 @@ import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
 
+export type NoteAwaiting = "human" | "agent"
+
+/**
+ * 다음 차례: "human"이면 사람이 답할 차례(결재/확인 보관함에 집계),
+ * "agent"이면 담당 역할이 답할 차례(보관함에서 제외).
+ * 옛 메모에는 없을 수 있다. 없을 때는 사람이 남긴 피드백으로 보고
+ * "agent" 차례로 다룬다.
+ */
 export interface DocNote {
   schemaVersion: 1
   id: string
@@ -14,6 +22,16 @@ export interface DocNote {
   updatedAt: string
   reply: string | null
   resolvedAt: string | null
+  awaiting?: NoteAwaiting | null
+}
+
+export function isValidNoteAwaiting(value: unknown): value is NoteAwaiting {
+  return value === "human" || value === "agent"
+}
+
+/** 보관함 집계용 차례. 값이 없거나 null이면 담당 차례("agent")로 다룬다. */
+export function noteAwaiting(note: Pick<DocNote, "awaiting">): NoteAwaiting {
+  return note.awaiting === "human" ? "human" : "agent"
 }
 
 export const NOTE_ID_REGEX = /^\d{8}-\d{6}-[a-z0-9]{6}$/

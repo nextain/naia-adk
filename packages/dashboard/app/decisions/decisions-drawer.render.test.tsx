@@ -96,6 +96,9 @@ describe("단일 앰버 결재/확인 배지 + 오른쪽 퀵 서랍", () => {
     assert.ok(html.includes('data-testid="decision-ack-work:helper:w1"'))
     assert.ok(html.includes('href="/decisions"'))
     assert.ok(html.includes("전체 페이지 열기"))
+    // 작업 대기 항목의 "작업 보드에서 보기"는 /work로 가고 /decisions가 아니다.
+    assert.ok(html.includes('href="/work"'))
+    assert.ok(html.includes("작업 보드에서 보기"))
   })
 
   it("닫힌 서랍은 그려지지 않는다", () => {

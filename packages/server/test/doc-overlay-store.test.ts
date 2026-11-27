@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
+import { createHash } from "node:crypto"
 import { DocOverlayStore, isValidOverlaySource, normalizeOverlayPath, overlayDbPath } from "../src/doc-overlay-store.js"
+
+const sha256 = (text: string) => createHash("sha256").update(text, "utf-8").digest("hex")
 
 describe("doc-overlay-store (path confinement)", () => {
   it("accepts clean markdown paths and rejects escapes", () => {
@@ -46,6 +49,50 @@ describe("doc-overlay-store (CRUD + revisions)", () => {
       expect(history[1].content).toBe("# v1")
       store.put({ source: "hub", path: "b.md", content: "# hub" })
       expect(store.list()).toHaveLength(2)
+    } finally {
+      store.close()
+    }
+  })
+
+  it("CAS rejects stale writers and keeps revisions strictly monotonic", () => {
+    const store = new DocOverlayStore(":memory:")
+    try {
+      const v1 = "# v1"
+      const first = store.put({ source: "adk", path: "c.md", content: v1, expectedBaseHash: null })
+      expect(first.revision).toBe(1)
+      // A second writer that never saw the row must not silently overwrite it.
+      try {
+        store.put({ source: "adk", path: "c.md", content: "# racing", expectedBaseHash: null })
+        expect.unreachable()
+      } catch (err: any) {
+        expect(err?.statusCode).toBe(409)
+      }
+      // A writer holding a wrong base hash is a conflict too.
+      try {
+        store.put({ source: "adk", path: "c.md", content: "# stale", expectedBaseHash: sha256("# something else") })
+        expect.unreachable()
+      } catch (err: any) {
+        expect(err?.statusCode).toBe(409)
+      }
+      const second = store.put({ source: "adk", path: "c.md", content: "# v2", expectedBaseHash: sha256(v1) })
+      expect(second.revision).toBe(2)
+      // The consumed base hash cannot be reused (lost-update race, sequential view).
+      try {
+        store.put({ source: "adk", path: "c.md", content: "# v2-dup", expectedBaseHash: sha256(v1) })
+        expect.unreachable()
+      } catch (err: any) {
+        expect(err?.statusCode).toBe(409)
+      }
+      const history = store.history("adk", "c.md")
+      expect(history.map((h) => h.revision)).toEqual([2, 1])
+      const revisions = history.map((h) => h.revision)
+      expect(new Set(revisions).size).toBe(revisions.length)
+      // Empty-string content round-trips through CAS as well.
+      const empty = store.put({ source: "adk", path: "e.md", content: "", expectedBaseHash: null })
+      expect(empty.revision).toBe(1)
+      expect(store.get("adk", "e.md")?.content).toBe("")
+      const afterEmpty = store.put({ source: "adk", path: "e.md", content: "# back", expectedBaseHash: sha256("") })
+      expect(afterEmpty.revision).toBe(2)
     } finally {
       store.close()
     }

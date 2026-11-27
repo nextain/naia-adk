@@ -24,7 +24,7 @@ import {
   registerShortLink,
   resolveShortPath,
 } from "./short-links.mjs"
-import { classifyPublicPath, createAccessVerifier, publicConfigFromEnv } from "./public-access.mjs"
+import { classifyPublicPath, createAccessVerifier, isBlockedDecisionsPath, publicConfigFromEnv } from "./public-access.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const MAX_SHORT_LINK_BODY_BYTES = 4096
@@ -545,6 +545,10 @@ function sendPlain(res, status, text) {
  * - API 에는 검증한 메일만 넘기고, 그룹·폴더 권한은 API 가 권한표로 거른다
  */
 export function handlePublicRequest(req, res, rawPathname, rawQuery, nextHandler, shortOpts, publicOpts, env = process.env) {
+  // 결재/확인 보관함은 읽기·쓰기 가리지 않고 403. 백엔드로 넘기지 않는다.
+  if (isBlockedDecisionsPath(rawPathname)) {
+    return sendPlain(res, 403, "Forbidden")
+  }
   const method = (req.method || "GET").toUpperCase()
   if (method !== "GET" && method !== "HEAD") {
     res.setHeader("allow", "GET, HEAD")

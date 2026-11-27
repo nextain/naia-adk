@@ -135,6 +135,13 @@ describe("신원 토큰 검증기", () => {
     }
   })
 
+  it("결재 보관함은 공개 허용 목록에 없다", () => {
+    assert.equal(classifyPublicPath("/api/portal/decisions"), null)
+    assert.equal(classifyPublicPath("/api/portal/decisions/"), null)
+    assert.equal(classifyPublicPath("/API/PORTAL/DECISIONS"), null)
+    assert.equal(classifyPublicPath("/api/portal/decisions/approval%3Am1/resolve"), null)
+  })
+
   it("열 경로 분류 (메신저 등 내부 경로 차단 포함)", () => {
     assert.equal(classifyPublicPath("/"), "redirect-docs")
     assert.equal(classifyPublicPath("/docs"), "next")
@@ -284,6 +291,24 @@ describe("공개 모드 처리기", () => {
     assert.equal((await request({ path: "/docs", headers: { "cf-access-jwt-assertion": sign(good, { key: other.privateKey }) } })).status, 403)
     assert.equal(nextCalls.length, 0)
     assert.equal(apiCalls.length, 0)
+  })
+
+  it("결재 보관함은 읽기·쓰기 모두 403이며 백엔드로 넘기지 않는다", async () => {
+    const before = apiCalls.length
+    for (const p of [
+      "/api/portal/decisions",
+      "/api/portal/decisions/",
+      "/API/PORTAL/DECISIONS",
+      "/api/portal/decisions/approval%3Am1/resolve",
+      "/api/portal/decisions/note%3A1/resolve",
+    ]) {
+      assert.equal((await request({ path: p, headers: auth() })).status, 403, `GET ${p}`)
+      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {
+        assert.equal((await request({ method: m, path: p, headers: auth() })).status, 403, `${m} ${p}`)
+      }
+      assert.equal((await request({ method: "HEAD", path: p, headers: auth() })).status, 403, `HEAD ${p}`)
+    }
+    assert.equal(apiCalls.length, before)
   })
 
   it("보드·설정·메신저 등 다른 길은 404, 쓰기 방법은 405, 낯선 Host 는 421", async () => {

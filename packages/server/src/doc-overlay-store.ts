@@ -11,7 +11,12 @@
 // default under `.agents/work/state/` is used. No workspace-specific names.
 import { DatabaseSync } from "node:sqlite"
 import { chmodSync, closeSync, constants, fchmodSync, mkdirSync, openSync, statSync } from "node:fs"
+import { createHash } from "node:crypto"
 import path from "node:path"
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf-8").digest("hex")
+}
 
 export interface OverlayEntry {
   source: string
@@ -153,21 +158,43 @@ export class DocOverlayStore {
     updatedBy?: string
     baseGitSha?: string
     now?: Date
+    /**
+     * 낙관적 동시성 검사(CAS) 기대값. `undefined`이면 검사하지 않는다.
+     * 문자열이면 현재 오버레이 본문의 sha256과 같아야 하고, `null`이면
+     * 오버레이 행이 없어야 한다. 다르면 409로 거절한다.
+     */
+    expectedBaseHash?: string | null
   }): OverlayEntry {
     const source = params.source
     const normPath = normalizeOverlayPath(params.path)
     if (!isValidOverlaySource(source) || !normPath) fail("Invalid source or path", 400)
     if (typeof params.content !== "string") fail("Invalid content", 400)
     if (Buffer.byteLength(params.content, "utf-8") > 2 * 1024 * 1024) fail("Content exceeds 2MB limit", 400)
+    if (params.expectedBaseHash !== undefined && params.expectedBaseHash !== null && typeof params.expectedBaseHash !== "string") {
+      fail("Invalid expected base hash", 400)
+    }
     const updatedAt = (params.now ?? new Date()).toISOString()
     const updatedBy = typeof params.updatedBy === "string" && params.updatedBy.trim()
       ? params.updatedBy.trim().slice(0, 128)
       : "dashboard"
     const baseGitSha = typeof params.baseGitSha === "string" ? params.baseGitSha.slice(0, 128) : ""
-    const current = this.get(source, normPath)
-    const revision = (current?.revision ?? 0) + 1
+    // 기대 해시 확인(CAS) + 리비전 번호 할당 + 현재 행 upsert + 이력 행
+    // insert를 하나의 BEGIN IMMEDIATE 트랜잭션에 묶는다. 여러 프로세스가
+    // 동시에 써도 같은 리비전을 할당하거나 조용히 덮어쓰지 못한다.
     this.db.exec("BEGIN IMMEDIATE")
     try {
+      if (params.expectedBaseHash !== undefined) {
+        const current = this.db.prepare(
+          "SELECT content FROM doc_overlays WHERE source=? AND path=?",
+        ).get(source, normPath) as any
+        const currentHash = current ? sha256Hex(String(current.content)) : null
+        if (currentHash !== params.expectedBaseHash) fail("changed", 409)
+      }
+      const maxRow = this.db.prepare(
+        "SELECT COALESCE(MAX(revision), 0) AS max_revision FROM doc_revisions WHERE source=? AND path=?",
+      ).get(source, normPath) as any
+      const revision = Number(maxRow?.max_revision ?? 0) + 1
+      if (!Number.isSafeInteger(revision) || revision < 1) fail("Revision allocation failed", 500)
       this.db.prepare(
         `INSERT INTO doc_overlays(source, path, content, updated_at, updated_by, base_git_sha, revision)
          VALUES(?,?,?,?,?,?,?)
@@ -178,13 +205,13 @@ export class DocOverlayStore {
         "INSERT INTO doc_revisions(source, path, content, updated_at, updated_by, base_git_sha, revision) VALUES(?,?,?,?,?,?,?)",
       ).run(source, normPath, params.content, updatedAt, updatedBy, baseGitSha, revision)
       this.db.exec("COMMIT")
+      return { source, path: normPath, content: params.content, updatedAt, updatedBy, baseGitSha, revision }
     } catch (error) {
       try {
         this.db.exec("ROLLBACK")
       } catch {}
       throw error
     }
-    return { source, path: normPath, content: params.content, updatedAt, updatedBy, baseGitSha, revision }
   }
 
   history(source: string, docPath: string, limit = 50): OverlayEntry[] {

@@ -271,6 +271,29 @@ function isMermaidCodeElement(node: React.ReactNode): boolean {
   return typeof className === "string" && className.split(/\s+/).includes("language-mermaid")
 }
 
+// Rendered SVG를 그대로 믿지 않는다: DOMParser(image/svg+xml)로 읽어
+// 루트가 `<svg>` 하나인지 확인하고, `<script>`와 `on*` 행위 속성을 지운
+// 뒤에만 마운트한다. 틀리면 null(대체 상자).
+export function sanitizeMermaidSvg(raw: string): string | null {
+  const text = typeof raw === "string" ? raw.trim() : ""
+  if (!text.startsWith("<svg")) return null
+  try {
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml")
+    if (doc.querySelector("parsererror")) return null
+    const root = doc.documentElement
+    if (!root || root.tagName.toLowerCase() !== "svg") return null
+    root.querySelectorAll("script").forEach((el) => el.remove())
+    root.querySelectorAll("*").forEach((el) => {
+      for (const attr of Array.from(el.attributes)) {
+        if (/^on/i.test(attr.name)) el.removeAttribute(attr.name)
+      }
+    })
+    return new XMLSerializer().serializeToString(doc)
+  } catch {
+    return null
+  }
+}
+
 // Safe client-side Mermaid renderer for ```mermaid fenced blocks.
 // The `mermaid` package is optional: when it cannot load (offline bundle,
 // missing dep) or the diagram source is malformed, the block falls back to a
@@ -300,8 +323,9 @@ export function MermaidBlock({ code }: { code: string }) {
               code,
             )
             if (cancelled) return
-            if (typeof text === "string" && text.trim().startsWith("<svg")) {
-              setSvg(text)
+            const clean = sanitizeMermaidSvg(text)
+            if (clean) {
+              setSvg(clean)
             } else {
               setFailed(true)
             }

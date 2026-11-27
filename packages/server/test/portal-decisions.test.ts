@@ -25,6 +25,21 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     "x-naia-origin-ok": "1",
     "content-type": "application/json",
   }
+  // 로그인 게이트가 확인한 사람 신원(대시보드가 넘기는 표시 + 계정 키).
+  const GATE_HEADERS = {
+    ...WRITE_HEADERS,
+    "x-naia-gate-verified": "1",
+    "x-ax-account-key": "reviewer",
+  }
+  const PUBLIC_HEADERS = {
+    ...READ_HEADERS,
+    "x-naia-user-email": "staff@example.com",
+  }
+  const PUBLIC_WRITE_HEADERS = {
+    ...PUBLIC_HEADERS,
+    "x-naia-origin-ok": "1",
+    "content-type": "application/json",
+  }
 
   let tempRoot: string
   let app: Awaited<ReturnType<typeof createServer>>
@@ -81,12 +96,12 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     app = await createServer({ root: tempRoot, port: 3141, host: "127.0.0.1" })
     ;(app as any).proxySecret = TEST_SECRET
 
-    // One open doc note (human's turn).
+    // One open doc note (agent asked a human: awaiting human).
     const noteRes = await app.inject({
       method: "POST",
       url: "/api/portal/notes",
       headers: WRITE_HEADERS,
-      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "방향을 확인해 주세요" }),
+      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "방향을 확인해 주세요", awaiting: "human" }),
     })
     expect(noteRes.statusCode).toBe(201)
     noteId = JSON.parse(noteRes.body).note.id
@@ -149,7 +164,7 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     const resolve = await app.inject({
       method: "POST",
       url: `/api/portal/decisions/approval:${approvalMessageId}/resolve`,
-      headers: WRITE_HEADERS,
+      headers: GATE_HEADERS,
       payload: JSON.stringify({ action: "approve" }),
     })
     expect(resolve.statusCode).toBe(200)
@@ -190,4 +205,170 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     })
     expect(untrusted.statusCode).toBe(403)
   })
+
+  it("public-mode proxy requests never see decisions (403, no leak)", async () => {
+    const get = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: PUBLIC_HEADERS })
+    expect(get.statusCode).toBe(403)
+    expect(get.body).not.toContain("approval:")
+    const post = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${approvalMessageId}/resolve`,
+      headers: PUBLIC_WRITE_HEADERS,
+      payload: JSON.stringify({ action: "approve" }),
+    })
+    expect(post.statusCode).toBe(403)
+    expect(post.body).not.toContain("approval:")
+  })
+
+  it("approval resolve without the verified human gate is rejected", async () => {
+    const pendingId = makeApproval("PLAN-CCCCC1", "STEP-DDDDD1")
+    const noGate = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${pendingId}/resolve`,
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ action: "approve" }),
+    })
+    expect(noGate.statusCode).toBe(401)
+    const displayOnly = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${pendingId}/resolve`,
+      headers: { ...WRITE_HEADERS, "x-ax-user": "boss" },
+      payload: JSON.stringify({ action: "approve" }),
+    })
+    expect(displayOnly.statusCode).toBe(401)
+    const synthetic = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${pendingId}/resolve`,
+      headers: { ...WRITE_HEADERS, "x-naia-gate-verified": "1", "x-ax-account-key": "dashboard" },
+      payload: JSON.stringify({ action: "approve" }),
+    })
+    expect(synthetic.statusCode).toBe(403)
+    const snap = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    expect(JSON.parse(snap.body).pending.map((i: any) => i.id)).toContain(`approval:${pendingId}`)
+  })
+
+  it("acknowledging a pending approval is rejected and keeps it pending", async () => {
+    const pendingId = makeApproval("PLAN-CCCCC2", "STEP-DDDDD2")
+    const ack = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${pendingId}/resolve`,
+      headers: GATE_HEADERS,
+      payload: JSON.stringify({ action: "acknowledge" }),
+    })
+    expect(ack.statusCode).toBe(400)
+    const snap = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    const json = JSON.parse(snap.body)
+    expect(json.pending.map((i: any) => i.id)).toContain(`approval:${pendingId}`)
+    expect(json.history.map((i: any) => i.id)).not.toContain(`approval:${pendingId}`)
+  })
+
+  it("verified resolve emits SSE events and writes permanent audit history", async () => {
+    const pendingId = makeApproval("PLAN-CCCCC3", "STEP-DDDDD3")
+    const resolve = await app.inject({
+      method: "POST",
+      url: `/api/portal/decisions/approval:${pendingId}/resolve`,
+      headers: GATE_HEADERS,
+      payload: JSON.stringify({ action: "approve" }),
+    })
+    expect(resolve.statusCode).toBe(200)
+    expect(JSON.parse(resolve.body).item.actor).toBe("reviewer")
+    const store = new MessengerStore(path.join(tempRoot, "data-company", "messenger", "messenger.db"))
+    try {
+      const types = (store.db.prepare("SELECT type FROM messenger_events ORDER BY id").all() as any[]).map((r) => String(r.type))
+      expect(types).toContain("approval")
+      expect(types).toContain("message")
+    } finally {
+      store.close()
+    }
+    const audit = fs.readFileSync(path.join(tempRoot, ".agents", "work", "state", "decisions-audit.jsonl"), "utf-8")
+    expect(audit).toContain(`approval:${pendingId}`)
+  })
+
+  it("only human-turn notes count; agent-turn feedback stays out of the inbox", async () => {
+    const before = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    const notesBefore = JSON.parse(before.body).counts.notes
+    // Human-authored feedback (no explicit turn) is the agent's turn: not counted.
+    const feedback = await app.inject({
+      method: "POST",
+      url: "/api/portal/notes",
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "방향 좋습니다" }),
+    })
+    expect(feedback.statusCode).toBe(201)
+    expect(JSON.parse(feedback.body).note.awaiting).toBe("agent")
+    // Agent-authored question defaults to the human's turn: counted.
+    const question = await app.inject({
+      method: "POST",
+      url: "/api/portal/notes",
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "어느 안이 좋을까요", authorKind: "agent" }),
+    })
+    expect(question.statusCode).toBe(201)
+    expect(JSON.parse(question.body).note.awaiting).toBe("human")
+    const explicit = await app.inject({
+      method: "POST",
+      url: "/api/portal/notes",
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "사람 확인 요청", awaiting: "human" }),
+    })
+    expect(explicit.statusCode).toBe(201)
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/portal/notes",
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ source: "adk", path: "plan.md", body: "x", awaiting: "someone" }),
+    })
+    expect(bad.statusCode).toBe(400)
+    const after = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    expect(JSON.parse(after.body).counts.notes).toBe(notesBefore + 2)
+    // Flipping the feedback note to the human's turn brings it into the inbox.
+    const feedbackId = JSON.parse(feedback.body).note.id
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/portal/notes/${feedbackId}`,
+      headers: WRITE_HEADERS,
+      payload: JSON.stringify({ awaiting: "human" }),
+    })
+    expect(patched.statusCode).toBe(200)
+    const flipped = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    expect(JSON.parse(flipped.body).counts.notes).toBe(notesBefore + 3)
+  })
+
+  it("messenger-side resolution stays in history even when its DB is gone", async () => {
+    const pendingId = makeApproval("PLAN-CCCCC4", "STEP-DDDDD4")
+    const decided = await app.inject({
+      method: "POST",
+      url: `/api/portal/messenger/approvals/${pendingId}`,
+      headers: GATE_HEADERS,
+      payload: JSON.stringify({ decision: "reject" }),
+    })
+    expect(decided.statusCode).toBe(200)
+    const audit = fs.readFileSync(path.join(tempRoot, ".agents", "work", "state", "decisions-audit.jsonl"), "utf-8")
+    expect(audit).toContain(`approval:${pendingId}`)
+    const dbPath = path.join(tempRoot, "data-company", "messenger", "messenger.db")
+    fs.renameSync(dbPath, `${dbPath}.gone`)
+    try {
+      fs.rmSync(`${dbPath}-wal`, { force: true })
+      fs.rmSync(`${dbPath}-shm`, { force: true })
+    } catch {}
+    const snap = await app.inject({ method: "GET", url: "/api/portal/decisions", headers: READ_HEADERS })
+    expect(snap.statusCode).toBe(200)
+    const json = JSON.parse(snap.body)
+    expect(json.pending.map((i: any) => i.id)).not.toContain(`approval:${pendingId}`)
+    const hist = json.history.find((i: any) => i.id === `approval:${pendingId}`)
+    expect(hist?.status).toBe("rejected")
+  })
+
+  function makeApproval(plan: string, step: string): string {
+    const store = new MessengerStore(path.join(tempRoot, "data-company", "messenger", "messenger.db"))
+    try {
+      return store.createMessage(
+        "업무-요청",
+        { id: "boss", kind: "human" },
+        ["1. 제목: [승인 요청] 새 문서 발행", "2. 요약: 테스트 요약입니다", "3. 문서: https://docs.example.test/d/abc123", `${plan} ${step}`].join("\n"),
+      ).id
+    } finally {
+      store.close()
+    }
+  }
 })

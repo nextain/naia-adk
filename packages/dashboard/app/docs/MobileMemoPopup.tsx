@@ -29,7 +29,7 @@ export function MobileMemoButton({ top, left, onOpen }: MobileMemoButtonProps) {
       // the selection change ~0.25s later, so `click` still lands first.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onOpen}
-      style={{ position: "fixed", top, left, width: 112, height: 40, zIndex: 60 }}
+      style={{ position: "fixed", top, left, width: 112, height: 40, zIndex: 60, touchAction: "manipulation" }}
       className="print:hidden inline-flex items-center justify-center gap-1.5 rounded-full bg-blue-600 active:bg-blue-500 text-sm font-semibold text-white shadow-lg shadow-black/50 border border-blue-400/40 select-none"
     >
       <MessageSquarePlus className="w-4 h-4" />
@@ -96,7 +96,11 @@ export function MobileMemoSheet({
         if (e.target === e.currentTarget && !submitting && Date.now() - openedAt > 500) onClose()
       }}
     >
-      <div className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl">
+      {/* 카드 안 탭은 배경 닫기로 새지 않게 막는다(터치 탭 가로채기 방지). */}
+      <div
+        className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-3 space-y-3 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-white">{t("docs.memo")}</span>
           <button
@@ -141,7 +145,8 @@ export function MobileMemoSheet({
                 data-testid="mobile-memo-save"
                 onClick={handleSave}
                 disabled={submitting || !body.trim()}
-                className="px-4 py-2 rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50"
+                style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
+                className="relative z-10 pointer-events-auto px-4 py-2 rounded bg-blue-600 text-sm font-medium text-white disabled:opacity-50 select-none"
               >
                 {submitting ? t("common.saving") : t("common.save")}
               </button>
