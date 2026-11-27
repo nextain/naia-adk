@@ -207,7 +207,7 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
     // 200을 속이지 않고 500으로 알린다.
     try {
       const approval = (result.message as any)?.approval
-      appendDecisionAudit(root, messengerApprovalAuditEntry({
+      await appendDecisionAudit(root, messengerApprovalAuditEntry({
         messageId: id(req),
         body: String((result.message as any)?.body ?? ''),
         planCode: String(approval?.plan_code ?? ''),

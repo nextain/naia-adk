@@ -368,9 +368,15 @@ export async function backfillApprovalAuditForMessage(
 /**
  * 메신저 쪽 해결을 영구 감사 기록에 비춘다. 메신저 DB가 나중에 없어져도
  * `/api/portal/decisions` history는 이 기록으로 살아남는다.
+ * backfill과 EXACTLY 같은 감사 파일 잠금(`decisionsAuditPath(root)`) 안에서
+ * 읽기→중복검사→쓰기를 묶는다: 동시 backfill이 같은 id를 먼저 채웠으면
+ * 쓰기를 건너뛴다. `appendFileSync` 실패는 그대로 던진다(호출 쪽 500).
  */
-export function appendDecisionAudit(root: string, entry: DecisionAuditEntry): void {
-  appendAuditLog(root, entry)
+export async function appendDecisionAudit(root: string, entry: DecisionAuditEntry): Promise<void> {
+  await withFileLock(decisionsAuditPath(root), () => {
+    if (readAuditLog(root).some((e) => e.id === entry.id)) return
+    appendAuditLog(root, entry)
+  })
 }
 
 /**
@@ -606,7 +612,7 @@ export async function resolveDecisionItem(
         createdAt: msToIso(after.created_at),
         updatedAt: after.decided_at ? msToIso(after.decided_at) : at,
       }
-      appendAuditLog(root, { at, id, decisionId: item.decisionId, kind: "approval", action, outcome: item.status, actor: messengerActor, via, title, comment })
+      await appendDecisionAudit(root, { at, id, decisionId: item.decisionId, kind: "approval", action, outcome: item.status, actor: messengerActor, via, title, comment })
       return item
     } finally {
       try {
@@ -642,7 +648,7 @@ export async function resolveDecisionItem(
       createdAt: existing.createdAt ?? null,
       updatedAt: at,
     }
-    appendAuditLog(root, { at, id, decisionId: item.decisionId, kind: "note", action, outcome: item.status, actor, via, title: item.title, comment })
+    await appendDecisionAudit(root, { at, id, decisionId: item.decisionId, kind: "note", action, outcome: item.status, actor, via, title: item.title, comment })
     return item
   }
 
@@ -652,7 +658,7 @@ export async function resolveDecisionItem(
     const found = snapshot.pending.find((i) => i.id === id)
     if (!found) fail("Unknown decision item", 404)
     const item: DecisionItem = { ...found, status: outcome, detail: comment ?? found.detail, actor, updatedAt: at }
-    appendAuditLog(root, { at, id, decisionId: found.decisionId, kind, action, outcome, actor, via, title: found.title, comment })
+    await appendDecisionAudit(root, { at, id, decisionId: found.decisionId, kind, action, outcome, actor, via, title: found.title, comment })
     return item
   }
 

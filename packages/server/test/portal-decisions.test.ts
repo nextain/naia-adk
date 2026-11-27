@@ -4,7 +4,7 @@ import path from "node:path"
 import os from "node:os"
 import { createServer } from "../src/server.js"
 import { MessengerStore } from "../src/messenger-store.js"
-import { backfillMissingApprovalAudits } from "../src/decisions-service.js"
+import { appendDecisionAudit, backfillMissingApprovalAudits, messengerApprovalAuditEntry } from "../src/decisions-service.js"
 
 const APPROVAL_BODY = [
   "1. 제목: [승인 요청] 새 문서 발행",
@@ -536,6 +536,47 @@ describe("Portal unified decisions (/api/portal/decisions)", () => {
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain(`approval:${pendingId}`)
     fs.rmSync(rootC, { recursive: true, force: true })
+  })
+
+  it("normal append after backfill keeps exactly one audit row per approval", async () => {
+    // V5 race: messenger commit -> bulk backfill fills the audit -> the normal
+    // messenger append bypassed the lock and appended the same id a second time.
+    // The unified lock + dedupe in appendDecisionAudit must keep exactly one row.
+    const rootD = fs.mkdtempSync(path.join(os.tmpdir(), "adk-decisions-dedupe-"))
+    fs.mkdirSync(path.join(rootD, "docs"), { recursive: true })
+    fs.writeFileSync(path.join(rootD, "docs", "plan.md"), "# 계획 문서\n", "utf-8")
+    const customDbPath = path.join(rootD, "custom", "msg.db")
+    const setup = new MessengerStore(customDbPath)
+    let pendingId: string
+    try {
+      pendingId = setup.createMessage("업무-요청", { id: "boss", kind: "human" }, APPROVAL_BODY).id
+      setup.decideApproval(pendingId, { id: "boss", kind: "human" }, "approve")
+    } finally {
+      setup.close()
+    }
+    try {
+      // Commit happened, but the normal audit append has not run yet:
+      // backfill heals the gap first.
+      expect(await backfillMissingApprovalAudits(rootD, process.env, customDbPath)).toBe(1)
+      // Then the normal messenger append for the same approval runs late.
+      await appendDecisionAudit(rootD, messengerApprovalAuditEntry({
+        messageId: pendingId,
+        body: APPROVAL_BODY,
+        planCode: "PLAN-AAAAAA",
+        stepCode: "STEP-BBBBBB",
+        action: "approve",
+        outcome: "approved",
+        actor: "boss",
+        via: "messenger",
+      }))
+      const lines = fs.readFileSync(path.join(rootD, ".agents", "work", "state", "decisions-audit.jsonl"), "utf-8")
+        .split("\n")
+        .filter((l) => l.trim())
+      expect(lines).toHaveLength(1)
+      expect(lines.filter((l) => l.includes(`approval:${pendingId}`))).toHaveLength(1)
+    } finally {
+      fs.rmSync(rootD, { recursive: true, force: true })
+    }
   })
 
   function makeApproval(plan: string, step: string): string {
