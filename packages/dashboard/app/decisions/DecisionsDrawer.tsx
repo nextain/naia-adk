@@ -80,7 +80,7 @@ function DecisionRow({
         )}
         {item.actor && <span className="text-[11px] text-neutral-500">{item.actor}</span>}
         <span className="ml-auto flex items-center gap-1.5">
-          {item.kind === "approval" ? (
+          {item.kind === "publish_review" ? null : item.kind === "approval" ? (
             <>
               <button
                 type="button"

@@ -7,6 +7,9 @@ import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { watchRoutes } from "./routes/watch.js"
 import { portalRoutes } from "./routes/portal.js"
+import { portalPublishRoutes } from "./routes/portal-publish.js"
+import type { PublishFault } from "./publish-store.js"
+import { loadInstanceConfig } from "./instance-config.js"
 import { portalMessengerRoutes, messengerEnabled, type MessengerOptions } from "./routes/portal-messenger.js"
 import {
   validateHost,
@@ -24,6 +27,8 @@ export interface ServerConfig {
   host: string
   folderCheckContext?: FolderCheckContext
   beforeRenameHook?: () => Promise<void> | void
+  beforeAssetWriteHook?: () => Promise<void> | void
+  publishFault?: PublishFault
   messenger?: MessengerOptions
 }
 
@@ -49,6 +54,8 @@ export async function createServer(config: ServerConfig) {
   await app.register(cors, { origin: false })
   await app.register(websocket)
 
+  const docsReadOnly = loadInstanceConfig(config.root).docsReadOnly
+
   app.decorate("adkRoot", config.root)
   app.decorate("proxySecret", null as string | null)
   app.decorate("folderCheckContext", config.folderCheckContext ?? null)
@@ -66,6 +73,12 @@ export async function createServer(config: ServerConfig) {
     // 2. 경로 탈출 검사: request.raw.url 경로 부분에 '.', '..' 조각, %2e, %2f, %5c, 역슬래시가 있으면 400
     if (!validatePath(request.raw.url)) {
       reply.code(400).send({ error: "Invalid path" })
+      return
+    }
+
+    // 읽기 전용 인스턴스에서는 게시 요청·승인을 포함해 모든 쓰기 동사를 막는다.
+    if (docsReadOnly && !["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) {
+      reply.code(403).send({ error: "Forbidden" })
       return
     }
 
@@ -115,9 +128,11 @@ export async function createServer(config: ServerConfig) {
   app.register(portalRoutes, {
     prefix: "/api/portal",
     beforeRename: config.beforeRenameHook,
+    beforeAssetWrite: config.beforeAssetWriteHook,
     messengerStatus,
     messengerDbPath: resolvedMessengerDbPath,
   })
+  app.register(portalPublishRoutes, { prefix: "/api/portal/publish", fault: config.publishFault })
 
   if (messengerStatus.enabled) app.register(portalMessengerRoutes, { prefix: "/api/portal/messenger", ...config.messenger, dbPath: resolvedMessengerDbPath, status: messengerStatus })
 

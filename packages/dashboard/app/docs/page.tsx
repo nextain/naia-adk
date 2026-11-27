@@ -13,6 +13,7 @@ import {
   type DocTab,
 } from "./tabs"
 import {
+  canEditDoc,
   determineDocViewMode,
   inferKindFromPath,
   type DocNoteItem,
@@ -23,6 +24,7 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
+import { useDocumentPublish } from "./use-publish-document"
 import { formatMessage } from "../i18n/index.ts"
 import { useLocale, useT } from "../i18n/provider.tsx"
 import type { LedgerCardItem } from "../work/work-ledger-view"
@@ -68,6 +70,8 @@ function DocsViewer() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [starError, setStarError] = useState<string | null>(null)
   const [groupFavoriteError, setGroupFavoriteError] = useState<string | null>(null)
+  const pendingUploadsRef = useRef(0)
+  const [pendingUploads, setPendingUploads] = useState(0)
 
   // 더러운 편집 상태 판정
   const isDirty = isEditing && editContent !== null && editContent !== docContent
@@ -75,13 +79,15 @@ function DocsViewer() {
   // 단일 이동 함수 (확인 취소 시 고친 글 유지, 확인 승인 또는 미수정 시 이동)
   const handleNavigate = (targetHref: string): boolean => {
     return canNavigateWithDiscardConfirm({
-      isDirty,
+      isDirty: isDirty || (isEditing && pendingUploadsRef.current > 0),
       targetHref,
       locale,
       confirmFn: (msg) => (typeof window !== "undefined" ? window.confirm(msg) : true),
       navigateFn: (url) => {
         setIsEditing(false)
         setEditContent(null)
+        pendingUploadsRef.current = 0
+        setPendingUploads(0)
         setSaveMessage(null)
         setStarError(null)
         router.push(url)
@@ -238,6 +244,8 @@ function DocsViewer() {
     if (addressChanged) {
       setIsEditing(false)
       setEditContent(null)
+      pendingUploadsRef.current = 0
+      setPendingUploads(0)
       setSaveMessage(null)
     }
     setStarError(null)
@@ -398,6 +406,13 @@ function DocsViewer() {
   const tabSections = sectionsForTab(sources, activeTab, undefined, locale)
   const hasCompanySource = sources.some((s) => s.id.startsWith("company:"))
 
+  const publish = useDocumentPublish({
+    source: sourceParam, path: pathParam, savedRevision: docBaseHash,
+    enabled: viewMode === "doc" && !docLoading && !docError && !!docContent,
+    canEdit: !forbidden && canEditDoc(sourceParam, Boolean(currentSourceObj?.readOnly || sourceParam?.startsWith("data:")), currentSourceObj?.missing),
+    isDirty, pendingUploads, reviewId: searchParams.get("publishReview"), revisionId: searchParams.get("publishRevision"), onNavigate: handleNavigate,
+  })
+
   return (
     <DocsView
       portalStatus={portalStatus}
@@ -420,6 +435,10 @@ function DocsViewer() {
       onNavigate={handleNavigate}
       editContent={editContent}
       onChangeEditContent={setEditContent}
+      onUploadPendingChange={(count) => { pendingUploadsRef.current = count; setPendingUploads(count) }}
+      publishActions={publish.actions}
+      publishNotice={publish.notice}
+      publishReview={publish.review}
       queryInput={queryInput}
       searching={searching}
       hits={hits}
@@ -454,17 +473,23 @@ function DocsViewer() {
         if (forbidden) return
         setIsEditing(true)
         setEditContent(docContent)
+        pendingUploadsRef.current = 0
+        setPendingUploads(0)
         setSaveMessage(null)
       }}
       onCancelEdit={() => {
         setIsEditing(false)
         setEditContent(null)
+        pendingUploadsRef.current = 0
+        setPendingUploads(0)
       }}
       onSaveDocSuccess={(newContent, newHash) => {
         setDocContent(newContent)
         setDocBaseHash(newHash)
         setEditContent(null)
         setIsEditing(false)
+        pendingUploadsRef.current = 0
+        setPendingUploads(0)
         setSaveMessage(t("docs.saved"))
       }}
       notes={notes}

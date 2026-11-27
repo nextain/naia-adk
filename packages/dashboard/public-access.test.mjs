@@ -8,7 +8,10 @@ import http from "node:http"
 import {
   createAccessVerifier,
   classifyPublicPath,
+  isBlockedDecisionsPath,
+  isBlockedPublishPath,
   isUnsafePublicPath,
+  normalizeBlockedPathname,
   publicConfigFromEnv,
   normalizeTeamDomain,
   parseAudiences,
@@ -140,6 +143,53 @@ describe("신원 토큰 검증기", () => {
     assert.equal(classifyPublicPath("/api/portal/decisions/"), null)
     assert.equal(classifyPublicPath("/API/PORTAL/DECISIONS"), null)
     assert.equal(classifyPublicPath("/api/portal/decisions/approval%3Am1/resolve"), null)
+  })
+
+  it("게시 공개 API는 공개 허용 목록에 없다", () => {
+    for (const p of [
+      "/api/portal/publish",
+      "/api/portal/publish/",
+      "/API/PORTAL/PUBLISH",
+      "/api/portal/publish/test-post/status",
+      "/api/portal/publish/test-post/preview?review_id=review&revision_id=revision",
+      "/api/portal/publish/test-post/approve",
+      "/api/portal/publish/review-todos",
+      "/api/portal/publish/operations/op-test",
+    ]) {
+      assert.equal(isBlockedPublishPath(p), true, p)
+      assert.equal(classifyPublicPath(p), null, p)
+    }
+    assert.equal(isBlockedPublishPath("/api/portal/decisions"), false)
+    assert.equal(isBlockedPublishPath("/api/portal/doc"), false)
+  })
+
+  it("인코딩 별칭도 게시·결재 차단 판정에서 막는다", () => {
+    for (const p of [
+      "/%61pi/portal/publish/status",
+      "/api/portal/%70ublish/export",
+      "/api/portal/%70ublish/export-queue",
+      "/api/portal/publish%2fstatus",
+      "/api/portal/publish%2Fstatus",
+      "/api/portal//publish//status",
+      "/%41%50%49/portal/publish/status",
+      "/api/portal/%64ecisions",
+      "/%61pi/portal/decisions",
+      "/api/portal/decisions/%61pproval%3Am1/resolve",
+    ]) {
+      assert.equal(isBlockedPublishPath(p) || isBlockedDecisionsPath(p), true, p)
+      assert.equal(classifyPublicPath(p), null, p)
+    }
+    // 게시 별칭은 결재 판정에, 결재 별칭은 게시 판정에 걸리지 않는다.
+    assert.equal(isBlockedDecisionsPath("/api/portal/%70ublish/status"), false)
+    assert.equal(isBlockedPublishPath("/api/portal/%64ecisions"), false)
+    assert.equal(isBlockedPublishPath("/api/portal/publisher"), false)
+    assert.equal(isBlockedDecisionsPath("/api/portal/decisions-note"), false)
+    // 풀 수 없는 % 표기는 막힌 것으로 친다(fail closed).
+    assert.equal(normalizeBlockedPathname("/api/portal/publish/%zz"), null)
+    assert.equal(isBlockedPublishPath("/api/portal/publish/%zz"), true)
+    assert.equal(isBlockedDecisionsPath("/api/portal/decisions/%zz"), true)
+    assert.equal(isBlockedPublishPath("/docs/%zz"), true)
+    assert.equal(classifyPublicPath("/docs/%zz"), null)
   })
 
   it("열 경로 분류 (메신저 등 내부 경로 차단 포함)", () => {
@@ -301,6 +351,51 @@ describe("공개 모드 처리기", () => {
       "/API/PORTAL/DECISIONS",
       "/api/portal/decisions/approval%3Am1/resolve",
       "/api/portal/decisions/note%3A1/resolve",
+    ]) {
+      assert.equal((await request({ path: p, headers: auth() })).status, 403, `GET ${p}`)
+      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {
+        assert.equal((await request({ method: m, path: p, headers: auth() })).status, 403, `${m} ${p}`)
+      }
+      assert.equal((await request({ method: "HEAD", path: p, headers: auth() })).status, 403, `HEAD ${p}`)
+    }
+    assert.equal(apiCalls.length, before)
+  })
+
+  it("게시 공개 API는 읽기·쓰기 모두 403이며 백엔드로 넘기지 않는다", async () => {
+    const before = apiCalls.length
+    for (const p of [
+      "/api/portal/publish",
+      "/api/portal/publish/",
+      "/API/PORTAL/PUBLISH",
+      "/api/portal/publish/test-post/status",
+      "/api/portal/publish/test-post/preview?review_id=review&revision_id=revision",
+      "/api/portal/publish/test-post/request-review",
+      "/api/portal/publish/test-post/approve",
+      "/api/portal/publish/review-todos",
+      "/api/portal/publish/operations/op-test",
+    ]) {
+      assert.equal((await request({ path: p, headers: auth() })).status, 403, `GET ${p}`)
+      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {
+        assert.equal((await request({ method: m, path: p, headers: auth() })).status, 403, `${m} ${p}`)
+      }
+      assert.equal((await request({ method: "HEAD", path: p, headers: auth() })).status, 403, `HEAD ${p}`)
+    }
+    for (const call of apiCalls.slice(before)) {
+      assert.ok(!call.url.startsWith("/api/portal/publish"), `백엔드로 넘어가면 안 된다: ${call.url}`)
+    }
+    assert.equal(apiCalls.length, before)
+  })
+
+  it("인코딩된 게시·결재 별칭도 403이며 백엔드로 넘기지 않는다", async () => {
+    const before = apiCalls.length
+    for (const p of [
+      "/%61pi/portal/publish/status",
+      "/api/portal/%70ublish/export",
+      "/api/portal/%70ublish/export-queue",
+      "/api/portal/publish%2fstatus",
+      "/api/portal/%64ecisions",
+      "/%61pi/portal/decisions",
+      "/api/portal/decisions/%61pproval%3Am1/resolve",
     ]) {
       assert.equal((await request({ path: p, headers: auth() })).status, 403, `GET ${p}`)
       for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {

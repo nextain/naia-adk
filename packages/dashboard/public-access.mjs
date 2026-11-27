@@ -167,18 +167,46 @@ const NEXT_STATIC_RE = /^\/_next\/static\/[A-Za-z0-9_.~\-/]+$/
  * 돌려주는 값: "redirect-docs" | "next" | "api" | "short" | null(404)
  */
 /**
+ * 공개 모드 차단 판정용 경로 정규화. 대시보드 내부 게시 게이트
+ * (`server.mjs`의 `isPublishPathname`)와 같은 모양으로 푼다:
+ * 퍼센트 표기를 한 번 풀고, 겹친 빗금을 하나로 모으고, 끝 빗금을 뗀다.
+ * 풀 수 없는 `%` 표기는 막힌 것으로 친다(fail closed).
+ */
+export function normalizeBlockedPathname(rawPathname) {
+  if (typeof rawPathname !== "string") return null
+  try {
+    return decodeURIComponent(rawPathname).replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+/**
  * 결재/확인 보관함은 공개 모드에서 절대 열지 않는다.
  * GET·POST 가리지 않고 403으로 막는다(API 로 넘기지 않는다).
  */
 export function isBlockedDecisionsPath(rawPathname) {
   if (typeof rawPathname !== "string") return false
-  const lower = rawPathname.toLowerCase()
-  return lower === "/api/portal/decisions" || lower.startsWith("/api/portal/decisions/")
+  const normalized = normalizeBlockedPathname(rawPathname)
+  if (normalized === null) return true
+  return /^\/api\/portal\/decisions(?:\/|$)/.test(normalized)
+}
+
+/**
+ * 게시 공개 API는 공개 모드에서 절대 열지 않는다.
+ * GET·HEAD 읽기까지 모두 403으로 막는다(API 로 넘기지 않는다).
+ */
+export function isBlockedPublishPath(rawPathname) {
+  if (typeof rawPathname !== "string") return false
+  const normalized = normalizeBlockedPathname(rawPathname)
+  if (normalized === null) return true
+  return /^\/api\/portal\/publish(?:\/|$)/.test(normalized)
 }
 
 export function classifyPublicPath(rawPathname) {
   if (isUnsafePublicPath(rawPathname)) return null
   if (isBlockedDecisionsPath(rawPathname)) return null
+  if (isBlockedPublishPath(rawPathname)) return null
   if (rawPathname === "/") return "redirect-docs"
   if (rawPathname === "/docs" || rawPathname === "/docs/") return "next"
   if (rawPathname.startsWith("/_next/static/")) return NEXT_STATIC_RE.test(rawPathname) ? "next" : null

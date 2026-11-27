@@ -94,7 +94,7 @@ function DecisionsRow({
             {item.kind === "work" ? t("dec.viewWork") : t("dec.openInDocs")}
           </Link>
         )}
-        {item.status === "pending" && (
+        {item.status === "pending" && item.kind !== "publish_review" && (
           <span className="ml-auto flex items-center gap-1.5">
             {item.kind === "approval" ? (
               <>

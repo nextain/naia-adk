@@ -55,6 +55,7 @@ export const MSG_FAVORITES_LIMIT = "즐겨찾기는 200개까지입니다"
 export const MSG_READ_ONLY = "보기 전용"
 export const MSG_NOT_FOUND = "찾을 수 없음"
 export const MSG_QUOTE_WHOLE_DOC = "문서 전체"
+export const MSG_DOC_HASH_MISSING = "문서 지문을 받지 못해 저장하지 않았습니다. 새로 고침 뒤 다시 시도해 주세요."
 
 export function getOpenNotesBannerText(count: number, locale: Locale = "ko"): string {
   return formatMessage(getDict(locale)["docs.openNotesBanner"], { count })

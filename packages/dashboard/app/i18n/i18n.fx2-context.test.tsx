@@ -621,7 +621,7 @@ describe("fx2 finding H1 + H-L4: useEffect locale/t dependencies and DocsViewer 
       let locale: "ko" | "en" = "ko"
       const app = mountTree(() => (
         <I18nProvider initialLocale={locale}>
-          <DocEditor source="adk" path="a.md" initialContent="old" content="edited" initialBaseHash="h" />
+          <DocEditor source="adk" path="a.md" initialContent="old" content="edited" initialBaseHash="h" richEditorComponent={() => null} />
         </I18nProvider>
       ))
       try {

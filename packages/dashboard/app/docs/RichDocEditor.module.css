@@ -1,0 +1,167 @@
+.editor {
+  --baseBase: #0a0a0a;
+  --baseBgSubtle: #171717;
+  --baseBg: #171717;
+  --baseBgHover: #262626;
+  --baseBgActive: #404040;
+  --baseLine: #404040;
+  --baseBorder: #525252;
+  --baseBorderHover: #737373;
+  --baseSolid: #a3a3a3;
+  --baseSolidHover: #d4d4d4;
+  --baseText: #d4d4d4;
+  --baseTextContrast: #e5e5e5;
+  --accentBgActive: #404040;
+  --accentSolid: #a3a3a3;
+  --accentText: #e5e5e5;
+  --accentTextContrast: #fafafa;
+  min-width: 0;
+  max-width: 100%;
+  color: #e5e5e5;
+  background: #0a0a0a;
+  color-scheme: dark;
+  font-family: inherit;
+}
+
+.editor:not(:global(.mdxeditor-popup-container)) {
+  min-height: 100%;
+}
+
+.editor .toolbar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  border-bottom: 1px solid #404040;
+  border-radius: 0;
+  background: #171717;
+}
+
+.toolbar > div {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.editor :global(.mdxeditor-root-contenteditable) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.editor .content {
+  min-width: 0;
+  min-height: 20rem;
+  padding: 1rem;
+  color: #e5e5e5;
+  font-size: 0.875rem;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.content p {
+  margin: 0.65em 0;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+.content h5,
+.content h6 {
+  margin: 1em 0 0.5em;
+  color: #fafafa;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.content h1 { font-size: 1.8em; }
+.content h2 { font-size: 1.5em; }
+.content h3 { font-size: 1.25em; }
+.content h4 { font-size: 1.1em; }
+
+.content ul,
+.content ol {
+  margin: 0.75em 0;
+  padding-left: 1.5rem;
+}
+
+.content ul { list-style-type: disc; }
+.content ol { list-style-type: decimal; }
+
+.content blockquote {
+  margin: 1em 0;
+  border-left: 3px solid #737373;
+  padding-left: 1rem;
+  color: #a3a3a3;
+}
+
+.content a {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.content img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #404040;
+  border-radius: 4px;
+}
+
+.content table {
+  max-width: 100%;
+  color: #e5e5e5;
+}
+
+.content td,
+.content th {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.content hr {
+  margin: 1.5em 0;
+  border-color: #525252;
+}
+
+.content code {
+  border-radius: 3px;
+  background: #262626;
+  padding: 0.1em 0.3em;
+  font-family: ui-monospace, monospace;
+}
+
+.content :global(.cm-editor) {
+  max-width: 100%;
+  background: #171717;
+  color: #e5e5e5;
+}
+
+.content :global(.cm-scroller) {
+  overflow: auto;
+}
+
+.editor :global([role="dialog"]) {
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+}
+
+.editor :global([role="dialog"]) input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 480px) {
+  .editor .content {
+    padding: 0.75rem;
+  }
+
+  .editor .toolbar {
+    gap: 2px;
+    padding: 4px;
+  }
+}

@@ -345,6 +345,10 @@ export interface DocsViewProps {
   // 편집 본문 및 변경 콜백 (결함 1·4 보강)
   editContent?: string | null
   onChangeEditContent?: (content: string) => void
+  onUploadPendingChange?: (count: number) => void
+  publishActions?: React.ReactNode
+  publishNotice?: React.ReactNode
+  publishReview?: React.ReactNode
 
   // 별 및 즐겨찾기 실패 안내 (결함 5)
   starError?: string | null
@@ -407,6 +411,10 @@ export function DocsView({
   onNavigate,
   editContent = null,
   onChangeEditContent,
+  onUploadPendingChange,
+  publishActions,
+  publishNotice,
+  publishReview,
   starError = null,
   groupFavoriteError = null,
   linkedCards = [],
@@ -958,11 +966,13 @@ export function DocsView({
                           initialBaseHash={docBaseHash}
                           content={editContent ?? docContent}
                           onChangeContent={onChangeEditContent}
+                          onUploadPendingChange={onUploadPendingChange}
                           isArchived={isArchived}
                           readOnly={isReadOnly}
                           onSaveSuccess={onSaveDocSuccess}
                           onCancel={onCancelEdit}
                           renderPreview={renderPreview}
+                          storage={storage}
                         />
                       ) : (
                         /* 읽기 모드인 경우: 헤더, 마크다운 본문, 메모 패널 */
@@ -1014,7 +1024,7 @@ export function DocsView({
                                 })}
                               </nav>
 
-                              <div className="flex items-center gap-2">
+                              <div data-testid="doc-title-row" className="flex flex-wrap items-center gap-2 min-w-0">
                                 <h1 className="text-xl font-bold text-white truncate">
                                   {getFileName(currentPath || "").replace(/\.md$/i, "")}
                                 </h1>
@@ -1070,7 +1080,10 @@ export function DocsView({
                                 </button>
                               </div>
                             )}
+                            {publishActions}
                           </div>
+
+                          {publishNotice && <div>{publishNotice}</div>}
 
                           {/* 고른 글 옆 [메모] 단추 (SP-05, 결함 3) */}
                           {activeSelection && (
@@ -1102,8 +1115,9 @@ export function DocsView({
                           {/* 문서 본문 + 메모 패널: 본문 스크롤과 메모 스크롤이 분리되어
                               긴 문서를 읽다가도 맨 위로 올리지 않고 메모를 쓸 수 있다 */}
                           <div className={sidePanelOpen ? "flex flex-col lg:flex-row gap-6 items-start" : "block"}>
-                            {/* 마크다운 본문 */}
+                            {/* 마크다운 본문 (게시 확인 화면이 있으면 그 화면을 대신 보여준다) */}
                             <div ref={docBodyRef} data-testid="doc-body-shell" className="flex-1 min-w-0 w-full">
+                              {publishReview ? publishReview : (
                               <DocMarkdown
                                 content={docContent || ""}
                                 sourceId={currentSource || ""}
@@ -1114,6 +1128,7 @@ export function DocsView({
                                 onNavigate={onNavigate}
                                 onMouseUp={handleBodyMouseUp}
                               />
+                              )}
                             </div>
 
                             {/* 터치 선택 시 뜨는 [메모] 단추와 그 자리 메모 창 */}

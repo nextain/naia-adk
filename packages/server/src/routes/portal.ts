@@ -31,6 +31,10 @@ import {
   type DocFavoriteItem,
 } from "../favorites.js"
 import { withFileLock, FileLockTimeoutError } from "../file-lock.js"
+import { isPublishPrivatePath, withPublishLock } from "../publish-lock.js"
+import { openRegularFile } from "../publish-files.js"
+import { appendDocEditHistory } from "../doc-edit-history.js"
+import { DOC_ASSET_BODY_LIMIT, directoryFdPath, DocAssetError, saveDocAsset } from "../doc-assets.js"
 import { isLedgerRequestAllowed, queryPortalWorkLedger, type LedgerQueryParams } from "../work-ledger-portal.js"
 import { messengerEnabled } from "./portal-messenger.js"
 import {
@@ -237,6 +241,7 @@ export interface InspectFileResult {
   stat?: fs.Stats
   isHardlink?: boolean
   error?: "hardlink" | "not_file" | "open_failed"
+  cause?: unknown
 }
 
 /**
@@ -251,15 +256,27 @@ export function inspectSecureFile(
   keepFdOpen = false,
   forListing = false,
 ): InspectFileResult {
+  // 승인 보관소·서명키는 목록·읽기에서 숨긴다 (환경 미설정 시 항상 거짓).
+  if (isPublishPrivatePath(realPath)) return { ok: false, error: "open_failed" }
   let fd: number
   try {
-    fd = fs.openSync(realPath, OPEN_READ_FLAGS)
-  } catch {
-    return { ok: false, error: "open_failed" }
+    fd = openRegularFile(realPath).fd
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "EISDIR") return { ok: false, error: "not_file" }
+    if ((cause as NodeJS.ErrnoException).code === "EMLINK") {
+      if (forListing) logHardlinkHidden(realPath)
+      return { ok: false, isHardlink: true, error: "hardlink" }
+    }
+    return { ok: false, error: "open_failed", cause }
   }
 
   try {
     const stat = fs.fstatSync(fd)
+    // 실제로 연 파일도 다시 검사해 경로 검사 뒤 링크가 바뀌는 경우를 막는다.
+    if (isPublishPrivatePath(realPath) || (process.platform === "linux" && isPublishPrivatePath(`/proc/self/fd/${fd}`))) {
+      fs.closeSync(fd)
+      return { ok: false, error: "open_failed" }
+    }
     if (!stat.isFile()) {
       fs.closeSync(fd)
       return { ok: false, error: "not_file" }
@@ -288,6 +305,7 @@ export function inspectSecureFile(
 
 export function buildTree(absBaseDir: string, currentRelDir: string): PortalTreeNode[] {
   const currentAbsDir = path.join(absBaseDir, currentRelDir)
+  if (isPublishPrivatePath(currentAbsDir)) return []
   if (!fs.existsSync(currentAbsDir)) return []
 
   let entries: fs.Dirent[] = []
@@ -348,6 +366,7 @@ export function buildTree(absBaseDir: string, currentRelDir: string): PortalTree
       } catch {
         continue
       }
+      if (isPublishPrivatePath(realPath)) continue
       let stat: fs.Stats
       try {
         stat = fs.statSync(realPath)
@@ -705,15 +724,21 @@ export interface SecureFileResult {
 export function resolveSecureFile(
   source: ResolvedSource,
   normPath: string,
-  options?: { keepFdOpen?: boolean; forListing?: boolean },
-): { error: "not_found" } | SecureFileResult {
+  options?: { keepFdOpen?: boolean; forListing?: boolean; rejectLinks?: boolean },
+): { error: "not_found"; cause?: unknown; reason?: "not_file" } | SecureFileResult {
   if (isHiddenPath(normPath)) return { error: "not_found" }
 
   const allowedDir = matchingAllowedDir(source, normPath)
   if (!allowedDir) return { error: "not_found" }
 
   const absPath = path.resolve(source.baseDir, normPath)
-  if (!fs.existsSync(absPath)) return { error: "not_found" }
+  if (isPublishPrivatePath(absPath)) return { error: "not_found" }
+  let namedStat: fs.Stats
+  try {
+    namedStat = fs.lstatSync(absPath)
+  } catch (cause) {
+    return { error: "not_found", cause }
+  }
 
   let realPath: string
   let realAllowedDir: string
@@ -722,9 +747,10 @@ export function resolveSecureFile(
     realPath = fs.realpathSync.native(absPath)
     realAllowedDir = fs.realpathSync.native(allowedDir)
     realBaseDir = fs.realpathSync.native(source.baseDir)
-  } catch {
-    return { error: "not_found" }
+  } catch (cause) {
+    return { error: "not_found", cause }
   }
+  if (isPublishPrivatePath(realPath)) return { error: "not_found" }
 
   // 심볼릭 링크를 따라간 실제 위치가 그 보여 주기 폴더 안이어야 한다.
   // 같은 저장소의 제외 폴더(예: 증빙서류)를 가리키는 링크도 여기서 막힌다.
@@ -734,9 +760,30 @@ export function resolveSecureFile(
   const realRelPath = path.relative(realBaseDir, realPath)
   if (isHiddenPath(realRelPath)) return { error: "not_found" }
 
+  // 게시 경로는 경로 조각의 링크를 모두 거절한다 (원문 파일 무결성).
+  if (options?.rejectLinks) {
+    let current = path.parse(absPath).root
+    try {
+      for (const part of absPath.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part)
+        const stat = fs.lstatSync(current)
+        if (stat.isSymbolicLink() || (current !== absPath && !stat.isDirectory())) return { error: "not_found", reason: "not_file" }
+      }
+    } catch (cause) {
+      return { error: "not_found", cause }
+    }
+  }
+
+  // 허용 경계 안의 비정규 파일은 열기 전에 구분한다. FIFO 열기의 대기도 피한다.
+  if (!namedStat.isFile() && !namedStat.isSymbolicLink()) return { error: "not_found", reason: "not_file" }
+
   const check = inspectSecureFile(realPath, options?.keepFdOpen, options?.forListing)
   if (!check.ok || !check.stat) {
-    return { error: "not_found" }
+    if (check.error === "not_file") return { error: "not_found", reason: "not_file" }
+    if (options?.rejectLinks && (check.error === "hardlink" || ["ELOOP", "ESTALE"].includes((check.cause as NodeJS.ErrnoException)?.code ?? ""))) {
+      return { error: "not_found", reason: "not_file" }
+    }
+    return check.cause ? { error: "not_found", cause: check.cause } : { error: "not_found" }
   }
 
   return { absPath: realPath, fd: check.fd, stat: check.stat }
@@ -747,7 +794,7 @@ export function resolveSecureFile(
 export function resolveSecureDir(
   source: ResolvedSource,
   relPath: string,
-): { error: "not_found" } | { absPath: string } {
+): { error: "not_found"; cause?: unknown } | { absPath: string } {
   const normPath = relPath === "" ? "" : normalizeRelativePath(relPath)
   if (normPath === null) return { error: "not_found" }
   if (isHiddenPath(normPath)) return { error: "not_found" }
@@ -771,7 +818,8 @@ export function resolveSecureDir(
     absPath = path.resolve(source.baseDir, normPath)
   }
 
-  if (!fs.existsSync(absPath)) return { error: "not_found" }
+  if (isPublishPrivatePath(absPath)) return { error: "not_found" }
+  try { fs.lstatSync(absPath) } catch (cause) { return { error: "not_found", cause } }
 
   let realPath: string
   let realAllowedDir: string
@@ -780,9 +828,11 @@ export function resolveSecureDir(
     realPath = fs.realpathSync.native(absPath)
     realAllowedDir = fs.realpathSync.native(targetAllowedDir)
     realBaseDir = fs.realpathSync.native(source.baseDir)
-  } catch {
-    return { error: "not_found" }
+  } catch (cause) {
+    return { error: "not_found", cause }
   }
+
+  if (isPublishPrivatePath(realPath)) return { error: "not_found" }
 
   // 실경로가 출처의 허용 폴더 안(또는 같음)인지 확인
   if (!isInsideOrEqual(realPath, realAllowedDir)) return { error: "not_found" }
@@ -791,7 +841,9 @@ export function resolveSecureDir(
   const realRelPath = path.relative(realBaseDir, realPath)
   if (isHiddenPath(realRelPath)) return { error: "not_found" }
 
-  if (!fs.statSync(realPath).isDirectory()) return { error: "not_found" }
+  try {
+    if (!fs.statSync(realPath).isDirectory()) return { error: "not_found" }
+  } catch (cause) { return { error: "not_found", cause } }
   return { absPath: realPath }
 }
 
@@ -1148,6 +1200,7 @@ export function isPublicProxyRequest(req: FastifyRequest): boolean {
 
 export interface PortalOptions {
   beforeRename?: () => Promise<void> | void
+  beforeAssetWrite?: () => Promise<void> | void
   /** Messenger state shared with portal-messenger; off when disabled or its initialization failed. */
   messengerStatus?: { enabled: boolean }
   /** Effective messenger DB path resolved by `createServer` (explicit `messenger.dbPath` or env/default). */
@@ -1160,33 +1213,38 @@ const VERIFIED_ACCOUNT_KEY_RE = /^[a-z][a-z0-9-]{1,31}$/
 const docWriteLocks = new Map<string, Promise<void>>()
 
 export async function withDocWriteLock<T>(realPath: string, fn: () => Promise<T>): Promise<T> {
-  const prev = docWriteLocks.get(realPath) ?? Promise.resolve()
-  let release: () => void
-  const current = new Promise<void>((r) => {
-    release = r
-  })
-  docWriteLocks.set(realPath, prev.then(() => current, () => current))
-  try {
-    await prev
-    return await fn()
-  } finally {
-    release!()
-    if (docWriteLocks.get(realPath) === current) {
-      docWriteLocks.delete(realPath)
+  // 게시 공통 잠금과 문서별 Promise 사슬이 첫 열기부터 rename까지 감싼다.
+  return withPublishLock(async () => {
+    const prev = docWriteLocks.get(realPath) ?? Promise.resolve()
+    let release: () => void
+    const current = new Promise<void>((r) => {
+      release = r
+    })
+    docWriteLocks.set(realPath, prev.then(() => current, () => current))
+    try {
+      await prev
+      return await fn()
+    } finally {
+      release!()
+      if (docWriteLocks.get(realPath) === current) {
+        docWriteLocks.delete(realPath)
+      }
     }
-  }
+  })
 }
 
 export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, done) => {
   const root = (app as FastifyInstance & { adkRoot: string }).adkRoot
   const getFolderCtx = (): FolderCheckContext | undefined => (app as any).folderCheckContext
   const beforeRenameHook = opts?.beforeRename
+  const beforeAssetWriteHook = opts?.beforeAssetWrite
+
+  // Raw-byte parser for image uploads (POST /doc-assets only).
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, parsed) => parsed(null, body))
 
   // Non-git AX doc overlay: dashboard edits survive `git reset --hard` and
   // read-only mounts. Reads prefer the overlay; writes record it.
-  // 저장소가 준비되지 않으면 쓰기는 절대 200으로 속이지 않는다(fail closed).
-  const overlayConfigured =
-    typeof process.env.NAIA_AX_DOC_STORE === "string" && process.env.NAIA_AX_DOC_STORE.trim() !== ""
+  // 저장소가 준비되지 않으면 읽기도 쓰기도 절대 조용히 넘어가지 않는다(fail closed).
   let overlayStore: DocOverlayStore | null = null
   let overlayInitError: string | null = null
   try {
@@ -1201,6 +1259,30 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       overlayStore?.close()
     } catch {}
   })
+
+  // 문서 저장 이력: PUT /doc 성공 뒤 JSONL로 남긴다. 기록 실패는 저장을
+  // 실패로 만들지 않는다 (저장 자체는 완료된 상태).
+  const recordDocEditHistory = (
+    req: FastifyRequest,
+    sourceId: string,
+    normPath: string,
+    previousHash: string,
+    newHash: string,
+    origin?: unknown,
+  ) => {
+    try {
+      appendDocEditHistory(root, {
+        timestamp: new Date().toISOString(),
+        source: sourceId,
+        path: normPath,
+        previousHash,
+        newHash,
+        origin: origin === "ai-note-processing" ? "AI 메모 처리" : "대시보드",
+      })
+    } catch (error) {
+      req.log.warn({ err: error, source: sourceId, path: normPath }, "문서 저장 이력 기록 실패; 문서 저장은 완료됨")
+    }
+  }
 
   const dashboardActor = (req: FastifyRequest): string => {
     const headerName = (process.env.NAIA_NOTE_USER_HEADER || "x-ax-user").toLowerCase()
@@ -1565,6 +1647,8 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     // Overlay wins over the git checkout baseline, so a periodic
     // `git reset --hard` never loses dashboard edits. 존재 검사는 엄격한
     // null 비교로 한다(빈 문자열 ""도 유효한 오버레이 본문이다).
+    // 저장소 초기화에 실패했으면(기본 경로 포함) 조용히 체크아웃으로
+    // 넘어가지 않고 503으로 막는다.
     if (overlayStore !== null) {
       try {
         const overlayHit = isValidOverlaySource(sourceId) ? overlayStore.get(sourceId, normPath) : null
@@ -1580,7 +1664,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       } catch {
         return reply.code(503).send({ error: "Overlay unavailable" })
       }
-    } else if (overlayConfigured) {
+    } else {
       return reply.code(503).send({ error: "Overlay unavailable" })
     }
 
@@ -1921,11 +2005,12 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
     req: FastifyRequest,
     reply: FastifyReply,
     hasBody = true,
+    forbiddenBody: { error: string; message?: string } = { error: "Forbidden" },
   ): boolean {
     const isTrusted = (req as any).trust?.trusted === true
     const originOk = (req as any).trust?.originOk === true
     if (!isTrusted || !originOk) {
-      reply.code(403).send({ error: "Forbidden" })
+      reply.code(403).send(forbiddenBody)
       return false
     }
 
@@ -1959,7 +2044,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         return reply.code(404).send({ error: "Missing source or path" })
       }
 
-      const body = req.body as { content?: unknown; baseHash?: unknown } | undefined
+      const body = req.body as { content?: unknown; baseHash?: unknown; origin?: unknown } | undefined
       if (!body || typeof body.content !== "string" || typeof body.baseHash !== "string") {
         return reply.code(400).send({ error: "Invalid body: content and baseHash are required" })
       }
@@ -2011,6 +2096,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       } catch {
         return reply.code(404).send({ error: "Document not found" })
       }
+      if (isPublishPrivatePath(realPath)) return reply.code(404).send({ error: "Document not found" })
 
       const cleanBaseHash = bodyBaseHash.trim().replace(/^"|"$/g, "")
 
@@ -2035,6 +2121,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       // 읽기 전용 체크아웃(EROFS/EACCES/EPERM)에서는 git 쓰기 대신 오버레이에만 저장한다.
       try {
         return await withDocWriteLock(realPath, async () => {
+        if (isPublishPrivatePath(realPath)) return reply.code(404).send({ error: "Document not found" })
         // 경로 및 허용 폴더 검사를 오버레이 조회·ETag 비교보다 먼저 한다.
         // 허용되지 않은 폴더는 항상 403으로 거절한다(ETag 누출 409 방지).
         const allowedDir = matchingAllowedDir(source, normPath)
@@ -2180,6 +2267,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           }
 
           const newHash = crypto.createHash("sha256").update(finalBuf).digest("hex")
+          recordDocEditHistory(req, sourceId, normPath, cleanBaseHash, newHash, body.origin)
           const overlaySuccess = () =>
             reply
               .header("ETag", newHash)
@@ -2396,6 +2484,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             return reply.code(503).send({ error: "Overlay unavailable" })
           }
           const newHash = crypto.createHash("sha256").update(fallbackContent, "utf-8").digest("hex")
+          recordDocEditHistory(req, sourceId, normPath, cleanBaseHash, newHash, body.origin)
           return reply
             .header("ETag", newHash)
             .header("X-Doc-Source", "overlay")
@@ -2403,6 +2492,294 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             .send({ ok: true, sha256: newHash })
         })
       }
+    },
+  )
+
+  // POST /api/portal/doc-assets?source=<id>&path=<doc rel path>&name=<file name>
+  // Rich editor image upload: stores into the document folder's assets/.
+  app.post(
+    "/doc-assets",
+    {
+      bodyLimit: DOC_ASSET_BODY_LIMIT,
+      errorHandler: (error, _req, reply) => {
+        if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+          return reply.code(413).send({ error: "too_large", message: "그림 한 장을 20메비바이트 이하로 줄여 주세요." })
+        }
+        return reply.code(415).send({ error: "unsupported_type", message: "그림 파일을 원래 바이트 본문으로 다시 올려 주세요." })
+      },
+    },
+    async (req, reply) => {
+      if (!checkWriteSecurity(req, reply, false, { error: "forbidden", message: "이 작업 공간에서 문서를 편집할 수 있는 요청으로 다시 올려 주세요." })) {
+        return
+      }
+      const fail = (status: number, error: string, message: string) => reply.code(status).send({ error, message })
+      if (String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase() !== "application/octet-stream") {
+        return fail(415, "unsupported_type", "그림 파일을 원래 바이트 본문으로 다시 올려 주세요.")
+      }
+      const query = req.query as Record<string, string | undefined>
+      const normPath = query.path ? normalizeRelativePath(query.path) : null
+      if (!normPath || normPath.includes("\0") || isHiddenPath(normPath)) {
+        return fail(400, "path_escape", "숨김 폴더와 상위 경로를 빼고 문서의 상대 경로를 지정해 주세요.")
+      }
+      const source = query.source ? resolveSourceBase(root, query.source, getFolderCtx()) : null
+      if (!source) {
+        return fail(404, "doc_not_found", "문서 출처를 다시 선택한 뒤 올려 주세요.")
+      }
+      if (source.readOnly) {
+        return fail(403, "forbidden", "읽기 전용 폴더입니다. 편집할 수 있는 문서 폴더를 선택해 주세요.")
+      }
+      const findDocument = () => {
+        const requestedPath = path.resolve(source.baseDir, normPath)
+        let documentStat: fs.Stats
+        try {
+          documentStat = fs.lstatSync(requestedPath)
+        } catch (error: any) {
+          if (error.code === "ENOENT") throw new DocAssetError(404, "doc_not_found", "문서를 먼저 저장하거나 실제로 있는 문서를 선택해 주세요.")
+          throw error
+        }
+        if (documentStat.isSymbolicLink()) {
+          throw new DocAssetError(403, "path_escape", "파일 링크 문서에는 그림을 올릴 수 없습니다. 링크 대신 실제 문서를 열어 주세요.")
+        }
+        const document = resolveSecureFile(source, normPath)
+        if ("error" in document) {
+          throw new DocAssetError(403, "path_escape", "문서의 실제 위치가 허용된 문서 폴더 안인지 확인해 주세요.")
+        }
+        if (path.extname(document.absPath).toLowerCase() !== ".md") {
+          throw new DocAssetError(404, "doc_not_found", "그림을 넣을 마크다운 문서를 선택해 주세요.")
+        }
+        return document.absPath
+      }
+      try {
+        const documentPath = findDocument()
+        const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+        const result = await saveDocAsset(documentPath, bytes, query.name ?? "", undefined, () => {
+          if (findDocument() !== documentPath) {
+            throw new DocAssetError(403, "path_escape", "문서 경로가 바뀌었습니다. 문서를 다시 열어 주세요.")
+          }
+        }, beforeAssetWriteHook)
+        return reply.send(result)
+      } catch (error) {
+        if (error instanceof DocAssetError) return fail(error.status, error.category, error.message)
+        return fail(403, "forbidden", "그림 폴더의 쓰기 권한과 파일 연결을 확인한 뒤 다시 올려 주세요.")
+      }
+    },
+  )
+
+  // POST /api/portal/doc/create?source=adk&path=<relative path to index.md>
+  // adk 출처에만 index.md를 만든다.
+  app.post(
+    "/doc/create",
+    {
+      bodyLimit: 3 * 1024 * 1024,
+    },
+    async (req, reply) => {
+      if (!checkWriteSecurity(req, reply, true)) {
+        return
+      }
+
+      const query = req.query as Record<string, string | undefined>
+      const sourceId = query.source
+      const rawPath = query.path
+
+      if (!sourceId) {
+        return reply.code(400).send({ error: "Missing source" })
+      }
+      if (sourceId !== "adk") {
+        return reply.code(403).send({ error: "Forbidden: only adk source is allowed" })
+      }
+      if (!rawPath) {
+        return reply.code(400).send({ error: "Missing path" })
+      }
+
+      const normPath = normalizeRelativePath(rawPath)
+      if (!normPath || isHiddenPath(normPath)) {
+        return reply.code(400).send({ error: "Invalid path" })
+      }
+
+      const fileName = path.posix.basename(normPath)
+      if (fileName !== "index.md") {
+        return reply.code(400).send({ error: "Only index.md can be created" })
+      }
+
+      const body = req.body as { content?: unknown } | undefined
+      if (!body || typeof body.content !== "string") {
+        return reply.code(400).send({ error: "Invalid body: content is required" })
+      }
+
+      const contentBuf = Buffer.from(body.content, "utf-8")
+      const MAX_DOC_BYTES = 2 * 1024 * 1024
+      if (contentBuf.byteLength > MAX_DOC_BYTES) {
+        return reply.code(400).send({ error: "Content exceeds 2MB limit" })
+      }
+
+      const source = resolveSourceBase(root, "adk", getFolderCtx())
+      if (!source) {
+        return reply.code(404).send({ error: "Source not found" })
+      }
+      if (source.readOnly) {
+        return reply.code(403).send({ error: "Source is read-only" })
+      }
+
+      let realBaseDir: string
+      try {
+        realBaseDir = fs.realpathSync.native(source.baseDir)
+      } catch {
+        return reply.code(404).send({ error: "Source base directory not found" })
+      }
+
+      const parentRelDir = path.posix.dirname(normPath) === "." ? "" : path.posix.dirname(normPath)
+      if (parentRelDir !== "" && isHiddenPath(parentRelDir)) {
+        return reply.code(400).send({ error: "Invalid path" })
+      }
+
+      const absParentDir = parentRelDir === "" ? source.baseDir : path.resolve(source.baseDir, parentRelDir)
+      try {
+        const lstat = fs.lstatSync(absParentDir)
+        if (lstat.isSymbolicLink() && !fs.existsSync(absParentDir)) {
+          return reply.code(403).send({ error: "Forbidden symlink parent" })
+        }
+      } catch {
+        return reply.code(404).send({ error: "Parent directory not found" })
+      }
+
+      let realParentDir: string
+      try {
+        realParentDir = fs.realpathSync.native(absParentDir)
+      } catch {
+        return reply.code(404).send({ error: "Parent directory not found" })
+      }
+
+      if (!isInsideOrEqual(realParentDir, realBaseDir)) {
+        return reply.code(403).send({ error: "Parent directory escapes baseDir" })
+      }
+
+      const realParentRel = path.relative(realBaseDir, realParentDir)
+      if (realParentRel !== "" && isHiddenPath(realParentRel)) {
+        return reply.code(403).send({ error: "Hidden parent directory not allowed" })
+      }
+
+      let parentStat: fs.Stats
+      try {
+        parentStat = fs.statSync(realParentDir)
+      } catch {
+        return reply.code(404).send({ error: "Parent directory not found" })
+      }
+      if (!parentStat.isDirectory()) {
+        return reply.code(404).send({ error: "Parent is not a directory" })
+      }
+
+      const targetPath = path.join(realParentDir, "index.md")
+      if (isPublishPrivatePath(targetPath)) return reply.code(403).send({ error: "Forbidden document path" })
+      const createFlags =
+        fs.constants.O_CREAT |
+        fs.constants.O_EXCL |
+        fs.constants.O_WRONLY |
+        (fs.constants.O_NOFOLLOW || 0)
+
+      return withDocWriteLock(targetPath, async () => {
+        if (isPublishPrivatePath(targetPath)) return reply.code(403).send({ error: "Forbidden document path" })
+        // 잠금 안에서 부모 폴더를 다시 고정한다(그림 올리기와 같은 방식):
+        // 부모 실경로를 다시 풀어 허용 뿌리 안인지·숨김 폴더가 아닌지
+        // 확인하고, 열린 폴더 설명자(fstat)와 경로 이름(lstat)의 장치·inode가
+        // 같은지, 열린 설명자 경로가 같은 폴더를 가리키는지까지 맞춘다.
+        // 잠금 전에 확인한 부모가 그 사이 교체됐으면 여기서 걸러진다.
+        let lockedParentDir: string
+        try {
+          lockedParentDir = fs.realpathSync.native(absParentDir)
+        } catch {
+          return reply.code(404).send({ error: "Parent directory not found" })
+        }
+        if (!isInsideOrEqual(lockedParentDir, realBaseDir)) {
+          return reply.code(403).send({ error: "Parent directory escapes baseDir" })
+        }
+        const lockedParentRel = path.relative(realBaseDir, lockedParentDir)
+        if (lockedParentRel !== "" && isHiddenPath(lockedParentRel)) {
+          return reply.code(403).send({ error: "Hidden parent directory not allowed" })
+        }
+        const directoryFlags = fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0)
+        let parentFd: number
+        try {
+          parentFd = fs.openSync(lockedParentDir, directoryFlags)
+        } catch {
+          return reply.code(404).send({ error: "Parent directory not found" })
+        }
+        try {
+          const fdStat = fs.fstatSync(parentFd)
+          let namedStat: fs.Stats
+          try {
+            namedStat = fs.lstatSync(absParentDir)
+          } catch {
+            return reply.code(404).send({ error: "Parent directory not found" })
+          }
+          if (!fdStat.isDirectory() || namedStat.dev !== fdStat.dev || namedStat.ino !== fdStat.ino) {
+            return reply.code(403).send({ error: "Parent directory changed" })
+          }
+          // 열린 설명자 자체의 실경로를 커널 기준으로 다시 확인한다.
+          // 경로 이름 조회(`lockedParentDir` realpath·`absParentDir` lstat)는 바뀐
+          // 상위 폴더를 함께 가리킬 수 있어 서로 비교해도 탈출을 못 막는다.
+          // 대신 열린 설명자의 실경로(`/proc/self/fd`)를 풀어 허용 뿌리 안인지·
+          // 숨김 조각이 없는지 확인하고, 그 실경로의 장치·inode가 열린 설명자와
+          // 같은지까지 맞춘다. 잎 만들기는 이 설명자에 고정하므로 확인 뒤
+          // 이름이 바뀌어도 다른 폴더로 가지 않는다.
+          let fdRealPath: string
+          try {
+            fdRealPath = fs.realpathSync.native(directoryFdPath(parentFd))
+          } catch {
+            return reply.code(403).send({ error: "Parent directory changed" })
+          }
+          if (!isInsideOrEqual(fdRealPath, realBaseDir)) {
+            return reply.code(403).send({ error: "Parent directory escapes baseDir" })
+          }
+          const fdRealRel = path.relative(realBaseDir, fdRealPath)
+          if (fdRealRel !== "" && (fdRealRel.split(path.sep).some((seg) => seg === "." || seg === "..") || isHiddenPath(fdRealRel))) {
+            return reply.code(403).send({ error: "Hidden parent directory not allowed" })
+          }
+          let fdRealStat: fs.Stats
+          try {
+            fdRealStat = fs.statSync(fdRealPath)
+          } catch {
+            return reply.code(404).send({ error: "Parent directory not found" })
+          }
+          if (!fdRealStat.isDirectory() || fdRealStat.dev !== fdStat.dev || fdRealStat.ino !== fdStat.ino) {
+            return reply.code(403).send({ error: "Parent directory changed" })
+          }
+          let pinnedTarget: string
+          try {
+            pinnedTarget = path.join(directoryFdPath(parentFd), "index.md")
+          } catch {
+            return reply.code(403).send({ error: "Parent directory changed" })
+          }
+          if (isPublishPrivatePath(pinnedTarget)) return reply.code(403).send({ error: "Forbidden document path" })
+          let fd: number
+          try {
+            fd = fs.openSync(pinnedTarget, createFlags, 0o644)
+          } catch (err: any) {
+            if (err?.code === "EEXIST" || err?.code === "ELOOP") {
+              return reply.code(409).send({ error: "already_exists" })
+            }
+            return reply.code(404).send({ error: "Failed to create document" })
+          }
+
+          try {
+            let written = 0
+            while (written < contentBuf.byteLength) {
+              const n = fs.writeSync(fd, contentBuf, written, contentBuf.byteLength - written)
+              written += n
+            }
+          } finally {
+            try {
+              fs.closeSync(fd)
+            } catch {}
+          }
+
+          const newHash = crypto.createHash("sha256").update(contentBuf).digest("hex")
+          return reply.code(201).header("ETag", newHash).send({ ok: true, sha256: newHash })
+        } finally {
+          try {
+            fs.closeSync(parentFd)
+          } catch {}
+        }
+      })
     },
   )
 

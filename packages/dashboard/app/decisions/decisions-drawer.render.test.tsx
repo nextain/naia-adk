@@ -56,6 +56,7 @@ const snapshot: DecisionsSnapshot = {
   ],
   history: [],
   counts: { total: 3, approvals: 1, notes: 1, workWaits: 1, publish: 0 },
+  warnings: [],
 }
 
 describe("단일 앰버 결재/확인 배지 + 오른쪽 퀵 서랍", () => {
@@ -104,5 +105,37 @@ describe("단일 앰버 결재/확인 배지 + 오른쪽 퀵 서랍", () => {
   it("닫힌 서랍은 그려지지 않는다", () => {
     const html = renderToStaticMarkup(<DecisionsDrawer open={false} onClose={() => {}} initialSnapshot={snapshot} />)
     assert.equal(html, "")
+  })
+
+  it("게시 확인 항목은 일반 결재 버튼 없이 문서 딥링크만 보인다", () => {
+    const publishSnapshot: DecisionsSnapshot = {
+      pending: [
+        {
+          id: "publish:review_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          decisionId: "review_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          kind: "publish_review",
+          status: "pending",
+          title: "게시 확인: 시험 원고",
+          detail: "대상 site-alpha.example · 판 rev_abc",
+          source: "publish",
+          path: "source:adk/article/draft.md",
+          url: "/docs?tab=common&source=adk&path=article%2Fdraft.md&publishReview=review_abc&publishRevision=rev_abc",
+          actor: "writer",
+          method: "publish_review",
+          createdAt: "2026-11-27T00:00:00.000Z",
+          updatedAt: "2026-11-27T00:00:00.000Z",
+        },
+      ],
+      history: [],
+      counts: { total: 1, approvals: 0, notes: 0, workWaits: 0, publish: 1 },
+      warnings: [],
+    }
+    const html = renderToStaticMarkup(<DecisionsDrawer open={true} onClose={() => {}} initialSnapshot={publishSnapshot} />)
+    // 딥링크는 /docs?publishReview=… 로 그대로 열린다.
+    assert.ok(html.includes("publishReview=review_abc"))
+    // 일반 결재(승인·거절·확인) 버튼은 절대 없다.
+    assert.ok(!html.includes("decision-ack-publish:"))
+    assert.ok(!html.includes("decision-approve-publish:"))
+    assert.ok(!html.includes("decision-reject-publish:"))
   })
 })

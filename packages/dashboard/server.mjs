@@ -24,7 +24,7 @@ import {
   registerShortLink,
   resolveShortPath,
 } from "./short-links.mjs"
-import { classifyPublicPath, createAccessVerifier, isBlockedDecisionsPath, publicConfigFromEnv } from "./public-access.mjs"
+import { classifyPublicPath, createAccessVerifier, isBlockedDecisionsPath, isBlockedPublishPath, publicConfigFromEnv } from "./public-access.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const MAX_SHORT_LINK_BODY_BYTES = 4096
@@ -547,6 +547,10 @@ function sendPlain(res, status, text) {
 export function handlePublicRequest(req, res, rawPathname, rawQuery, nextHandler, shortOpts, publicOpts, env = process.env) {
   // 결재/확인 보관함은 읽기·쓰기 가리지 않고 403. 백엔드로 넘기지 않는다.
   if (isBlockedDecisionsPath(rawPathname)) {
+    return sendPlain(res, 403, "Forbidden")
+  }
+  // 게시 공개 API도 읽기(GET·HEAD)까지 모두 403. 백엔드로 넘기지 않는다.
+  if (isBlockedPublishPath(rawPathname)) {
     return sendPlain(res, 403, "Forbidden")
   }
   const method = (req.method || "GET").toUpperCase()

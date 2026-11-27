@@ -26,7 +26,7 @@ export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
     const index = loadProjectIndex(root)
     if (!index) return { error: "No project-index.yaml found" }
     // Stamp on-disk presence so the dashboard distinguishes declared vs present
-    // (nextain/naia-adk#11). Additive — existing yaml keys are preserved.
+    // (upstream issue #11). Additive — existing yaml keys are preserved.
     return resolveIndexPresence(root, index)
   })
 

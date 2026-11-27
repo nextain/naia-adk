@@ -2,7 +2,7 @@
 // `GET /api/portal/decisions`, `POST /api/portal/decisions/:id/resolve`).
 // AI-team `open` todos stay on `/work`; only human-review items live here.
 
-export type DecisionKind = "approval" | "note" | "work" | "publish"
+export type DecisionKind = "approval" | "note" | "work" | "publish" | "publish_review"
 export type DecisionStatus =
   | "pending"
   | "approved"
@@ -40,6 +40,7 @@ export interface DecisionsSnapshot {
   pending: DecisionItem[]
   history: DecisionItem[]
   counts: DecisionCounts
+  warnings: string[]
 }
 
 export const EMPTY_COUNTS: DecisionCounts = { total: 0, approvals: 0, notes: 0, workWaits: 0, publish: 0 }
@@ -57,6 +58,7 @@ export async function fetchDecisions(
         pending: Array.isArray(json.pending) ? json.pending : [],
         history: Array.isArray(json.history) ? json.history : [],
         counts: { ...EMPTY_COUNTS, ...(json.counts ?? {}) },
+        warnings: Array.isArray(json.warnings) ? json.warnings.filter((w): w is string => typeof w === "string") : [],
       },
     }
   } catch {
@@ -96,7 +98,7 @@ export function countsOf(items: DecisionItem[]): DecisionCounts {
 }
 
 export function groupDecisionsByKind(items: DecisionItem[]): Record<DecisionKind, DecisionItem[]> {
-  const groups: Record<DecisionKind, DecisionItem[]> = { approval: [], note: [], work: [], publish: [] }
+  const groups: Record<DecisionKind, DecisionItem[]> = { approval: [], note: [], work: [], publish: [], publish_review: [] }
   for (const item of items) {
     const group = groups[item.kind] ?? groups.publish
     group.push(item)
@@ -111,6 +113,10 @@ export function decisionHref(item: DecisionItem): string | null {
   }
   if (item.kind === "work") {
     return "/work"
+  }
+  // 게시 확인 항목은 서버가 계산한 /docs 딥링크(요청판 바로 열기)를 그대로 쓴다.
+  if ((item.kind === "publish" || item.kind === "publish_review") && item.url) {
+    return item.url
   }
   return null
 }

@@ -753,13 +753,25 @@ describe("startServer 공개 모드 publicOpts 전달 회귀 시험", () => {
       const unauthShort = await httpCall(dashPort, { path: "/d/abcdef" })
       assert.equal(unauthShort.status, 403)
 
-      // 2. 공개 모드 비허용 경로(/board)는 404, 쓰기 메서드(POST)는 405 로 거절된다.
+      // 2. 공개 모드 비허용 경로(/board)는 404, 게시 공개 API(읽기·쓰기 모두)는
+      // 백엔드로 넘기기 전에 403 으로 거절된다. 쓰기 메서드 일반 경로의 405 와 다르다.
       const boardRes = await httpCall(dashPort, { path: "/board" })
       assert.equal(boardRes.status, 404)
       assert.equal(nextCalls.length, 0)
 
       const postPublish = await httpCall(dashPort, { method: "POST", path: "/api/portal/publish/test-post/approve" })
-      assert.equal(postPublish.status, 405)
+      assert.equal(postPublish.status, 403)
+      assert.equal(apiCalls.length, 0)
+
+      const getPublish = await httpCall(dashPort, { path: "/api/portal/publish/test-post/status" })
+      assert.equal(getPublish.status, 403)
+      assert.equal(apiCalls.length, 0)
+
+      // 2b. 퍼센트 인코딩 별칭도 백엔드로 넘기기 전에 403 으로 거절된다.
+      for (const p of ["/%61pi/portal/publish/status", "/api/portal/%70ublish/export", "/api/portal/%64ecisions"]) {
+        const enc = await httpCall(dashPort, { path: p })
+        assert.equal(enc.status, 403, p)
+      }
       assert.equal(apiCalls.length, 0)
 
       // 3. 서명된 Access JWT 가 있으면 공개 경로(/docs, /api/portal)만 검증된 메일과 함께 통과한다.

@@ -215,3 +215,6 @@ scripts/triage/
 
 # 3층 쓰기 막기 예외·감사 기록(기기별, docs/guides/lead-write-guard.md)
 .agents/lead-guard/
+
+# 시험이 만드는 임시 폴더(identity-header-guard·publish-route-parsing) — 재생성됨
+.tmp-test/

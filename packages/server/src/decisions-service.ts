@@ -21,8 +21,9 @@ import { withFileLock } from "./file-lock.js"
 import { listNotes, noteAwaiting, readNote, saveNote } from "./notes.js"
 import { queryPortalWorkLedger } from "./work-ledger-portal.js"
 import { MessengerStore } from "./messenger-store.js"
+import { PublishStore } from "./publish-store.js"
 
-export type DecisionKind = "approval" | "note" | "work" | "publish"
+export type DecisionKind = "approval" | "note" | "work" | "publish" | "publish_review"
 export type DecisionStatus =
   | "pending"
   | "approved"
@@ -62,6 +63,8 @@ export interface DecisionsSnapshot {
   pending: DecisionItem[]
   history: DecisionItem[]
   counts: DecisionCounts
+  /** Sources whose scan failed but did not take down the inbox (e.g. "publish"). */
+  warnings: string[]
 }
 
 export interface DecisionAuditEntry {
@@ -222,6 +225,123 @@ async function readWorkWaitItems(root: string): Promise<{ pending: DecisionItem[
     }
   } catch {
     // Ledger unconfigured: no work waits, not an error.
+  }
+  return { pending, history }
+}
+
+// --- publish-review items (pending requests + completed approvals) ---------------
+// Fail-open for unconfigured stores: no PUBLISH_STATE_DIR means no publish items.
+// A broken store degrades instead of taking down the inbox: callers keep the
+// other decision sources and surface the warning.
+function readPublishReviewItems(
+  root: string,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): { pending: DecisionItem[]; history: DecisionItem[]; degraded: boolean } {
+  const pending: DecisionItem[] = []
+  const history: DecisionItem[] = []
+  const stateDir = typeof env.PUBLISH_STATE_DIR === "string" ? env.PUBLISH_STATE_DIR.trim() : ""
+  if (!stateDir) return { pending, history, degraded: false }
+  let store: PublishStore
+  try {
+    store = new PublishStore(stateDir)
+  } catch {
+    return { pending, history, degraded: true }
+  }
+  try {
+    return { ...scanPublishReviewItems(root, store), degraded: false }
+  } catch {
+    return { pending, history, degraded: true }
+  }
+}
+
+function scanPublishReviewItems(
+  root: string,
+  store: PublishStore,
+): { pending: DecisionItem[]; history: DecisionItem[] } {
+  const pending: DecisionItem[] = []
+  const history: DecisionItem[] = []
+  const titleOf = (slug: string): string => {
+    try {
+      const descriptor = store.json<{ frontmatter?: { title?: unknown } }>(`descriptors/${slug}.json`)
+      const title = descriptor?.frontmatter?.title
+      if (typeof title === "string" && title.trim()) return title.trim()
+    } catch {}
+    return slug
+  }
+  const pathOf = (slug: string): string | null => {
+    try {
+      const descriptor = store.json<{ source?: unknown; path?: unknown }>(`descriptors/${slug}.json`)
+      if (typeof descriptor?.path === "string" && descriptor.path) return `source:${String(descriptor.source ?? "?")}/${descriptor.path}`
+    } catch {}
+    return null
+  }
+  const reviewUrlOf = (review: any): string | null => {
+    const url = review?.result?.review_url
+    return typeof url === "string" && url.startsWith("/docs?") ? url : null
+  }
+  // One canonical history row per completed review: the review-derived row
+  // (with the /docs deep link) wins; the approval-derived twin is skipped
+  // when that row already exists.
+  const emittedHistoryIds = new Set<string>()
+  const completedRevisions = new Set(store.committedRecords("approvals").map((approval) => `${approval.slug}/${approval.revision_id}`))
+  const selected = new Map<string, any>()
+  for (const selection of store.committedRecords("selections")) {
+    if (!selected.has(selection.slug) || selection.sequence > selected.get(selection.slug).sequence) selected.set(selection.slug, selection)
+  }
+  const reviews = store.committedRecords("reviews").sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+  for (const review of reviews) {
+    if (typeof review?.review_id !== "string" || typeof review?.slug !== "string") continue
+    let targets = ""
+    try {
+      const revision = typeof review.revision_id === "string" && review.revision_id.startsWith("rev_") ? review.revision_id.slice(4) : null
+      const manifest = revision ? store.json<{ targets?: unknown }>(`objects/${revision}/manifest.json`) : null
+      if (Array.isArray(manifest?.targets)) targets = manifest.targets.map(String).join(", ")
+    } catch {}
+    const item: DecisionItem = {
+      id: `publish:${review.review_id}`,
+      decisionId: review.review_id,
+      kind: "publish_review",
+      status: "pending",
+      title: `게시 확인: ${titleOf(review.slug)}`,
+      detail: `대상 ${targets || "?"} · 판 ${String(review.revision_id ?? "?")} · 요청 ${String(review.requester_id ?? "?")}`,
+      source: "publish",
+      path: pathOf(review.slug),
+      url: reviewUrlOf(review),
+      actor: typeof review.requester_id === "string" ? review.requester_id : null,
+      method: "publish_review",
+      createdAt: typeof review.created_at === "string" ? review.created_at : null,
+      updatedAt: typeof review.created_at === "string" ? review.created_at : null,
+    }
+    if (completedRevisions.has(`${review.slug}/${review.revision_id}`)) {
+      history.push({ ...item, status: "approved" })
+      emittedHistoryIds.add(item.id)
+    } else if (selected.get(review.slug)?.review_id !== review.review_id) {
+      history.push({ ...item, status: "expired" })
+      emittedHistoryIds.add(item.id)
+    } else {
+      pending.push(item)
+    }
+  }
+  const approvals = store.committedRecords("approvals").sort((a, b) => String(b.approved_at ?? "").localeCompare(String(a.approved_at ?? "")))
+  for (const approval of approvals) {
+    if (typeof approval?.review_id !== "string" || typeof approval?.slug !== "string") continue
+    if (emittedHistoryIds.has(`publish:${approval.review_id}`)) continue
+    const receipt = approval.result?.receipt
+    history.push({
+      id: `publish:${approval.review_id}`,
+      decisionId: approval.review_id,
+      kind: "publish_review",
+      status: "approved",
+      title: `게시 승인: ${titleOf(approval.slug)}`,
+      detail: `대상 ${Array.isArray(receipt?.targets) ? receipt.targets.join(", ") : "?"} · 판 ${String(approval.revision_id ?? "?")} · 승인 ${String(receipt?.approver_id ?? "?")}`,
+      source: "publish",
+      path: pathOf(approval.slug),
+      url: null,
+      actor: typeof receipt?.approver_id === "string" ? receipt.approver_id : null,
+      method: "publish_review",
+      createdAt: typeof approval.approved_at === "string" ? approval.approved_at : null,
+      updatedAt: typeof approval.approved_at === "string" ? approval.approved_at : null,
+    })
   }
   return { pending, history }
 }
@@ -490,7 +610,7 @@ export async function collectDecisions(
   } catch {}
   const notes = readNoteItems(root)
   const work = await readWorkWaitItems(root)
-  const publish: { pending: DecisionItem[]; history: DecisionItem[] } = { pending: [], history: [] }
+  const publish = readPublishReviewItems(root, env)
 
   const seen = new Set<string>()
   const pending: DecisionItem[] = []
@@ -504,15 +624,23 @@ export async function collectDecisions(
   const history: DecisionItem[] = [...approvals.history, ...notes.history, ...work.history, ...publish.history]
   const historyIds = new Set(history.map((h) => h.id))
 
-  // Audit-only resolutions (acknowledged work waits, publish reviews, ...).
+  // Audit-only resolutions (acknowledged work waits, ...). Publish reviews are
+  // NEVER closed here: the publish store alone decides their pending/history
+  // state, so legacy audit rows for `publish:*` ids are ignored in both
+  // directions and the inbox can never disagree with the publish state.
   for (const entry of readAuditLog(root)) {
+    if (typeof entry.id === "string" && entry.id.startsWith("publish:")) continue
     if (historyIds.has(entry.id)) continue
     historyIds.add(entry.id)
     history.push(auditOutcomeToHistory(entry))
   }
 
   // Anything the audit log already resolved drops out of pending.
-  const resolvedIds = new Set(readAuditLog(root).map((e) => e.id))
+  const resolvedIds = new Set(
+    readAuditLog(root)
+      .filter((e) => typeof e.id !== "string" || !e.id.startsWith("publish:"))
+      .map((e) => e.id),
+  )
   const open = pending.filter((item) => !resolvedIds.has(item.id))
 
   const counts: DecisionCounts = {
@@ -520,9 +648,9 @@ export async function collectDecisions(
     approvals: open.filter((i) => i.kind === "approval").length,
     notes: open.filter((i) => i.kind === "note").length,
     workWaits: open.filter((i) => i.kind === "work").length,
-    publish: open.filter((i) => i.kind === "publish").length,
+    publish: open.filter((i) => i.kind === "publish" || i.kind === "publish_review").length,
   }
-  return { pending: open, history, counts }
+  return { pending: open, history, counts, warnings: publish.degraded ? ["publish"] : [] }
 }
 
 // --- resolution ---------------------------------------------------------------------
@@ -652,11 +780,20 @@ export async function resolveDecisionItem(
     return item
   }
 
-  if (id.startsWith("work:") || id.startsWith("publish:")) {
-    const kind: DecisionKind = id.startsWith("work:") ? "work" : "publish"
+  // Publish reviews are closed ONLY by the publish workflow
+  // (`POST /api/portal/publish/*/request-review|approve` recording a terminal
+  // result). Generic approve/reject/acknowledge here would let the inbox and
+  // the publish state disagree, so every action on a `publish:` id is
+  // rejected with 409 and the item stays pending.
+  if (id.startsWith("publish:")) {
+    fail("게시 확인 항목은 일반 결재로 닫을 수 없습니다. /api/portal/publish/* 게시 흐름에서 처리해 주세요.", 409)
+  }
+
+  if (id.startsWith("work:")) {
     const snapshot = await collectDecisions(root, { env: opts.env, dbPath: opts.dbPath })
     const found = snapshot.pending.find((i) => i.id === id)
     if (!found) fail("Unknown decision item", 404)
+    const kind: DecisionKind = found.kind
     const item: DecisionItem = { ...found, status: outcome, detail: comment ?? found.detail, actor, updatedAt: at }
     await appendDecisionAudit(root, { at, id, decisionId: found.decisionId, kind, action, outcome, actor, via, title: found.title, comment })
     return item
